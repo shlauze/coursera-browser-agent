@@ -4,7 +4,7 @@
 
 > **Версия:** `4.0-groq.39` · **Платформа:** Windows x64 · **Интерфейс Coursera:** английский
 
-Репозиторий: [zhaniiya2006/coursera-browser-agent](https://github.com/zhaniiya2006/coursera-browser-agent). Для скачивания нужен доступ к нему в GitHub.
+Репозиторий: [shlauze/coursera-browser-agent](https://github.com/shlauze/coursera-browser-agent). Для скачивания нужен доступ к нему в GitHub.
 
 ## Содержание
 
@@ -44,10 +44,10 @@ Node.js нужен **только для полного набора тесто�
 
 ## Установка
 
-1. Откройте [репозиторий](https://github.com/zhaniiya2006/coursera-browser-agent) под учётной записью с доступом. Скачайте ZIP через **Code → Download ZIP** либо клонируйте проект:
+1. Откройте [репозиторий](https://github.com/shlauze/coursera-browser-agent) под учётной записью с доступом. Скачайте ZIP через **Code → Download ZIP** либо клонируйте проект:
 
    ```powershell
-   git clone https://github.com/zhaniiya2006/coursera-browser-agent.git
+   git clone https://github.com/shlauze/coursera-browser-agent.git
    cd coursera-browser-agent
    ```
 

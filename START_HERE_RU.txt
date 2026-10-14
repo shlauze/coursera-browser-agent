@@ -1,8 +1,8 @@
 БЫСТРЫЙ СТАРТ — Coursera Browser Agent 4.0-groq.39
 
-1. Получите доступ к https://github.com/zhaniiya2006/coursera-browser-agent
+1. Получите доступ к https://github.com/shlauze/coursera-browser-agent
    Скачайте Code → Download ZIP или выполните:
-   git clone https://github.com/zhaniiya2006/coursera-browser-agent.git
+   git clone https://github.com/shlauze/coursera-browser-agent.git
    Откройте setup_new_pc.cmd из папки проекта.
    Мастер подготовит Python 3.14, Chrome, .venv и зависимости. Нужен интернет.
 2. Создайте свой ключ Groq: https://console.groq.com/keys
