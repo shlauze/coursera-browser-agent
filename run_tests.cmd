@@ -10,5 +10,5 @@ if not exist ".venv\Scripts\python.exe" (
   echo Project Python environment is missing: .venv\Scripts\python.exe
   exit /b 1
 )
-".venv\Scripts\python.exe" -m unittest discover -s tests -p "test_*.py" -v
+".venv\Scripts\python.exe" -X utf8 -m unittest discover -s tests -p "test_*.py" -v
 exit /b %errorlevel%

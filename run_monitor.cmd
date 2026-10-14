@@ -5,5 +5,5 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" "progress_monitor.py" %*
+".venv\Scripts\python.exe" -X utf8 "progress_monitor.py" %*
 pause

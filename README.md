@@ -103,7 +103,7 @@ Node.js нужен **только для полного набора тесто�
 Если порт `8765` занят, используйте уже открытый монитор либо запустите другой порт:
 
 ```powershell
-.\.venv\Scripts\python.exe .\progress_monitor.py --port 8766
+.\.venv\Scripts\python.exe -X utf8 .\progress_monitor.py --port 8766
 ```
 
 Монитор слушает только `127.0.0.1` на этом компьютере. Не публикуйте его через прокси или туннель: данные прогресса могут содержать названия курсов и тексты заданий.
@@ -121,13 +121,13 @@ Node.js нужен **только для полного набора тесто�
 
 ```powershell
 # Только проверить формат courses.txt, не открывая Chrome и не вызывая Groq
-.\.venv\Scripts\python.exe .\course_queue.py --validate
+.\.venv\Scripts\python.exe -X utf8 .\course_queue.py --validate
 
 # Ограничить тест тремя попытками в общей истории и выделить до 240 минут на курс
-.\.venv\Scripts\python.exe .\course_queue.py --monitor --quiz-attempts 3 --minutes 240
+.\.venv\Scripts\python.exe -X utf8 .\course_queue.py --monitor --quiz-attempts 3 --minutes 240
 
 # Использовать только courses.txt, не искать курсы в My Learning
-.\.venv\Scripts\python.exe .\course_queue.py --monitor --manual-queue
+.\.venv\Scripts\python.exe -X utf8 .\course_queue.py --monitor --manual-queue
 ```
 
 По умолчанию `--quiz-attempts 0` означает повторы до проходного результата Coursera с учётом ограничений самой платформы. Ограничение активной работы над одним курсом по умолчанию составляет 180 минут; ожидание доступности новой попытки учитывается отдельно.
