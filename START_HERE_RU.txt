@@ -1,0 +1,22 @@
+БЫСТРЫЙ СТАРТ — Coursera Browser Agent 4.0-groq.39
+
+1. Получите доступ к https://github.com/zhaniiya2006/coursera-browser-agent
+   Скачайте Code → Download ZIP или выполните:
+   git clone https://github.com/zhaniiya2006/coursera-browser-agent.git
+   Откройте setup_new_pc.cmd из папки проекта.
+   Мастер подготовит Python 3.14, Chrome, .venv и зависимости. Нужен интернет.
+2. Создайте свой ключ Groq: https://console.groq.com/keys
+   Введите его в мастере (символы скрыты), затем укажите имя точно как в Coursera.
+3. При необходимости добавьте ссылки https://www.coursera.org/learn/... в courses.txt:
+   один курс на строку. Курсы из My Learning → In Progress имеют приоритет.
+4. Запустите run_course.cmd. В отдельном Chrome войдите в Coursera, оставьте
+   одну вкладку курса или My Learning и нажмите Enter в окне скрипта.
+5. Монитор: http://127.0.0.1:8765/
+
+Остановить: Ctrl+C. Продолжить: снова run_course.cmd — папку state не удаляйте.
+Сменить ключ или имя: configure_groq.cmd. Проверить список: см. README.md.
+Следующий курс начинается только после проверки сертификата текущего.
+Programming Assignment и другие неподдерживаемые задания требуют ручной работы.
+Не публикуйте .groq-key.dpapi, settings.json, state, logs и профиль Chrome.
+
+Полная установка, настройки, ограничения и диагностика описаны в README.md.

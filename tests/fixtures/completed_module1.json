@@ -1,0 +1,88 @@
+{
+  "url": "https://www.coursera.org/learn/philosophy/supplement/BvU8W/about-this-course",
+  "ready": "complete",
+  "heading": "About this Course",
+  "items": [
+    {
+      "url": "https://www.coursera.org/learn/philosophy/supplement/BvU8W/about-this-course",
+      "type": "supplement",
+      "title": "About this Course Reading . Duration: 10 minutes 10 min",
+      "aria_label": "selected link, Reading, About this Course, Completed, 10 min",
+      "evidence": [
+        "aria-label: selected link, Reading, About this Course, Completed, 10 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/supplement/xf6sS/module-what-is-philosophy",
+      "type": "supplement",
+      "title": "Module: What is Philosophy? Reading . Duration: 10 minutes 10 min",
+      "aria_label": "Reading, Module: What is Philosophy?, Completed, 10 min",
+      "evidence": [
+        "aria-label: Reading, Module: What is Philosophy?, Completed, 10 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/HJUBR/introduction-what-is-philosophy",
+      "type": "lecture",
+      "title": "Introduction: What is Philosophy? Video . Duration: 12 minutes 12 min",
+      "aria_label": "Video, Introduction: What is Philosophy?, Completed, 12 min",
+      "evidence": [
+        "aria-label: Video, Introduction: What is Philosophy?, Completed, 12 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/aZcHE/philosophy-difficult-important-and-everywhere",
+      "type": "lecture",
+      "title": "Philosophy: Difficult, Important and Everywhere Video . Duration: 11 minutes 11 min",
+      "aria_label": "Video, Philosophy: Difficult, Important and Everywhere, Completed, 11 min",
+      "evidence": [
+        "aria-label: Video, Philosophy: Difficult, Important and Everywhere, Completed, 11 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/supplement/XobyV/optional-reading",
+      "type": "supplement",
+      "title": "Optional Reading Reading . Duration: 10 minutes 10 min",
+      "aria_label": "Reading, Optional Reading, Completed, 10 min",
+      "evidence": [
+        "aria-label: Reading, Optional Reading, Completed, 10 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/Qnc7L/philosophy-how-do-we-do-it",
+      "type": "lecture",
+      "title": "Philosophy: How Do We Do It? Video . Duration: 17 minutes 17 min",
+      "aria_label": "Video, Philosophy: How Do We Do It?, Completed, 17 min",
+      "evidence": [
+        "aria-label: Video, Philosophy: How Do We Do It?, Completed, 17 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/ahomr/is-there-a-right-way-to-think-about-things",
+      "type": "lecture",
+      "title": "Is There A 'Right Way' To Think About Things? Video . Duration: 6 minutes 6 min",
+      "aria_label": "Video, Is There A 'Right Way' To Think About Things?, Completed, 6 min",
+      "evidence": [
+        "aria-label: Video, Is There A 'Right Way' To Think About Things?, Completed, 6 min"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/practice-what-is-philosophy",
+      "type": "assignment-submission",
+      "title": "Practice: What is Philosophy? Practice AssignmentGrade: 100%",
+      "aria_label": "Practice Assignment, Practice: What is Philosophy?, Completed, Grade: 100%",
+      "evidence": [
+        "aria-label: Practice Assignment, Practice: What is Philosophy?, Completed, Grade: 100%"
+      ]
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/what-is-philosophy",
+      "type": "assignment-submission",
+      "title": "What is Philosophy? Graded AssignmentGrade: 100%",
+      "aria_label": "Graded Assignment, What is Philosophy?, Completed, Grade: 100%",
+      "evidence": [
+        "aria-label: Graded Assignment, What is Philosophy?, Completed, Grade: 100%"
+      ]
+    }
+  ]
+}

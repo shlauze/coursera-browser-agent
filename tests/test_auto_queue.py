@@ -1,0 +1,557 @@
+"""Offline regressions for following the Coursera In Progress queue."""
+import copy
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import course_queue as queue
+import coursera_start as engine
+from course_state import QueueStore, load_courses
+
+CERTIFICATE_ROOT = "https://www.coursera.org/account/accomplishments/verify/"
+
+
+def certificate_url(identity):
+    return CERTIFICATE_ROOT + "TEST-" + identity.upper()
+
+
+async def opened_certificate(tab, url=None):
+    return url
+
+
+async def matching_certificate(tab, url, identity, title=None):
+    return {"verified": True, "method": "certificate", "course_id": identity,
+            "url": url, "evidence": [identity, "Completed by Learner"]}
+
+
+class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self):
+        engine.configure_course("https://www.coursera.org/learn/philosophy")
+
+    async def test_quiz_inspection_accepts_null_dialog_when_no_certificate_is_visible(self):
+        runner = object.__new__(queue.QueueRunner)
+        runner.course = {"id":"first-course", "title":"First Course"}
+        runner.checkpoint = {"attempts":{}}
+        await runner.after_quiz_action(
+            "assignment:ABC123", "inspect", {},
+            {"url":"https://www.coursera.org/learn/first-course/assignment-submission/ABC123/quiz",
+             "dialog":None})
+
+    async def test_transient_my_learning_load_retries_without_extra_course_click(self):
+        store = SimpleNamespace(event=lambda *args: None)
+        discovered = {"id": "next-course", "url": "https://www.coursera.org/learn/next-course"}
+        with patch.object(queue, "discover_next_course", AsyncMock(side_effect=[
+                 TimeoutError("Chrome read timed out"), discovered])) as scan, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as wait:
+            result = await queue._discover_with_retry(store, SimpleNamespace(), {"finished"})
+        self.assertEqual(result, discovered)
+        self.assertEqual(scan.await_count, 2)
+        wait.assert_awaited_once_with(1)
+
+    async def test_my_learning_discovery_reconnects_after_closed_websocket(self):
+        store = SimpleNamespace(event=Mock())
+        tab = SimpleNamespace(connect=AsyncMock())
+        discovered = {"id":"next-course", "url":"https://www.coursera.org/learn/next-course"}
+        with patch.object(queue, "discover_next_course", AsyncMock(side_effect=[
+                 RuntimeError("no close frame received or sent"), discovered])) as scan, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()):
+            result = await queue._discover_with_retry(store, tab, set())
+        self.assertEqual(result, discovered)
+        self.assertEqual(scan.await_count, 2)
+        tab.connect.assert_awaited_once()
+
+    async def test_my_learning_empty_hydration_reloads_before_stopping(self):
+        store = SimpleNamespace(event=Mock())
+        tab = SimpleNamespace()
+        page = {"page":1, "course_rows":[{"id":"next-course"}]}
+        with patch.object(queue, "open_my_learning", AsyncMock(side_effect=[
+                 RuntimeError("My Learning In Progress did not show a stable course list and pagination."),
+                 page])) as opened, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as wait:
+            result = await queue._open_my_learning_with_retry(store, tab, "first-course")
+        self.assertEqual(result, page)
+        self.assertEqual(opened.await_count, 2)
+        wait.assert_awaited_once_with(1)
+        store.event.assert_called_once()
+
+    async def test_my_learning_reconnects_after_closed_websocket(self):
+        store = SimpleNamespace(event=Mock())
+        tab = SimpleNamespace(connect=AsyncMock())
+        page = {"page":1, "course_rows":[]}
+        with patch.object(queue, "open_my_learning", AsyncMock(side_effect=[
+                 RuntimeError("no close frame received or sent"), page])) as opened, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as wait:
+            result = await queue._open_my_learning_with_retry(store, tab, "first-course")
+        self.assertEqual(result, page)
+        self.assertEqual(opened.await_count, 2)
+        tab.connect.assert_awaited_once()
+        wait.assert_awaited_once_with(1)
+
+    async def test_saved_partial_course_resumes_before_new_course_or_site_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/new-course\n"
+                                   "https://www.coursera.org/learn/partly-done\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("partly-done", current_module=2, items_completed=1)
+            args = SimpleNamespace(courses=course_file)
+            with patch.object(queue, "_discover_with_retry", AsyncMock()) as discover:
+                selected = await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "partly-done")
+            discover.assert_not_awaited()
+
+    async def test_completed_checkpoint_does_not_preempt_active_partial_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/finished-course\n"
+                                   "https://www.coursera.org/learn/active-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("finished-course", previous_status="completed", modules_discovered=3,
+                         certificate_page_url=certificate_url("finished-course"))
+            store.update("active-course", previous_status="pending", items_completed=1)
+            with patch.object(queue, "_discover_with_retry", AsyncMock()) as discover:
+                selected = await queue._next_course_id(
+                    store, SimpleNamespace(courses=course_file), SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "active-course")
+            discover.assert_not_awaited()
+
+    async def test_known_in_progress_course_precedes_earlier_new_configured_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/new-course\n"
+                                   "https://www.coursera.org/learn/site-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            args = SimpleNamespace(courses=course_file)
+            observed = {"id":"site-course", "url":"https://www.coursera.org/learn/site-course",
+                        "title":"Site Course", "action":"resume"}
+            with patch.object(queue, "_discover_with_retry", AsyncMock(return_value=observed)) as discover:
+                selected = await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "site-course")
+            discover.assert_awaited_once_with(store, unittest.mock.ANY, set())
+            self.assertEqual([c["id"] for c in load_courses(course_file)], ["new-course", "site-course"])
+
+    async def test_removed_historical_course_rejoins_when_still_in_progress_on_site(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/new-course\n"
+                                   "https://www.coursera.org/learn/older-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("older-course", status="attention", run_directory=str(root / "logs" / "old"))
+            course_file.write_text("https://www.coursera.org/learn/new-course\n", encoding="utf-8")
+            args = SimpleNamespace(courses=course_file)
+            observed = {"id":"older-course", "url":"https://www.coursera.org/learn/older-course",
+                        "title":"Older Course", "action":"resume"}
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "_discover_with_retry", AsyncMock(return_value=observed)) as discover:
+                selected = await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "older-course")
+            self.assertFalse(store.course("older-course").get("removed_from_queue"))
+            self.assertEqual([c["id"] for c in load_courses(course_file)], ["new-course", "older-course"])
+            discover.assert_awaited_once()
+
+    async def test_empty_in_progress_falls_back_to_configured_new_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/new-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            args = SimpleNamespace(courses=course_file)
+            with patch.object(queue, "_discover_with_retry", AsyncMock(return_value=None)) as discover:
+                selected = await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "new-course")
+            discover.assert_awaited_once_with(store, unittest.mock.ANY, set())
+
+    async def test_manual_queue_uses_configured_course_without_site_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/new-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            with patch.object(queue, "_discover_with_retry", AsyncMock()) as discover:
+                selected = await queue._next_course_id(
+                    store, SimpleNamespace(courses=course_file), SimpleNamespace(), set(), False)
+            self.assertEqual(selected, "new-course")
+            discover.assert_not_awaited()
+
+    async def test_all_green_course_waits_for_delayed_certificate(self):
+        course = {"id":"first-course", "title":"First Course", "inventory_complete":True,
+                  "modules_total":2, "modules_discovered":2, "modules_completed":2,
+                  "items_total":3, "items_completed":3}
+        store = SimpleNamespace(update=Mock(), event=Mock())
+        tab = SimpleNamespace(evaluate=AsyncMock())
+        certificate = certificate_url("first-course")
+        with patch.object(queue, "_remember_completed_certificate", AsyncMock(
+                side_effect=[None, None, certificate])) as lookup, \
+             patch.object(queue, "CERTIFICATE_RECHECKS", 3), \
+             patch.object(queue, "CERTIFICATE_RETRY_DELAY", 0), \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as sleep:
+            found = await queue._wait_for_completed_certificate(store, tab, course)
+        self.assertEqual(found, certificate)
+        self.assertEqual(lookup.await_count, 3)
+        self.assertEqual(sleep.await_count, 2)
+        store.event.assert_called_once()
+
+    async def test_unconfirmed_items_do_not_wait_or_enable_transition(self):
+        course = {"id":"first-course", "title":"First Course", "inventory_complete":True,
+                  "modules_total":2, "modules_discovered":2, "modules_completed":2,
+                  "items_total":3, "items_completed":2}
+        store = SimpleNamespace(update=Mock(), event=Mock())
+        tab = SimpleNamespace(evaluate=AsyncMock())
+        with patch.object(queue, "_remember_completed_certificate", AsyncMock(return_value=None)) as lookup, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as sleep:
+            found = await queue._wait_for_completed_certificate(store, tab, course)
+        self.assertIsNone(found)
+        lookup.assert_awaited_once()
+        sleep.assert_not_awaited()
+
+    async def test_extra_course_tab_selects_exact_first_unfinished_course(self):
+        pages = [
+            {"url":"https://www.coursera.org/learn/deep-learning-with-pytorch/coach/A/dialogue"},
+            {"url":"https://www.coursera.org/learn/securing-ai-and-advanced-topics/home/module/1"},
+        ]
+        store = SimpleNamespace(data={"courses":[
+            {"id":"introduction-to-ai-for-cybersecurity", "status":"pending",
+             "certificate_page_url":certificate_url("introduction-to-ai-for-cybersecurity")},
+            {"id":"securing-ai-and-advanced-topics", "status":"attention"},
+            {"id":"deep-learning-with-pytorch", "status":"pending"},
+        ]})
+        self.assertEqual(queue._preferred_learning_tabs(pages, store), [pages[1]])
+        store.data["courses"][1]["certificate_page_url"] = certificate_url("securing-ai-and-advanced-topics")
+        self.assertEqual(queue._preferred_learning_tabs(pages, store), [pages[0]])
+
+    async def test_unrelated_course_tabs_fall_back_to_my_learning(self):
+        store = SimpleNamespace(data={"courses":[{"id":"explainable-machine-learning-xai"}]})
+        course_pages = [
+            {"url":"https://www.coursera.org/learn/deep-learning-with-pytorch/coach/A/dialogue"},
+            {"url":"https://www.coursera.org/learn/deep-learning-with-pytorch/home/module/1"},
+        ]
+        learning_page = {"url":"https://www.coursera.org/my-learning?myLearningTab=IN_PROGRESS",
+                         "webSocketDebuggerUrl":"ws://learning"}
+        tab = SimpleNamespace(connect=AsyncMock(),
+                              evaluate=AsyncMock(return_value={"url":learning_page["url"]}),
+                              close=AsyncMock())
+        with patch.object(queue, "learning_tabs", return_value=course_pages), \
+             patch.object(queue, "my_learning_tabs", return_value=[learning_page]), \
+             patch.object(queue.engine, "ChromeTab", return_value=tab) as make_tab, \
+             patch.object(queue, "run_queue", AsyncMock(return_value=0)) as run:
+            result = await queue.session(store, SimpleNamespace())
+        self.assertEqual(result, 0)
+        make_tab.assert_called_once_with("ws://learning")
+        run.assert_awaited_once_with(store, unittest.mock.ANY, tab)
+
+    async def test_new_chrome_tab_is_waited_for_before_session(self):
+        with patch.object(queue, "learning_tabs", side_effect=[[], [{"url":"https://www.coursera.org/learn/first-course"}]]), \
+             patch.object(queue, "my_learning_tabs", return_value=[]), \
+             patch.object(queue.time, "sleep") as sleep:
+            queue._wait_for_start_tab()
+        sleep.assert_called_once_with(0.5)
+
+    async def test_saved_certificate_verification_skips_reprocessing_completed_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/first-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            certificate = "https://www.coursera.org/account/accomplishments/records/ABC12345"
+            store.course("first-course")["certificate_page_url"] = certificate
+            store.save()
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=False, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            proof = {"verified":True,"method":"certificate","course_id":"first-course",
+                     "title":"First Course","evidence":["First Course", "Completed by Learner"]}
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "open_certificate_page", AsyncMock(return_value=certificate)) as opened, \
+                 patch.object(queue, "verify_saved_certificate", AsyncMock(return_value=proof)) as verified, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning, \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)), \
+                 patch.object(queue, "discover_modules", AsyncMock()) as modules:
+                result = await queue.run_queue(store, args, SimpleNamespace())
+            self.assertEqual(result, 0)
+            self.assertEqual(store.course("first-course")["status"], "completed")
+            self.assertEqual(store.course("first-course")["completion_method"], "certificate")
+            self.assertTrue(store.course("first-course")["certificate_verified_at"])
+            opened.assert_awaited_once()
+            verified.assert_awaited_once()
+            learning.assert_awaited_once()
+            modules.assert_not_awaited()
+
+    async def test_completed_tab_certificate_recovers_finished_course_without_rescanning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/first-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("first-course", inventory_complete=True, modules_total=2,
+                         modules_discovered=2, modules_completed=2,
+                         items_total=3, items_completed=3)
+            certificate = certificate_url("first-course")
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=False, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            tab = SimpleNamespace(evaluate=AsyncMock())
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "observed_certificate_url", AsyncMock(return_value=None)), \
+                 patch.object(queue, "find_completed_certificate", AsyncMock(return_value=certificate)) as found, \
+                 patch.object(queue, "open_certificate_page", AsyncMock(return_value=certificate)), \
+                 patch.object(queue, "verify_saved_certificate", AsyncMock(side_effect=matching_certificate)) as verified, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning, \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)), \
+                 patch.object(queue, "discover_modules", AsyncMock()) as modules:
+                result = await queue.run_queue(store, args, tab)
+            self.assertEqual(result, 0)
+            self.assertEqual(store.course("first-course")["status"], "completed")
+            self.assertEqual(store.course("first-course")["certificate_page_url"], certificate)
+            found.assert_awaited_once_with(tab, "first-course", "first-course")
+            verified.assert_awaited_once()
+            learning.assert_awaited_once()
+            modules.assert_not_awaited()
+
+    async def test_completed_tab_certificate_still_requires_matching_page_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/first-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("first-course", inventory_complete=True, modules_total=1,
+                         modules_discovered=1, modules_completed=1,
+                         items_total=1, items_completed=1)
+            certificate = certificate_url("first-course")
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=False, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            tab = SimpleNamespace(evaluate=AsyncMock())
+            wrong = {"verified": True, "method": "certificate", "course_id": "other-course"}
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "observed_certificate_url", AsyncMock(return_value=None)), \
+                 patch.object(queue, "find_completed_certificate", AsyncMock(return_value=certificate)), \
+                 patch.object(queue, "open_certificate_page", AsyncMock(return_value=certificate)), \
+                 patch.object(queue, "verify_saved_certificate", AsyncMock(return_value=wrong)), \
+                 patch.object(queue, "discover_modules", AsyncMock()) as modules, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning:
+                result = await queue.run_queue(store, args, tab)
+            self.assertEqual(result, 2)
+            self.assertEqual(store.course("first-course")["status"], "attention")
+            self.assertNotIn("course_completed", [event["kind"] for event in store.data["events"]])
+            modules.assert_not_awaited()
+            learning.assert_not_awaited()
+
+    async def test_completed_tab_certificate_follows_false_home_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/first-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            certificate = certificate_url("first-course")
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=False, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            tab = SimpleNamespace(evaluate=AsyncMock())
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "observed_certificate_url", AsyncMock(return_value=None)), \
+                 patch.object(queue, "inspect_sidebar_progress", AsyncMock(return_value=None)), \
+                 patch.object(queue, "discover_modules", AsyncMock(return_value=[1])), \
+                 patch.object(queue, "discover_roster", AsyncMock(return_value=[
+                     {"key":"supplement:item", "title":"Overview",
+                      "url":"https://www.coursera.org/learn/first-course/supplement/a/overview"}])), \
+                 patch.object(queue.QueueRunner, "process_module", AsyncMock()), \
+                 patch.object(queue, "verify_course_completion", AsyncMock(return_value={
+                     "verified":False, "reason":"The course home page has not loaded."})) as home, \
+                 patch.object(queue, "find_completed_certificate", AsyncMock(return_value=certificate)) as found, \
+                 patch.object(queue, "open_certificate_page", AsyncMock(return_value=certificate)), \
+                 patch.object(queue, "verify_saved_certificate", AsyncMock(side_effect=matching_certificate)), \
+                 patch.object(queue, "open_my_learning", AsyncMock()), \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)):
+                result = await queue.run_queue(store, args, tab)
+            self.assertEqual(result, 0)
+            self.assertEqual(store.course("first-course")["status"], "completed")
+            home.assert_awaited_once()
+            found.assert_awaited_once_with(tab, "first-course", "first-course")
+
+    async def test_saved_certificate_for_another_course_cannot_start_next_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = "https://www.coursera.org/learn/first-course"
+            course_file = root / "courses.txt"
+            course_file.write_text(first + "\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            certificate = certificate_url("first-course")
+            store.course("first-course")["certificate_page_url"] = certificate
+            store.save()
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=True, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            wrong = {"verified":True, "method":"certificate", "course_id":"other-course"}
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "open_certificate_page", new=AsyncMock(return_value=certificate)) as opened, \
+                 patch.object(queue, "verify_saved_certificate", new=AsyncMock(return_value=wrong)) as verified, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning, \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)) as discover, \
+                 patch.object(queue, "discover_modules", AsyncMock()) as modules:
+                result = await queue.run_queue(store, args, SimpleNamespace())
+            self.assertEqual(result, 2)
+            self.assertEqual(store.course("first-course")["status"], "attention")
+            self.assertNotIn("course_completed", [event["kind"] for event in store.data["events"]])
+            opened.assert_awaited_once()
+            verified.assert_awaited_once()
+            learning.assert_not_awaited()
+            discover.assert_not_awaited()
+            modules.assert_not_awaited()
+
+    async def test_live_certificate_overlay_is_verified_before_completion_and_transition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = "https://www.coursera.org/learn/first-course"
+            course_file = root / "courses.txt"
+            course_file.write_text(first + "\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("first-course", inventory_complete=True, modules_total=1, modules_discovered=1)
+            certificate = certificate_url("first-course")
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=False, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            tab = SimpleNamespace(evaluate=AsyncMock())
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "observed_certificate_url", AsyncMock(return_value=certificate)) as observed, \
+                 patch.object(queue, "open_certificate_page", new=AsyncMock(side_effect=opened_certificate)) as opened, \
+                 patch.object(queue, "verify_saved_certificate", new=AsyncMock(side_effect=matching_certificate)) as verified, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning, \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)), \
+                 patch.object(queue, "discover_modules", AsyncMock()) as modules:
+                result = await queue.run_queue(store, args, tab)
+            self.assertEqual(result, 0)
+            self.assertEqual(store.course("first-course")["status"], "completed")
+            self.assertEqual(store.course("first-course")["completion_method"], "certificate")
+            self.assertEqual(store.course("first-course")["certificate_page_url"], certificate)
+            observed.assert_awaited_once()
+            opened.assert_awaited_once()
+            verified.assert_awaited_once()
+            learning.assert_awaited_once()
+            modules.assert_not_awaited()
+
+    async def test_live_overlay_link_without_certificate_verification_does_not_transition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = "https://www.coursera.org/learn/first-course"
+            course_file = root / "courses.txt"
+            course_file.write_text(first + "\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("first-course", inventory_complete=True, modules_total=1, modules_discovered=1)
+            certificate = certificate_url("first-course")
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=True, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            tab = SimpleNamespace(evaluate=AsyncMock())
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "observed_certificate_url", AsyncMock(return_value=certificate)), \
+                 patch.object(queue, "open_certificate_page", new=AsyncMock(side_effect=opened_certificate)) as opened, \
+                 patch.object(queue, "verify_saved_certificate", new=AsyncMock(side_effect=RuntimeError(
+                     "Certificate page does not name this course"))) as verified, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning, \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)) as discover, \
+                 patch.object(queue, "discover_modules", AsyncMock()) as modules:
+                result = await queue.run_queue(store, args, tab)
+            self.assertEqual(result, 2)
+            self.assertEqual(store.course("first-course")["status"], "attention")
+            self.assertNotIn("course_completed", [event["kind"] for event in store.data["events"]])
+            opened.assert_awaited_once()
+            verified.assert_awaited_once()
+            learning.assert_not_awaited()
+            discover.assert_not_awaited()
+            modules.assert_not_awaited()
+
+    async def test_new_course_is_saved_then_run_and_certificate_page_is_visited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = "https://www.coursera.org/learn/first-course"
+            second = "https://www.coursera.org/learn/second-course"
+            course_file = root / "courses.txt"
+            course_file.write_text(first + "\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=False, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+            selected = []
+
+            async def finish_module(runner, number, roster):
+                runner.course["certificate_page_url"] = certificate_url(runner.course["id"])
+
+            async def discover(tab, excluded):
+                selected.append(set(excluded))
+                if len(selected) == 1:
+                    return {"id": "second-course", "url": second,
+                            "title": "Second Course", "action": "get_started"}
+                return None
+
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "discover_modules", AsyncMock(return_value=[1])), \
+                 patch.object(queue, "discover_roster", AsyncMock(return_value=[
+                     {"key": "supplement:item", "title": "Overview", "url": first + "/supplement/a/overview"}])), \
+                 patch.object(queue.QueueRunner, "process_module", new=finish_module), \
+                 patch.object(queue, "verify_course_completion", AsyncMock(return_value={
+                     "verified": True, "evidence": ["Site confirmed completion"]})), \
+                 patch.object(queue, "discover_next_course", discover), \
+                 patch.object(queue, "open_certificate_page", new=AsyncMock(side_effect=opened_certificate)) as certificate, \
+                 patch.object(queue, "verify_saved_certificate", new=AsyncMock(side_effect=matching_certificate)) as verify_certificate, \
+                 patch.object(queue, "open_my_learning", AsyncMock()) as learning:
+                result = await queue.run_queue(store, args, SimpleNamespace())
+
+            self.assertEqual(result, 0)
+            self.assertEqual([c["id"] for c in load_courses(course_file)], ["first-course", "second-course"])
+            self.assertEqual(store.course("second-course")["status"], "completed")
+            self.assertEqual(store.course("second-course")["title"], "Second Course")
+            self.assertEqual(selected, [set(), {"second-course"}, {"first-course", "second-course"}])
+            self.assertEqual([event["course_id"] for event in store.data["events"]
+                              if event["kind"] == "course_started"], ["second-course", "first-course"])
+            self.assertEqual(certificate.await_count, 2)
+            self.assertEqual(verify_certificate.await_count, 2)
+            self.assertEqual(learning.await_count, 2)
+
+    async def test_explicit_continue_on_attention_cannot_pass_course_without_certificate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = "https://www.coursera.org/learn/first-course"
+            second = "https://www.coursera.org/learn/second-course"
+            course_file = root / "courses.txt"
+            course_file.write_text(first + "\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            args = SimpleNamespace(courses=course_file, auto_my_learning=True,
+                                   continue_on_attention=True, minutes=1,
+                                   max_steps=60, quiz_attempts=0)
+
+            async def module_list(tab, course_url, expectation):
+                if course_url == first:
+                    raise RuntimeError("Manual lab requires attention")
+                return [1]
+
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "discover_modules", module_list), \
+                 patch.object(queue, "discover_roster", AsyncMock(return_value=[
+                     {"key": "supplement:item", "title": "Overview", "url": second + "/supplement/a/overview"}])), \
+                 patch.object(queue.QueueRunner, "process_module", AsyncMock()), \
+                 patch.object(queue, "verify_course_completion", AsyncMock(return_value={
+                     "verified": True, "evidence": ["Site confirmed completion"]})), \
+                 patch.object(queue, "discover_next_course", AsyncMock(return_value=None)) as discover, \
+                 patch.object(queue, "open_certificate_page", AsyncMock()) as open_certificate, \
+                 patch.object(queue, "open_my_learning", AsyncMock()):
+                result = await queue.run_queue(store, args, SimpleNamespace())
+
+            self.assertEqual(result, 2)
+            self.assertEqual(store.course("first-course")["status"], "attention")
+            self.assertEqual([course["id"] for course in store.data["courses"]], ["first-course"])
+            discover.assert_awaited_once()
+            open_certificate.assert_not_awaited()
+
+
+if __name__ == "__main__":
+    unittest.main()

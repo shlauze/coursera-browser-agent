@@ -1,0 +1,208 @@
+{
+  "url": "https://www.coursera.org/learn/philosophy/home/module/1",
+  "links": [
+    {
+      "url": "https://www.coursera.org/learn/philosophy/supplement/BvU8W/about-this-course",
+      "title": "About this Course\nReading • 10 min",
+      "aria_label": "About this Course"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/supplement/xf6sS/module-what-is-philosophy",
+      "title": "Module: What is Philosophy?\nReading • 10 min",
+      "aria_label": "Module: What is Philosophy?"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/HJUBR/introduction-what-is-philosophy",
+      "title": "Introduction: What is Philosophy?\nVideo • 12 min",
+      "aria_label": "Introduction: What is Philosophy?"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/aZcHE/philosophy-difficult-important-and-everywhere",
+      "title": "Philosophy: Difficult, Important and Everywhere\nVideo • 11 min",
+      "aria_label": "Philosophy: Difficult, Important and Everywhere"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/supplement/XobyV/optional-reading",
+      "title": "Optional Reading\nReading • 10 min",
+      "aria_label": "Optional Reading"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/Qnc7L/philosophy-how-do-we-do-it",
+      "title": "Philosophy: How Do We Do It?\nVideo • 17 min",
+      "aria_label": "Philosophy: How Do We Do It?"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/lecture/ahomr/is-there-a-right-way-to-think-about-things",
+      "title": "Is There A 'Right Way' To Think About Things?\nVideo • 6 min",
+      "aria_label": "Is There A 'Right Way' To Think About Things?"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/practice-what-is-philosophy",
+      "title": "Practice: What is Philosophy?\nPractice Assignment • Submitted • Grade: 100% •\nStatus: Graded\nGraded",
+      "aria_label": "Practice: What is Philosophy?, Graded"
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/what-is-philosophy",
+      "title": "What is Philosophy?\nGraded Assignment • Submitted • Grade: 100% •\nStatus: Graded\nGraded",
+      "aria_label": "What is Philosophy?, Graded"
+    }
+  ],
+  "side_cards": [
+    {
+      "url": "https://www.coursera.org/learn/philosophy/team/vLPM0/morality-objective-relative-or-emotive",
+      "type": "team",
+      "identity": "vLPM0",
+      "title": "Morality: Objective, Relative or Emotive?",
+      "aria_label": "",
+      "evidence": []
+    },
+    {
+      "url": "https://www.coursera.org/learn/philosophy/team/smzUy/what-is-knowledge-and-do-we-have-any",
+      "type": "team",
+      "identity": "smzUy",
+      "title": "What is Knowledge? And Do We Have Any?",
+      "aria_label": "",
+      "evidence": []
+    }
+  ],
+  "lesson_ancestors": [
+    {
+      "tag": "LI",
+      "role": null,
+      "aria": null,
+      "cls": "rc-WeekSingleItemDisplayRefresh css-oediup"
+    },
+    {
+      "tag": "UL",
+      "role": null,
+      "aria": null,
+      "cls": "css-1rn6441"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": ""
+    },
+    {
+      "tag": "LI",
+      "role": null,
+      "aria": null,
+      "cls": "rc-ItemGroupLesson css-1ckdevl"
+    },
+    {
+      "tag": "UL",
+      "role": null,
+      "aria": null,
+      "cls": "css-a8lou8"
+    },
+    {
+      "tag": "NAV",
+      "role": null,
+      "aria": "Lessons",
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "css-rm1zya"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "rc-LessonCollectionBody css-1amjlrp"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "rc-ModuleLessons"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "css-evrgln"
+    },
+    {
+      "tag": "SECTION",
+      "role": null,
+      "aria": null,
+      "cls": "rc-ModuleSection css-enaab5"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "css-8l0akz"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "cds-1 css-olk27q cds-2 cds-8"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "cds-1 rc-PeriodPageRefresh css-qbv487 cds-2 cds-3 cds-grid-item cds-5 cds-8 cds-62"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "cds-1 css-kozlth cds-2"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "cds-1 css-1iqv3v7 cds-2 cds-3 cds-grid-item cds-5 cds-8 cds-48"
+    },
+    {
+      "tag": "DIV",
+      "role": null,
+      "aria": null,
+      "cls": "cds-1 course-content-body css-0 cds-2 cds-14 cds-19"
+    },
+    {
+      "tag": "MAIN",
+      "role": null,
+      "aria": null,
+      "cls": "course-content css-wa2elg"
+    }
+  ]
+}

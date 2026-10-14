@@ -1,0 +1,163 @@
+{
+  "events": [
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive/view-feedback",
+        "snapshot_id": "1605b446",
+        "answer_snapshot_id": "1605b446",
+        "controls": [],
+        "buttons": [
+          {
+            "label": "Retry",
+            "names": [
+              "Retry"
+            ],
+            "tag": "button",
+            "href": null,
+            "workflow": "entry",
+            "disabled": false
+          }
+        ],
+        "available_buttons": [
+          "Retry"
+        ],
+        "observed_controls": [
+          {
+            "tag": "button",
+            "label": "Back",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Select language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Retry",
+            "disabled": false,
+            "workflow": "entry"
+          }
+        ],
+        "frames": [],
+        "scope": "dialog",
+        "dialog_candidates": [
+          {
+            "visible": true,
+            "modal": true,
+            "active": true,
+            "text_length": 247,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 991
+          },
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": "quiz_result",
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 137,
+        "scope_control_count": 4,
+        "dialog": "Your grade: 33.33% Question 1 Sample feedback",
+        "result_page": true,
+        "page_text": "Your grade: 33.33%\nTo pass: 80%\nLoading...",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_submitted_result",
+      "key": "assignment:pNJkH",
+      "attempt": 1,
+      "passed": false
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "snapshot_id": "2166d1ce",
+        "answer_snapshot_id": "2166d1ce",
+        "controls": [],
+        "buttons": [
+          {
+            "label": "Continue",
+            "names": [
+              "Continue"
+            ],
+            "tag": "button",
+            "href": null,
+            "workflow": "other",
+            "disabled": false
+          }
+        ],
+        "available_buttons": [
+          "Continue"
+        ],
+        "observed_controls": [
+          {
+            "tag": "button",
+            "label": "Continue",
+            "disabled": false,
+            "workflow": "other"
+          },
+          {
+            "tag": "button",
+            "label": "Cancel",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "dialog",
+        "dialog_candidates": [
+          {
+            "visible": true,
+            "modal": true,
+            "active": true,
+            "text_length": 177,
+            "aria_hidden": null,
+            "width": 568,
+            "height": 224
+          }
+        ],
+        "dialog_kind": "modal",
+        "confirmation_candidates": 0,
+        "blocking_dialog": true,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 131,
+        "scope_control_count": 2,
+        "dialog": "Start new attempt? When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher. Continue Cancel",
+        "result_page": false,
+        "page_text": "Start new attempt? When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher. Continue Cancel",
+        "submitted_attempts_this_run": 1,
+        "maximum_attempts_this_run": 2
+      }
+    }
+  ]
+}

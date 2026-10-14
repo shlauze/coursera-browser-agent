@@ -1,0 +1,26 @@
+# Local credentials and account-specific configuration.
+/.groq-key.dpapi
+/settings.json
+/.env
+/.env.*
+
+# Browser authentication, checkpoints, and generated run output.
+/coursera-chrome-profile/
+/state/
+/logs/
+/tests-last-run.txt
+/tests-retry-last-run.txt
+
+# Installed dependencies and Python/tool caches.
+/.venv/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+
+# Local editor and operating-system files.
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db

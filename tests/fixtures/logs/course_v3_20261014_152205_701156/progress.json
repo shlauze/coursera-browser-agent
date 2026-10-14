@@ -1,0 +1,1869 @@
+{
+  "events": [
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "snapshot_id": "2166d1ce",
+        "answer_snapshot_id": "2166d1ce",
+        "controls": [],
+        "buttons": [],
+        "available_buttons": [],
+        "observed_controls": [
+          {
+            "tag": "a",
+            "label": "Coursera",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help menu",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Current language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Chat with Coursera AI",
+            "disabled": true,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "User dropdown menu for Example Learner",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Introduction to Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Collapse course outline",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Today's goal • 3/3 items",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 1 What is Philosophy?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 2 Morality: Objective, Relative or Emotive?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Module: Morality: Objective, Emotive or Relative?, Completed, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, The Status of Morality, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objectivism, Relativism and Emotivism, Completed, 13 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objections to Objectivism, Relativism and Emotivism, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Further Discussion, Completed, 7 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "selected link, Practice Assignment, Practice: Morality: Objective, Relative or Emotive?, Not submitted, 12 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Related work by Philosophy staff at the University of Edinburgh, Not submitted, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 3 What is Knowledge? And Do We Have Any?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 4 Week 2 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 5 Do We Have an Obligation to Obey the Law?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 6 Should You Believe What You Hear?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 7 Week 3 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 8 Minds, Brains and Computers",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 9 Are Scientific Theories True?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 10 Week 4 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 11 Do We Have Free Will and Does It Matter?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 12 Time Travel and Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 13 Week 5 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 14 Peer review",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Go to next item",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "document",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": null,
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 127,
+        "scope_control_count": 127,
+        "dialog": null,
+        "result_page": false,
+        "page_text": "Practice Assignment\nLoading...",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "snapshot_id": "2166d1ce",
+        "answer_snapshot_id": "2166d1ce",
+        "controls": [],
+        "buttons": [
+          {
+            "label": "Start assignment",
+            "names": [
+              "Start assignment"
+            ],
+            "tag": "button",
+            "href": null,
+            "workflow": "entry",
+            "disabled": false
+          }
+        ],
+        "available_buttons": [
+          "Start assignment"
+        ],
+        "observed_controls": [
+          {
+            "tag": "a",
+            "label": "Coursera",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help menu",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Current language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Chat with Coursera AI",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "User dropdown menu for Example Learner",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Introduction to Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Collapse course outline",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Today's goal • 3/3 items",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 1 What is Philosophy?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 2 Morality: Objective, Relative or Emotive?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Module: Morality: Objective, Emotive or Relative?, Completed, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, The Status of Morality, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objectivism, Relativism and Emotivism, Completed, 13 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objections to Objectivism, Relativism and Emotivism, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Further Discussion, Completed, 7 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "selected link, Practice Assignment, Practice: Morality: Objective, Relative or Emotive?, Not submitted, 12 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Related work by Philosophy staff at the University of Edinburgh, Not submitted, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 3 What is Knowledge? And Do We Have Any?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 4 Week 2 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 5 Do We Have an Obligation to Obey the Law?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 6 Should You Believe What You Hear?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 7 Week 3 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 8 Minds, Brains and Computers",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 9 Are Scientific Theories True?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 10 Week 4 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 11 Do We Have Free Will and Does It Matter?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 12 Time Travel and Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 13 Week 5 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 14 Peer review",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Start assignment",
+            "disabled": false,
+            "workflow": "entry"
+          },
+          {
+            "tag": "button",
+            "label": "Help me practice, Coursera AI trigger",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Go to next item",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "document",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": null,
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 131,
+        "scope_control_count": 131,
+        "dialog": null,
+        "result_page": false,
+        "page_text": "Practice Assignment\nStart assignment",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "button",
+      "result": {
+        "clicked": "Start assignment",
+        "workflow": "entry",
+        "dialog_was_open": false,
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "snapshot_id": "2166d1ce",
+        "answer_snapshot_id": "2166d1ce",
+        "controls": [],
+        "buttons": [],
+        "available_buttons": [],
+        "observed_controls": [
+          {
+            "tag": "a",
+            "label": "Coursera",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help menu",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Current language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Chat with Coursera AI",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "User dropdown menu for Example Learner",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Introduction to Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Collapse course outline",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Today's goal • 3/3 items",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 1 What is Philosophy?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 2 Morality: Objective, Relative or Emotive?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Module: Morality: Objective, Emotive or Relative?, Completed, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, The Status of Morality, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objectivism, Relativism and Emotivism, Completed, 13 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objections to Objectivism, Relativism and Emotivism, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Further Discussion, Completed, 7 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "selected link, Practice Assignment, Practice: Morality: Objective, Relative or Emotive?, Not submitted, 12 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Related work by Philosophy staff at the University of Edinburgh, Not submitted, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 3 What is Knowledge? And Do We Have Any?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 4 Week 2 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 5 Do We Have an Obligation to Obey the Law?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 6 Should You Believe What You Hear?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 7 Week 3 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 8 Minds, Brains and Computers",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 9 Are Scientific Theories True?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 10 Week 4 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 11 Do We Have Free Will and Does It Matter?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 12 Time Travel and Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 13 Week 5 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 14 Peer review",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Start assignment Loading",
+            "disabled": true,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help me practice, Coursera AI trigger",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Report an issue",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Go to next item",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "document",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": null,
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 132,
+        "scope_control_count": 132,
+        "dialog": null,
+        "result_page": false,
+        "page_text": "Practice Assignment\nLoading...",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "snapshot_id": "2166d1ce",
+        "answer_snapshot_id": "2166d1ce",
+        "controls": [],
+        "buttons": [],
+        "available_buttons": [],
+        "observed_controls": [
+          {
+            "tag": "a",
+            "label": "Coursera",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help menu",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Current language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Chat with Coursera AI",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "User dropdown menu for Example Learner",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Introduction to Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Collapse course outline",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Today's goal • 3/3 items",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 1 What is Philosophy?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 2 Morality: Objective, Relative or Emotive?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Module: Morality: Objective, Emotive or Relative?, Completed, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, The Status of Morality, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objectivism, Relativism and Emotivism, Completed, 13 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objections to Objectivism, Relativism and Emotivism, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Further Discussion, Completed, 7 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "selected link, Practice Assignment, Practice: Morality: Objective, Relative or Emotive?, Not submitted, 12 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Related work by Philosophy staff at the University of Edinburgh, Not submitted, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 3 What is Knowledge? And Do We Have Any?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 4 Week 2 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 5 Do We Have an Obligation to Obey the Law?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 6 Should You Believe What You Hear?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 7 Week 3 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 8 Minds, Brains and Computers",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 9 Are Scientific Theories True?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 10 Week 4 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 11 Do We Have Free Will and Does It Matter?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 12 Time Travel and Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 13 Week 5 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 14 Peer review",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Start assignment Loading",
+            "disabled": true,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help me practice, Coursera AI trigger",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Report an issue",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Go to next item",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "document",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": null,
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 132,
+        "scope_control_count": 132,
+        "dialog": null,
+        "result_page": false,
+        "page_text": "Practice Assignment\nLoading...",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
+        "snapshot_id": "2166d1ce",
+        "answer_snapshot_id": "2166d1ce",
+        "controls": [],
+        "buttons": [],
+        "available_buttons": [],
+        "observed_controls": [
+          {
+            "tag": "a",
+            "label": "Coursera",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help menu",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Current language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Chat with Coursera AI",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "User dropdown menu for Example Learner",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Introduction to Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Collapse course outline",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Today's goal • 3/3 items",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 1 What is Philosophy?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 2 Morality: Objective, Relative or Emotive?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Module: Morality: Objective, Emotive or Relative?, Completed, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, The Status of Morality, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objectivism, Relativism and Emotivism, Completed, 13 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objections to Objectivism, Relativism and Emotivism, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Further Discussion, Completed, 7 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "selected link, Practice Assignment, Practice: Morality: Objective, Relative or Emotive?, Not submitted, 12 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Related work by Philosophy staff at the University of Edinburgh, Not submitted, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 3 What is Knowledge? And Do We Have Any?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 4 Week 2 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 5 Do We Have an Obligation to Obey the Law?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 6 Should You Believe What You Hear?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 7 Week 3 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 8 Minds, Brains and Computers",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 9 Are Scientific Theories True?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 10 Week 4 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 11 Do We Have Free Will and Does It Matter?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 12 Time Travel and Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 13 Week 5 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 14 Peer review",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Start assignment Loading",
+            "disabled": true,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help me practice, Coursera AI trigger",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Report an issue",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Go to next item",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "document",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": null,
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 132,
+        "scope_control_count": 132,
+        "dialog": null,
+        "result_page": false,
+        "page_text": "Practice Assignment\nLoading...",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive/attempt",
+        "snapshot_id": "d98b49f8",
+        "answer_snapshot_id": "d98b49f8",
+        "controls": [],
+        "buttons": [
+          {
+            "label": "Resume assignment",
+            "names": [
+              "Resume assignment"
+            ],
+            "tag": "button",
+            "href": null,
+            "workflow": "entry",
+            "disabled": false
+          }
+        ],
+        "available_buttons": [
+          "Resume assignment"
+        ],
+        "observed_controls": [
+          {
+            "tag": "a",
+            "label": "Coursera",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Help menu",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Current language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Chat with Coursera AI",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "User dropdown menu for Example Learner",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Introduction to Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Collapse course outline",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Today's goal • 3/3 items",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 1 What is Philosophy?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 2 Morality: Objective, Relative or Emotive?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Module: Morality: Objective, Emotive or Relative?, Completed, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, The Status of Morality, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objectivism, Relativism and Emotivism, Completed, 13 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Objections to Objectivism, Relativism and Emotivism, Completed, 11 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Video, Further Discussion, Completed, 7 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "selected link, Practice Assignment, Practice: Morality: Objective, Relative or Emotive?, Not submitted, 12 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Reading, Related work by Philosophy staff at the University of Edinburgh, Not submitted, 10 min",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 3 What is Knowledge? And Do We Have Any?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 4 Week 2 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 5 Do We Have an Obligation to Obey the Law?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 6 Should You Believe What You Hear?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 7 Week 3 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 8 Minds, Brains and Computers",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 9 Are Scientific Theories True?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 10 Week 4 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 11 Do We Have Free Will and Does It Matter?",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 12 Time Travel and Philosophy",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 13 Week 5 review: Lesson Choices",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Module 14 Peer review",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Resume assignment",
+            "disabled": false,
+            "workflow": "entry"
+          },
+          {
+            "tag": "button",
+            "label": "Help me practice, Coursera AI trigger",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Report an issue",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Go to next item",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "document",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          }
+        ],
+        "dialog_kind": null,
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 132,
+        "scope_control_count": 132,
+        "dialog": null,
+        "result_page": false,
+        "page_text": "Practice Assignment\nResume assignment",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    },
+    {
+      "event": "quiz_controls",
+      "key": "assignment:pNJkH",
+      "action": "button",
+      "result": {
+        "error": "Expected one enabled matching button.",
+        "error_code": "button_not_ready",
+        "matches": 0,
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive/attempt",
+        "snapshot_id": "5cddab21",
+        "answer_snapshot_id": "5cddab21",
+        "controls": [
+          {
+            "id": "c0",
+            "type": "radio",
+            "name": "autoGradableResponseId~3a9e4cd5609f8d0878ca328a58ff1858",
+            "value": "eec36bc2510c82c694c5ba80642f3ed4",
+            "label": "Sample option 25.",
+            "question": "Sample question 10: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c1",
+            "type": "radio",
+            "name": "autoGradableResponseId~3a9e4cd5609f8d0878ca328a58ff1858",
+            "value": "de43377219fc4f2cf59b129821082001",
+            "label": "Sample option 26.",
+            "question": "Sample question 10: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c2",
+            "type": "radio",
+            "name": "autoGradableResponseId~3a9e4cd5609f8d0878ca328a58ff1858",
+            "value": "5fd6cfc156b5b7c93022d536867b0c58",
+            "label": "Sample option 27.",
+            "question": "Sample question 10: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c3",
+            "type": "radio",
+            "name": "autoGradableResponseId~3a9e4cd5609f8d0878ca328a58ff1858",
+            "value": "f1a900380e0e00c020ded16d1a9485a8",
+            "label": "Sample option 28.",
+            "question": "Sample question 10: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c4",
+            "type": "radio",
+            "name": "autoGradableResponseId~73df27818d419eb9bc6f505a9fad10bf",
+            "value": "394d66969f95cf21436e6c4c428c3521",
+            "label": "Sample option 29.",
+            "question": "Sample question 11: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c5",
+            "type": "radio",
+            "name": "autoGradableResponseId~73df27818d419eb9bc6f505a9fad10bf",
+            "value": "31b6ada70141e87b6ac6c347745347df",
+            "label": "Sample option 30.",
+            "question": "Sample question 11: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c6",
+            "type": "radio",
+            "name": "autoGradableResponseId~73df27818d419eb9bc6f505a9fad10bf",
+            "value": "591c1403a4b3044222ee143c20ae2ada",
+            "label": "Sample option 31.",
+            "question": "Sample question 11: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c7",
+            "type": "radio",
+            "name": "autoGradableResponseId~73df27818d419eb9bc6f505a9fad10bf",
+            "value": "cce13594dd4cbb4530bd312c7eb87122",
+            "label": "Sample option 32.",
+            "question": "Sample question 11: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c8",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~879f4e7238655887ac91daeaf2e67164",
+            "value": "db9270c4d8d5beab7a032f5d9babbf53",
+            "label": "Sample option 33.",
+            "question": "Sample question 12: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c9",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~879f4e7238655887ac91daeaf2e67164",
+            "value": "e69fc743ed50c45a9301df43979fdc3f",
+            "label": "Sample option 34.",
+            "question": "Sample question 12: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c10",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~879f4e7238655887ac91daeaf2e67164",
+            "value": "592723719f6b34398e4474d71925fd61",
+            "label": "Sample option 35.",
+            "question": "Sample question 12: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c11",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~879f4e7238655887ac91daeaf2e67164",
+            "value": "91c99db66819b6895f28416e20ff58eb",
+            "label": "Sample option 36.",
+            "question": "Sample question 12: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c12",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~b556f544011b7fa72f30c93f78067998",
+            "value": "81cda1cb2f3e9279862474116296b0f5",
+            "label": "Sample option 37.",
+            "question": "Sample question 13: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c13",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~b556f544011b7fa72f30c93f78067998",
+            "value": "0e092bdf9b1ead2a90460e9fb16605fa",
+            "label": "Sample option 38.",
+            "question": "Sample question 13: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c14",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~b556f544011b7fa72f30c93f78067998",
+            "value": "75390b7d77268858390d65c67eb29d1a",
+            "label": "Sample option 39.",
+            "question": "Sample question 13: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c15",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~b556f544011b7fa72f30c93f78067998",
+            "value": "3abf12b38f87678f452ad11e38ac0a4f",
+            "label": "Sample option 40.",
+            "question": "Sample question 13: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c16",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f89f3de52df0958476eb8ccea93c46a5",
+            "value": "97b00f9b435ed32857fcb75b12e50030",
+            "label": "Sample option 41.",
+            "question": "Sample question 14: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c17",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f89f3de52df0958476eb8ccea93c46a5",
+            "value": "1f96a0d74c475dda89792f8b0e299a17",
+            "label": "Sample option 42.",
+            "question": "Sample question 14: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c18",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f89f3de52df0958476eb8ccea93c46a5",
+            "value": "23f81ac7ab0a0bd7d52ca7b551454734",
+            "label": "Sample option 43.",
+            "question": "Sample question 14: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c19",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f89f3de52df0958476eb8ccea93c46a5",
+            "value": "48b1aa9c3c46bc51b85ff78218e6f322",
+            "label": "Sample option 44.",
+            "question": "Sample question 14: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c20",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f1433ec6f2fa7af994b904e38e65afc9",
+            "value": "98a526c757962206770ebd2c45b00527",
+            "label": "Sample option 45.",
+            "question": "Sample question 15: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c21",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f1433ec6f2fa7af994b904e38e65afc9",
+            "value": "5c8bce3e9126533cfdb3097a062a01ba",
+            "label": "Sample option 46.",
+            "question": "Sample question 15: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c22",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f1433ec6f2fa7af994b904e38e65afc9",
+            "value": "1ffc171af9f68d35df1bd46d69c8285e",
+            "label": "Sample option 47.",
+            "question": "Sample question 15: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
+            "id": "c23",
+            "type": "checkbox",
+            "name": "autoGradableResponseId~f1433ec6f2fa7af994b904e38e65afc9",
+            "value": "ff4fee6bda68f8282fc22c20275d60df",
+            "label": "Sample option 48.",
+            "question": "Sample question 15: choose an option.",
+            "kind": "answer",
+            "selected": false,
+            "disabled": false,
+            "in_scope": true
+          }
+        ],
+        "buttons": [
+          {
+            "label": "Submit",
+            "names": [
+              "Submit"
+            ],
+            "tag": "button",
+            "href": null,
+            "workflow": "submit",
+            "disabled": true
+          }
+        ],
+        "available_buttons": [],
+        "observed_controls": [
+          {
+            "tag": "button",
+            "label": "Back",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Select language: English",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Submit",
+            "disabled": true,
+            "workflow": "submit"
+          },
+          {
+            "tag": "button",
+            "label": "Save draft",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Like",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Dislike",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Report an issue",
+            "disabled": false,
+            "workflow": null
+          }
+        ],
+        "frames": [],
+        "scope": "dialog",
+        "dialog_candidates": [
+          {
+            "visible": false,
+            "modal": false,
+            "active": false,
+            "text_length": 0,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 0
+          },
+          {
+            "visible": true,
+            "modal": true,
+            "active": true,
+            "text_length": 11507,
+            "aria_hidden": null,
+            "width": 1920,
+            "height": 991
+          }
+        ],
+        "dialog_kind": "quiz_form",
+        "confirmation_candidates": 0,
+        "blocking_dialog": false,
+        "editable_form": true,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 146,
+        "scope_control_count": 14,
+        "dialog": "Practice Assignment Question 1 Sample question Sample options Coursera Honor Code Submit",
+        "result_page": false,
+        "page_text": "Practice Assignment\nQuestion 1\nSample question\nSample option A\nSample option B\nSubmit\nSave draft",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "test_sources": {
+    "test_auto_queue.py": "e907e2c66f1e60db6887d155e66e160e2a116d14501afde0d1915b45d684827e",
+    "test_completed_certificate.py": "a2a9dacc95f8ec603e578efc74ed7cb8a2daad2e5c4a6163281af75ed56d2cce",
+    "test_course_adapter.py": "9aba19510ae5a8bb244ee68f0090dbd0ee50fef79ec2d1afecc4fc2747a764b1",
+    "test_course_queue.py": "5cf7f30bbe42b7ba565b7d35b93ebf2df94f96d3942afcc0c722f412ef831c7c",
+    "test_course_state.py": "080e54d96ca2b972e1296b7c2ca39d6b7f645b07dae84e29dd9468e435a8dd9e",
+    "test_dialogue_flow.py": "a0bb21655610941aab93fcbddca371463ea78d8af171b46c2a206a9d266746ef",
+    "test_groq_retries.py": "c95415bd278f2a47a01177d831dd12d554b3f87de95815871dbf06310cc2c011",
+    "test_lab_flow.py": "7172ba08b43bf69b2ef75308251148620012a020449381ec5ac624f10664209e",
+    "test_lesson_outline.py": "fc40a1ee32d44e58944b1063f1d4cd31e131065075f473e332e654e70bdb2745",
+    "test_my_learning.py": "302708ec2a2511491451ac5c0783f064b83d3520dadf416eedd5880b7f680cbb",
+    "test_my_learning_pagination_js.py": "28b110223dbc7dc7b66bda8f27bffc33dc36b0706b5a48bda722be0c0c2faa46",
+    "test_new_pc_config.py": "1af8bca5abf1feadc7e26954e049486fdab7082112ede464087b044d4b3ec358",
+    "test_numeric_quiz.py": "2bd9e28af2f1ae9171a376a1f2c646f17d112d333abc3ca0cea368bc39282511",
+    "test_progress_atomic.py": "7bd479d32255ebef34a2d06846287f1cfa191a516f9192f262f415774ca4a486",
+    "test_progress_concurrency.py": "369c65c26dd714a1faae5553205059680426a0ce9cc9c6b47cbc169152c97106",
+    "test_progress_monitor.py": "9cb27a0449942ab9860c2909f6d4763bcd93f2b0139a1f720529c75ebb764b06",
+    "test_quiz_drawer.py": "c3a4a9c8a48f4b7aa007ea9fbfa205e8168583f2fda1051323f33b6a71ce999e",
+    "test_quiz_entry.py": "585575a2e96f472f26262609af06b55550c10a03a7c9318d248a30c889eff121",
+    "test_quiz_history_import.py": "3e376d67f9cc67977d552df7056a8020c1ba881482c41131f43e2dd598e7dd1a",
+    "test_quiz_memory.py": "07dae93baa40d0d3cdcb2f990d5174b001d7ad05abd9a91f175e9cc1a684f0f0",
+    "test_quiz_snapshots.py": "36bffcbf6accd15a53502ccf3d0e800ef416aec0f0859239c410eee637a7dd02",
+    "test_quiz_transitions.py": "1a5f1a9649bdb997531b643ee36aa2262361bfcf4c90fbbcca09fda17dc51940",
+    "test_reflection_flow.py": "4c55dc455e95167248b9cb1c93f430d2c349eb69cbc1f368f0a55589d0b6b020",
+    "test_reflection_preflight.py": "3e56df5cd3aaf057536453a4b9cf5843f623e31223f692141e475e9005f2976b",
+    "test_retry_dialog.py": "cabd68151dfc0b2b90c836727df3f3c09cc746fb3092677f52983c41a1675d00",
+    "test_retry_until_pass.py": "80a4195969f9e2428cd01f909a1899e2c3ce951ba0ac2acdf677a9c0cb87ccce",
+    "test_run_course_supervisor.py": "7c08a823beda0a07957e1aa10c382d781a9ced4c94285bd0c1d04b2cf24eb16e",
+    "test_second_submit.py": "783b7df0d3ec2a5fb1ff034d6fcb82b98be1bac022a2ab8ba61d55179b029bb8",
+    "test_select_quiz.py": "059e657c8c4f8f29cdf57bc5ac8a78a2d832c63bc711dc7da95a01f4807bdf0a",
+    "test_video_flow.py": "802e94874d9b5884307643eec2dd26611d07e4c02cec0c266373235b4ecff2cb"
+  },
+  "fixtures": {
+    "course_v3_20261014_145620_693392": {
+      "events": 6,
+      "bytes": 37638
+    },
+    "course_v3_20261014_150351_106092": {
+      "events": 3,
+      "bytes": 17223
+    },
+    "course_v3_20261014_150503_837593": {
+      "events": 1,
+      "bytes": 2664
+    },
+    "course_v3_20261014_151049_008909": {
+      "events": 1,
+      "bytes": 10544
+    },
+    "course_v3_20261014_151755_619347": {
+      "events": 0,
+      "bytes": 8745
+    },
+    "course_v3_20261014_152205_701156": {
+      "events": 8,
+      "bytes": 57811
+    },
+    "course_v3_20261014_152842_483495": {
+      "events": 3,
+      "bytes": 4822
+    }
+  },
+  "pending_sources": []
+}

@@ -1,0 +1,78 @@
+{
+  "events": [
+    {
+      "event": "quiz_controls",
+      "key": "assignment:UAOb6",
+      "action": "inspect",
+      "result": {
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/what-is-philosophy",
+        "snapshot_id": "f4c9f531",
+        "answer_snapshot_id": "f4c9f531",
+        "controls": [],
+        "buttons": [
+          {
+            "label": "Continue",
+            "names": [
+              "Continue"
+            ],
+            "tag": "button",
+            "href": null,
+            "workflow": "other",
+            "disabled": false
+          }
+        ],
+        "available_buttons": [
+          "Continue"
+        ],
+        "observed_controls": [
+          {
+            "tag": "button",
+            "label": "Close",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "a",
+            "label": "Learn more about the Coursera Honor Code",
+            "disabled": false,
+            "workflow": null
+          },
+          {
+            "tag": "button",
+            "label": "Continue",
+            "disabled": false,
+            "workflow": "other"
+          }
+        ],
+        "frames": [],
+        "scope": "dialog",
+        "dialog_candidates": [
+          {
+            "visible": true,
+            "modal": true,
+            "active": true,
+            "text_length": 307,
+            "aria_hidden": null,
+            "width": 568,
+            "height": 384
+          }
+        ],
+        "dialog_kind": "modal",
+        "blocking_dialog": true,
+        "editable_form": false,
+        "manual_submission_required": false,
+        "authorized_notice_present": false,
+        "authorship_statement": null,
+        "personal_statements": [],
+        "unsupported_inputs": [],
+        "document_control_count": 126,
+        "scope_control_count": 3,
+        "dialog": "Coursera Honor Code We’re dedicated to protecting the integrity of your work on Coursera. As part of this effort, we’ve created an honor code that we ask everyone to follow. Learn more All learners should: Submit their own original work Avoid sharing answers with others Report suspected violations Continue",
+        "result_page": false,
+        "page_text": "Coursera Honor Code We’re dedicated to protecting the integrity of your work on Coursera. As part of this effort, we’ve created an honor code that we ask everyone to follow. Learn more All learners should: Submit their own original work Avoid sharing answers with others Report suspected violations Continue",
+        "submitted_attempts_this_run": 0,
+        "maximum_attempts_this_run": 2
+      }
+    }
+  ]
+}

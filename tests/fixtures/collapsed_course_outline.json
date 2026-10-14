@@ -1,0 +1,23 @@
+{
+  "source": "Relevant fields copied from logs/course_v3_20261014_144552_343069/progress.json",
+  "item": {
+    "url": "https://www.coursera.org/learn/philosophy/supplement/BvU8W/about-this-course",
+    "type": "supplement",
+    "title": "About this Course Reading • 10 min Get started",
+    "aria_label": "About this Course",
+    "evidence": ["aria-label: About this Course"],
+    "key": "supplement:BvU8W",
+    "status": "unknown"
+  },
+  "snapshot": {
+    "url": "https://www.coursera.org/learn/philosophy/supplement/BvU8W/about-this-course",
+    "title": "About this Course | Coursera",
+    "heading": "About this Course",
+    "ready": "complete",
+    "items": [],
+    "buttons": [
+      {"label": "Expand course outline", "disabled": false},
+      {"label": "Mark as completed", "disabled": false}
+    ]
+  }
+}
