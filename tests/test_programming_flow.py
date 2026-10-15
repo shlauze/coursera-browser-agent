@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,19 @@ class PureProgrammingChecks(unittest.TestCase):
         self.assertEqual(summary['failed_test_count'], 2)
         self.assertEqual([row['score'] for row in summary['test_scores']], ['0/10', '5/10', '10/10'])
 
+    def test_grader_feedback_preserves_each_test_and_complete_text(self):
+        detail = 'The expected output differs from the submitted tensor shape. ' + 'x' * 13000
+        feedback = ('Score: 10/20. Test cell (Score: 0/10) ' + detail +
+                    ' Test cell (Score: 10/10) This check passed.')
+        summary = flow._feedback_summary(feedback)
+        self.assertEqual(summary['full_text'], feedback)
+        self.assertEqual(summary['failed_test_count'], 1)
+        self.assertEqual([row['index'] for row in summary['test_scores']], [1, 2])
+        self.assertIn('tensor shape', summary['test_scores'][0]['details'])
+        self.assertFalse(summary['test_scores'][0]['passed'])
+        self.assertTrue(summary['test_scores'][1]['passed'])
+        self.assertGreater(len(summary['full_text']), len(summary['excerpt']))
+
     def test_test_cell_score_is_not_an_overall_grade(self):
         summary = flow._feedback_summary('Test cell (Score: 0/10)')
         self.assertTrue(summary['available'])
@@ -79,26 +92,34 @@ class E {
   get innerText(){return this.text||this.children.map(x=>x.innerText).join('\n');}
   getClientRects(){return [{}];}
   getAttribute(){return null;}
+  scrollIntoView(){}
+  click(){this.clicked=true;}
+  closest(){return null;}
   contains(other){return this===other||this.children.some(child=>child.contains(other));}
   matches(selector){return selector.split(',').some(part=>part.trim().toUpperCase()===this.tagName);}
   querySelectorAll(selector){return this.children.flatMap(child=>[
     ...(child.matches(selector)?[child]:[]),...child.querySelectorAll(selector)]);}
 }
-const run=headings=>{
+const run=(headings,action='inspect')=>{
   const main=new E('main','',[
     ...headings.map(heading=>new E('h1',heading)),
     new E('button','Resume lab'),
+    new E('button','My submissions'),
+    new E('button','Submit assignment'),
     new E('p',"You didn't pass. To pass you need at least 70/100 points. 31/100")]);
   const document={body:new E('body','',[main]),readyState:'complete',
     querySelectorAll:selector=>[main].filter(element=>element.matches(selector))};
-  return vm.runInNewContext('('+script+')({path,heading:title,action:"inspect"})',
-    {URL,location,document,path,title,getComputedStyle:()=>({display:'block',visibility:'visible'})});
+  return vm.runInNewContext('('+script+')({path,heading:title,action})',
+    {URL,location,document,path,title,action,getComputedStyle:()=>({display:'block',visibility:'visible'})});
 };
 let result=run([title,'Instructions','Lab submission and grades']);
 assert.equal(result.error,undefined);
 assert.equal(result.heading,title);
 assert.equal(result.counts.resume,1);
+assert.equal(result.counts.submissions,1);
 assert.match(result.page_text,/31\/100/);
+result=run([title,'Instructions'],'submissions');
+assert.equal(result.clicked,'submissions');
 result=run([title,title,'Instructions']);
 assert.match(result.error,/ambiguous/i);
 process.stdout.write('Programming page heading checks passed');
@@ -107,6 +128,81 @@ process.stdout.write('Programming page heading checks passed');
                                 text=True, capture_output=True, timeout=10, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Programming page heading checks passed', result.stdout)
+
+    def test_feedback_expansion_requires_explicit_one_time_request(self):
+        harness = r"""
+const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
+const script=JSON.parse(fs.readFileSync(0,'utf8'));
+const path='/learn/deep-learning-with-pytorch/programming/W3x2U/task';
+const location=new URL('https://www.coursera.org'+path+'/submission');
+let clicks=0;
+const button={innerText:'Show grader output',disabled:false,
+  getClientRects:()=>[{}],click:()=>{clicks++;}};
+const row={innerText:'Submitted at: Oct 15, 5:22 AM +05 31/100',getClientRects:()=>[{}],
+  querySelectorAll:selector=>selector==='button'?[button]:[]};
+const document={querySelectorAll:selector=>selector==='.rc-SubmissionRow'?[row]:[]};
+const run=async expand=>vm.runInNewContext('('+script+')({path,expand})',
+  {URL,location,document,path,expand});
+(async()=>{
+  const first=await run(true);
+  assert.equal(first.expanded,true);
+  assert.equal(clicks,1);
+  const second=await run(false);
+  assert.equal(second.expanded,false);
+  assert.equal(clicks,1);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(['node', '-e', harness], input=json.dumps(flow.PROGRAMMING_FEEDBACK_JS),
+                                text=True, capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_html_success_without_nbgrader_feedback_is_rejected(self):
+        harness = r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const script=JSON.parse(fs.readFileSync(0,'utf8'));
+const path='/learn/deep-learning-with-pytorch/programming/W3x2U/task';
+const location=new URL('https://www.coursera.org'+path+'/submission');
+const link={innerText:'View grader feedback',getClientRects:()=>[{}],
+  href:'https://www.coursera.org/api/rest/v1/executorruns/richfeedback?id=abcdefgh&feedbackType=HTML'};
+const row={innerText:'Submitted at: Oct 15, 5:22 AM +05 31/100',getClientRects:()=>[{}],
+  querySelectorAll:selector=>selector==='a[href]'?[link]:[]};
+const document={querySelectorAll:selector=>selector==='.rc-SubmissionRow'?[row]:[]};
+class DOMParser {
+  parseFromString(html){return {body:{textContent:html},querySelectorAll:()=>[]};}
+}
+let requested='';
+const run=async html=>vm.runInNewContext('('+script+')({path,expand:false})',
+  {URL,location,document,path,DOMParser,fetch:async url=>{
+    requested=url;return {ok:true,text:async()=>html};}});
+(async()=>{
+  let result=await run('Sign in to Coursera');
+  assert.match(result.error,/without recognizable nbgrader/i);
+  result=await run('Test cell (Score: 0 / 10) Wrong output');
+  assert.match(result.error,/without recognizable nbgrader/i);
+  result=await run('Notebook (Score: 10 / 20) Test cell (Score: 0 / 10) Wrong output');
+  assert.equal(result.available,true);
+  assert.equal(result.submission_count,1);
+  const oldLink={...link,href:link.href.replace('abcdefgh','oldrun12')};
+  const duplicate={...row,innerText:'October 14, 2026 11:00 PM +05 Submitted at: Oct 14, 11:00 PM +05 45/100',
+    querySelectorAll:selector=>selector==='a[href]'?[oldLink]:[]};
+  row.innerText='October 15, 2026 5:22 AM +05 Submitted at: Oct 15, 5:22 AM +05 31/100';
+  document.querySelectorAll=selector=>selector==='.rc-SubmissionRow'?[row,duplicate]:[];
+  result=await run('Notebook (Score: 10 / 20) Test cell (Score: 0 / 10)');
+  assert.equal(result.available,true);
+  assert.equal(result.submission_count,2);
+  assert.match(result.submission_record,/31\/100/);
+  assert.match(requested,/id=abcdefgh/);
+  row.innerText='October 14, 2026 11:00 PM +05 Submitted at: Oct 14, 11:00 PM +05 31/100';
+  result=await run('Notebook (Score: 10 / 20) Test cell (Score: 0 / 10)');
+  assert.match(result.error,/ambiguous latest/i);
+  row.innerText='Submitted at: Oct 15, 5:22 AM +05 31/100';
+  result=await run('Notebook (Score: 10 / 20) Test cell (Score: 0 / 10)');
+  assert.match(result.error,/unreadable timestamps/i);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(['node', '-e', harness], input=json.dumps(flow.PROGRAMMING_FEEDBACK_JS),
+                                text=True, capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_exact_course_identity_and_title_with_commas(self):
         path, heading = flow._path_and_heading(ITEM, COURSE)
@@ -146,6 +242,39 @@ process.stdout.write('Programming page heading checks passed');
         for action in ("request.action==='edit'", "request.action==='save'", "request.action==='run'"):
             self.assertNotIn(action, flow.NOTEBOOK_JS)
         self.assertIn("cache:'no-store'", flow.NOTEBOOK_JS)
+
+    def test_duplicate_lab_tabs_with_same_verified_notebook_are_readable(self):
+        path = ITEM['url'].replace(COURSE, '/learn/deep-learning-with-pytorch')
+        notebook = '/notebooks/release/FinalProject/ImageTextClassificationPyTorch.ipynb'
+        url = 'https://www.coursera.org' + path + '/lab?path=' + notebook
+        targets = {'first': {'url': url}, 'second': {'url': url},
+                   'other': {'url': 'https://www.coursera.org' + path.replace('W3x2U', 'OTHER') +
+                             '/lab?path=' + notebook}}
+        self.assertEqual(flow._lab_target_ids(targets, path), ['first', 'second'])
+        targets['second']['url'] = url.replace('ImageTextClassificationPyTorch', 'OtherNotebook')
+        with self.assertRaisesRegex(engine.StopRun, 'different notebooks'):
+            flow._lab_target_ids(targets, path)
+
+    def test_classic_jupyter_prompt_number_is_observed(self):
+        harness = r"""
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const script=JSON.parse(fs.readFileSync(0,'utf8'));
+const cells=[
+  {cell_type:'code',get_text:()=> 'a=1',input_prompt_number:7,metadata:{},output_area:{outputs:[]}},
+  {cell_type:'code',get_text:()=> 'b=2',execution_count:9,metadata:{},output_area:{outputs:[]}},
+  {cell_type:'code',get_text:()=> 'c=3',metadata:{},output_area:{outputs:[]}}];
+const Jupyter={notebook:{notebook_path:'release/Task.ipynb',dirty:false,
+  get_cells:()=>cells,save_notebook:()=>{},kernel:{status:'idle'}}};
+const location={href:'https://lab.labs.coursera.org/notebooks/release/Task.ipynb'};
+(async()=>{
+  const result=await vm.runInNewContext('('+script+')({action:"snapshot",max_cells:80,max_cell_chars:24000})',
+    {Jupyter,location});
+  assert.deepEqual(Array.from(result.cells,x=>x.execution_count),[7,9,null]);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(['node', '-e', harness], input=json.dumps(flow.NOTEBOOK_JS),
+                                text=True, capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class FakeRunner:
@@ -199,6 +328,140 @@ class DiagnosticWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tab.navigations, [
             'https://www.coursera.org/learn/deep-learning-with-pytorch/programming/W3x2U/task/submission',
             'https://www.coursera.org/learn/deep-learning-with-pytorch/programming/W3x2U/task'])
+
+    async def test_feedback_uses_my_submissions_and_expands_once(self):
+        class FakeTab:
+            def __init__(self):
+                self.navigations = []
+                self.evaluations = []
+                self.results = [
+                    {'available': False, 'ready': 'pending', 'expanded': True,
+                     'submission_page': True},
+                    {'available': False, 'ready': 'pending', 'expanded': False,
+                     'submission_page': True},
+                    {'available': True, 'text': 'Score: 10/20 Test cell (Score: 0/10) Wrong output',
+                     'submission_page': True},
+                ]
+
+            async def navigate(self, url):
+                self.navigations.append(url)
+
+            async def evaluate(self, expression):
+                self.evaluations.append(expression)
+                return self.results.pop(0)
+
+        tab = FakeTab()
+        path = '/learn/deep-learning-with-pytorch/programming/W3x2U/task'
+        with patch.object(flow, '_wait_page', new=AsyncMock(return_value={
+                'counts': {'launch': 1, 'resume': 0, 'submissions': 1}})) as wait_page, \
+             patch.object(flow, '_page_snapshot', new=AsyncMock(return_value={
+                'clicked': 'submissions'})) as snapshot, \
+             patch.object(flow.asyncio, 'sleep', new=AsyncMock()):
+            result = await flow._read_grader_feedback(tab, path, TITLE)
+        self.assertEqual(wait_page.await_args_list,
+                         [call(tab, path, TITLE), call(tab, path, TITLE)])
+        snapshot.assert_awaited_once_with(tab, path, TITLE, 'submissions')
+        self.assertEqual(result['raw_score'], '10/20')
+        self.assertTrue(result['assignment_restored'])
+        self.assertEqual(result['reviewed_via'], 'Coursera View grader feedback')
+        self.assertEqual([json.loads(expression.split('(')[-1][:-1])['expand']
+                          for expression in tab.evaluations], [True, False, False])
+        self.assertEqual(tab.navigations, ['https://www.coursera.org' + path])
+
+    async def test_feedback_uses_canonical_page_when_submissions_tab_is_absent(self):
+        class FakeTab:
+            def __init__(self): self.navigations = []
+            async def navigate(self, url): self.navigations.append(url)
+            async def evaluate(self, expression):
+                return {'available': True, 'text': 'Score: 31/100 Test cell (Score: 0/10)',
+                        'submission_page': True}
+
+        tab = FakeTab()
+        path = '/learn/deep-learning-with-pytorch/programming/W3x2U/task'
+        with patch.object(flow, '_wait_page', new=AsyncMock(return_value={
+                'counts': {'launch': 1, 'resume': 0, 'submissions': 0}})):
+            await flow._read_grader_feedback(tab, path, TITLE)
+        self.assertEqual(tab.navigations, ['https://www.coursera.org' + path + '/submission',
+                                           'https://www.coursera.org' + path])
+
+    async def test_submissions_click_falls_back_after_navigation_stalls(self):
+        class FakeTab:
+            def __init__(self): self.navigations = []; self.probes = 0
+            async def navigate(self, url): self.navigations.append(url)
+            async def evaluate(self, expression):
+                self.probes += 1
+                if self.probes <= 4:
+                    return {'available': False, 'ready': 'pending', 'on_assignment': True}
+                return {'available': True, 'submission_page': True,
+                        'text': 'Score: 31/100 Test cell (Score: 0/10)'}
+
+        tab = FakeTab()
+        path = '/learn/deep-learning-with-pytorch/programming/W3x2U/task'
+        with patch.object(flow, '_wait_page', new=AsyncMock(return_value={
+                'counts': {'launch': 1, 'resume': 0, 'submissions': 1}})), \
+             patch.object(flow, '_page_snapshot', new=AsyncMock(return_value={
+                'clicked': 'submissions'})), \
+             patch.object(flow.asyncio, 'sleep', new=AsyncMock()):
+            result = await flow._read_grader_feedback(tab, path, TITLE)
+        self.assertTrue(result['assignment_restored'])
+        self.assertEqual(tab.navigations, ['https://www.coursera.org' + path + '/submission',
+                                           'https://www.coursera.org' + path])
+
+    async def test_duplicate_verified_lab_tabs_reuse_one_without_new_launch(self):
+        path = ITEM['url'].replace(COURSE, '/learn/deep-learning-with-pytorch')
+        url = ('https://www.coursera.org' + path +
+               '/lab?path=%2Fnotebooks%2Frelease%2FFinalProject%2FImageTextClassificationPyTorch.ipynb')
+        targets = {'first': {'url': url}, 'second': {'url': url}}
+        with patch.object(flow.lab_flow, '_page_targets', new=AsyncMock(return_value=targets)), \
+             patch.object(flow, '_choose_existing_lab', new=AsyncMock(return_value=(
+                 'first', 'ws://127.0.0.1:9223/devtools/page/first',
+                 {'count': 2, 'verified': 2, 'display_variance': False}))) as choose, \
+             patch.object(flow, '_wait_page', new=AsyncMock()) as wait_page:
+            result = await flow._open_lab(object(), path, TITLE)
+        self.assertEqual(result, ('first', 'ws://127.0.0.1:9223/devtools/page/first', True,
+                                  {'count': 2, 'verified': 2, 'display_variance': False}))
+        choose.assert_awaited_once_with(['first', 'second'], path)
+        wait_page.assert_not_awaited()
+
+    async def test_duplicate_lab_selection_requires_unambiguous_saved_state(self):
+        snapshots = {'first': notebook_snapshot(), 'second': notebook_snapshot()}
+        address = lambda target_id: 'ws://127.0.0.1:9223/devtools/page/' + target_id
+
+        class FakeFrame:
+            def __init__(self, url): self.target_id = url.rsplit('/', 1)[-1]
+            async def connect(self): pass
+            async def close(self): pass
+            async def find_notebook(self, expected):
+                self_test.assertTrue(expected.endswith('/lab'))
+            async def evaluate(self, script, request):
+                snapshot = snapshots[self.target_id]
+                if request['action'] == 'snapshot': return snapshot
+                return {'server': True, 'cells': [
+                    {'index': cell['index'], 'type': cell['type'], 'source': cell['source']}
+                    for cell in snapshot['cells']]}
+
+        self_test = self
+        path = ITEM['url'].replace(COURSE, '/learn/deep-learning-with-pytorch')
+        with patch.object(flow, '_lab_address', new=AsyncMock(side_effect=address)), \
+             patch.object(flow, 'FrameConnection', side_effect=FakeFrame):
+            self.assertEqual(await flow._choose_existing_lab(['first', 'second'], path),
+                             ('first', address('first'),
+                              {'count': 2, 'verified': 2, 'display_variance': False}))
+            snapshots['first']['dirty'] = True
+            with self.assertRaisesRegex(engine.StopRun, 'unsaved or unreadable'):
+                await flow._choose_existing_lab(['first', 'second'], path)
+            snapshots['first']['dirty'] = False
+            snapshots['first']['error'] = 'The notebook is still loading.'
+            with self.assertRaisesRegex(engine.StopRun, 'unsaved or unreadable'):
+                await flow._choose_existing_lab(['first', 'second'], path)
+            snapshots['first'].pop('error')
+            snapshots['first']['cells'][1]['outputs'] = []
+            chosen = await flow._choose_existing_lab(['first', 'second'], path)
+            self.assertEqual(chosen[0], 'first')
+            self.assertTrue(chosen[2]['display_variance'])
+            snapshots['second']['cells'][0]['source'] = 'def answer():\n    return 0\n'
+            with self.assertRaisesRegex(engine.StopRun, 'ambiguous saved notebook state'):
+                await flow._choose_existing_lab(['first', 'second'], path)
 
     async def test_cdp_binds_only_the_notebook_iframe_default_context(self):
         iframe = 'https://sbogzlberdio.labs.coursera.org/notebooks/release/Task.ipynb'
@@ -359,7 +622,8 @@ class DiagnosticWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_inspection_records_local_report_and_stays_manual(self):
         runner = FakeRunner()
         snapshot = notebook_snapshot()
-        previous_feedback = {'grade': '31/100', 'blank_submission': True,
+        previous_feedback = {'grade': '31/100', 'raw_score': '100/320',
+                             'blank_submission': True, 'failed_test_count': 1,
                              'test_scores': [{'name': 'Image classification', 'score': '0/20'}]}
         server = {'server': True, 'cells': [{'index': c['index'], 'type': c['type'], 'source': c['source']}
                                             for c in snapshot['cells']]}
@@ -382,13 +646,19 @@ class DiagnosticWorkflowTests(unittest.IsolatedAsyncioTestCase):
              patch.object(flow, '_wait_page', new=AsyncMock(return_value={
                  'page_text': "You didn't pass. To pass you need at least 70/100 points. 31/100",
                  'ready': 'complete'})), \
-             patch.object(flow, '_open_lab', new=AsyncMock(return_value=('popup', 'ws://127.0.0.1:9223/devtools/page/popup', True))), \
+             patch.object(flow, '_open_lab', new=AsyncMock(return_value=(
+                 'popup', 'ws://127.0.0.1:9223/devtools/page/popup', True,
+                 {'count': 2, 'verified': 2, 'display_variance': False}))), \
              patch.object(flow, '_read_grader_feedback', new=AsyncMock(return_value=previous_feedback), create=True), \
              patch.object(flow, 'FrameConnection', return_value=FakeFrame()):
             reason = await flow.diagnose_programming(runner, ITEM)
             report_path = Path(temp) / 'state' / 'programming_diagnostics' / 'deep-learning-with-pytorch_programming_W3x2U.json'
             report = json.loads(report_path.read_text(encoding='utf-8'))
         self.assertIn('requires your review', reason)
+        self.assertIn('Prior graded attempt: 31/100 (grader raw 100/320)', reason)
+        self.assertIn('1/1 grader tests failed, placeholders found', reason)
+        self.assertIn('Current notebook: 1 solution cells, 0 unfinished, saved sources confirmed', reason)
+        self.assertIn('1/1 visible tests report pass', reason)
         self.assertTrue(report['server_saved'])
         self.assertEqual(report['tests']['passed'], [1])
         self.assertEqual(report['parent_grade'], '31/100')
@@ -439,7 +709,8 @@ class DiagnosticWorkflowTests(unittest.IsolatedAsyncioTestCase):
                          'page_text': "You didn't pass. To pass you need at least 70/100 points. 31/100",
                          'ready': 'complete'})), \
                      patch.object(flow, '_open_lab', new=AsyncMock(return_value=(
-                         'popup', 'ws://127.0.0.1:9223/devtools/page/popup', True))), \
+                         'popup', 'ws://127.0.0.1:9223/devtools/page/popup', True,
+                         {'count': 1, 'verified': 1, 'display_variance': False}))), \
                      patch.object(flow, '_read_grader_feedback', new=AsyncMock(return_value={
                          'grade': '31/100', 'blank_submission': True}), create=True), \
                      patch.object(flow, 'FrameConnection', return_value=FakeFrame()):

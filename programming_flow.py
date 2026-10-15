@@ -60,14 +60,16 @@ PROGRAMMING_PAGE_JS = r"""(request => {
       disabled:!!element.disabled || element.getAttribute('aria-disabled')==='true'}));
   const labels=controls.map(control=>({label:control.label,disabled:control.disabled}));
   const find=label=>controls.filter(control=>new RegExp('^'+label+'$','i').test(control.label));
+  const submissions=controls.filter(control=>/^My submissions?$/i.test(control.label));
   const counts={launch:find('Launch lab').length,resume:find('Resume lab').length,
-    submit:find('Submit assignment').length};
+    submit:find('Submit assignment').length,submissions:submissions.length};
   const pageText=clean(main.innerText).slice(0,12000);
   const result={url:location.href,ready:document.readyState,heading:request.heading,
     counts,buttons:labels.slice(0,40),page_text:pageText};
   if (!request.action || request.action==='inspect') return result;
   const selected=request.action==='launch' ? find('Launch lab') :
-    request.action==='resume' ? find('Resume lab') : [];
+    request.action==='resume' ? find('Resume lab') :
+    request.action==='submissions' ? submissions : [];
   if (document.readyState!=='complete' || selected.length!==1 || selected[0].disabled)
     return {...result,error:'The requested Programming Assignment action is missing, ambiguous or disabled.'};
   selected[0].element.scrollIntoView({block:'center'});
@@ -82,19 +84,50 @@ PROGRAMMING_FEEDBACK_JS = r"""(async request => {
   const clean=value => String(value || '').replace(/\s+/g,' ').trim();
   const here=new URL(location.href);
   if (here.protocol!=='https:' || !['coursera.org','www.coursera.org'].includes(here.hostname) ||
-      here.username || here.password || (here.port && here.port!=='443') ||
-      here.pathname.replace(/\/$/,'')!==request.path+'/submission')
+      here.username || here.password || (here.port && here.port!=='443'))
     return {error:'The Programming Assignment submission page changed.'};
-  const links=[...document.querySelectorAll('a[href]')].filter(link =>
-    clean(link.innerText)==='View grader feedback' && link.getClientRects().length);
+  const current=here.pathname.replace(/\/$/,'');
+  if (current===request.path) return {available:false,ready:'pending',on_assignment:true};
+  if (current!==request.path+'/submission')
+    return {error:'The Programming Assignment submission page changed.'};
+  // A feedback link in an older submission must never be interpreted as the
+  // latest grade. Coursera's classic page groups each attempt in one row.
+  const rows=[...document.querySelectorAll('.rc-SubmissionRow')]
+    .filter(row=>row.getClientRects().length);
+  if (!rows.length) return {available:false,ready:'pending',submission_page:true};
+  let row=rows[0];
+  if (rows.length>1) {
+    const dated=rows.map(candidate=>{
+      // The visible Coursera timestamp includes a year and timezone. The
+      // screenreader-only "Submitted at" label on this layout omits the year.
+      const visible=clean(candidate.innerText);
+      const match=visible.match(/\b[A-Z][a-z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}\s+[AP]M\s+[+-]\d{2}(?::?\d{2})?\b/);
+      return {row:candidate,stamp:match?Date.parse(match[0]):NaN};
+    });
+    if (dated.some(result=>!Number.isFinite(result.stamp)))
+      return {error:'Historical Programming Assignment submissions have unreadable timestamps.'};
+    dated.sort((a,b)=>b.stamp-a.stamp);
+    if (dated[0].stamp===dated[1].stamp)
+      return {error:'Historical Programming Assignment submissions have ambiguous latest timestamps.'};
+    row=dated[0].row;
+  }
+  const submission=clean(row.innerText);
+  if (!/Submitted at:/i.test(submission) || !/\b\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\b/.test(submission))
+    return {error:'The Programming Assignment submission row is missing its date or score.'};
+  const links=[...row.querySelectorAll('a[href]')].filter(link =>
+    /^View grader feedback$/i.test(clean(link.innerText)) && link.getClientRects().length);
   if (!links.length) {
-    const buttons=[...document.querySelectorAll('button')].filter(button =>
-      clean(button.innerText)==='Show grader output' && button.getClientRects().length);
+    const buttons=[...row.querySelectorAll('button')].filter(button =>
+      /^Show grader output$/i.test(clean(button.innerText)) && button.getClientRects().length);
     if (buttons.length>1) return {error:'Multiple grader output controls need review.'};
-    if (buttons.length===1 && !buttons[0].disabled) buttons[0].click();
+    if (request.expand && buttons.length===1 && !buttons[0].disabled) {
+      buttons[0].click();
+      return {available:false,ready:'pending',expanded:true,submission_page:true};
+    }
     // React may report document.readyState='complete' before it loads the
-    // submissions or reveals the feedback link. Keep polling the page.
-    return {available:false,ready:'pending'};
+    // submissions or reveals the feedback link. Do not toggle an already
+    // expanded section while waiting for the asynchronous result.
+    return {available:false,ready:'pending',expanded:false,submission_page:true};
   }
   if (links.length!==1) return {error:'Multiple grader feedback links need review.'};
   const target=new URL(links[0].href);
@@ -109,7 +142,15 @@ PROGRAMMING_FEEDBACK_JS = r"""(async request => {
   if (html.length>2_000_000) return {error:'The grader feedback is too large to inspect.'};
   const doc=new DOMParser().parseFromString(html,'text/html');
   doc.querySelectorAll('script,style').forEach(node=>node.remove());
-  return {available:true,text:clean(doc.body?.textContent).slice(0,60000)};
+  const text=clean(doc.body?.textContent);
+  if (text.length>250_000) return {error:'The grader feedback is too large to inspect completely.'};
+  const testScore=/\bTest cell\s*\(Score:\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\)/gi;
+  const withoutTests=text.replace(testScore,'');
+  if (!/\bScore:\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\b/i.test(withoutTests) ||
+      !/\bTest cell\s*\(Score:\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?\)/i.test(text))
+    return {error:'Coursera returned HTML without recognizable nbgrader grader feedback.'};
+  return {available:true,text,submission_page:true,submission_record:submission.slice(0,400),
+    submission_count:rows.length,latest_submission:true};
 })"""
 
 
@@ -130,7 +171,10 @@ NOTEBOOK_JS = r"""(async request => {
       source:source(cell).slice(0,request.max_cell_chars+1),
       metadata:{nbgrader:{solution:!!cell.metadata?.nbgrader?.solution,
         locked:!!cell.metadata?.nbgrader?.locked,grade:!!cell.metadata?.nbgrader?.grade}},
-      execution_count:cell.execution_count ?? null,
+      // Classic Jupyter stores the prompt number on the cell object; the
+      // notebook-file field is not always present in the live cell model.
+      execution_count:Number.isInteger(cell.input_prompt_number) ? cell.input_prompt_number :
+        (Number.isInteger(cell.execution_count) ? cell.execution_count : null),
       outputs:(cell.output_area?.outputs || []).slice(0,10).map(output=>({
         type:String(output.output_type || ''),ename:String(output.ename || ''),
         text:String(output.text || output.data?.['text/plain'] || '').slice(0,3000)}))}))});
@@ -391,13 +435,26 @@ async def _wait_page(tab, path, heading):
 def _lab_target_ids(targets, path):
     rows = []
     for target_id, info in targets.items():
-        address = urlsplit(info.get('url', ''))
+        try:
+            address = urlsplit(info.get('url', ''))
+            safe_port = address.port in {None, 443}
+        except (TypeError, ValueError):
+            continue
         if (address.scheme == 'https' and address.hostname in {'coursera.org', 'www.coursera.org'}
-                and address.path.rstrip('/') == path + '/lab'):
-            rows.append(target_id)
-    if len(rows) > 1:
-        raise engine.StopRun('Multiple copies of this Programming Assignment lab are open.')
-    return rows
+                and safe_port and not address.username and not address.password and
+                not address.fragment and address.path.rstrip('/') == path + '/lab'):
+            query = parse_qs(address.query)
+            notebook_paths = query.get('path', [])
+            if (set(query) == {'path'} and len(notebook_paths) == 1 and
+                    notebook_paths[0].startswith('/notebooks/')
+                    and notebook_paths[0].endswith('.ipynb') and '..' not in notebook_paths[0]):
+                rows.append((target_id, notebook_paths[0]))
+    notebook_paths = {notebook for _, notebook in rows}
+    if len(notebook_paths) > 1:
+        raise engine.StopRun('Open Programming Assignment lab tabs point to different notebooks.')
+    # Multiple tabs for the exact same Coursera assignment and notebook can
+    # safely be reused for read-only diagnosis. We do not close or submit any.
+    return [target_id for target_id, _ in rows]
 
 
 async def _lab_address(target_id):
@@ -409,11 +466,66 @@ async def _lab_address(target_id):
     return matches[0]['webSocketDebuggerUrl']
 
 
+async def _choose_existing_lab(target_ids, path):
+    """Compare duplicate lab tabs before reusing any live notebook state."""
+    clean = []
+    unresolved = 0
+    request = {'max_cells': MAX_CELLS, 'max_cell_chars': MAX_CELL_CHARS}
+    for target_id in target_ids:
+        address = await _lab_address(target_id)
+        frame = FrameConnection(address)
+        try:
+            await frame.connect()
+            await frame.find_notebook(path + '/lab')
+            snapshot = await frame.evaluate(NOTEBOOK_JS, {**request, 'action': 'snapshot'})
+            if snapshot.get('error') or snapshot.get('dirty'):
+                unresolved += 1
+                continue
+            server = await frame.evaluate(NOTEBOOK_JS, {**request, 'action': 'server'})
+            if not _saved_sources_match(snapshot, server):
+                unresolved += 1
+                continue
+            source_identity = {'path': snapshot.get('path'), 'cells': server.get('cells')}
+            source_hash = hashlib.sha256(json.dumps(source_identity, ensure_ascii=False,
+                                                    sort_keys=True).encode('utf-8')).hexdigest()
+            display_identity = {'cells': snapshot.get('cells'),
+                                'kernel_status': snapshot.get('kernel_status')}
+            display_hash = hashlib.sha256(json.dumps(display_identity, ensure_ascii=False,
+                                                     sort_keys=True).encode('utf-8')).hexdigest()
+            tests = _test_summary(snapshot, _solution_cells(snapshot)[1])
+            clean.append((target_id, address, source_hash, display_hash, len(tests['passed'])))
+        except (OSError, TimeoutError, RuntimeError):
+            # A second tab can hold unsaved work even if another tab matches
+            # the server. Do not silently choose the apparently clean tab.
+            unresolved += 1
+            continue
+        finally:
+            with suppress(Exception):
+                await frame.close()
+    if unresolved:
+        raise engine.StopRun('Duplicate Programming Assignment lab tabs include unsaved or unreadable state.')
+    if len(clean) == 1:
+        return clean[0][:2] + ({'count': len(target_ids), 'verified': 1,
+                                'display_variance': False},)
+    if len(clean) > 1 and len({row[2] for row in clean}) == 1:
+        # Identical saved notebook sources are safe for read-only diagnosis.
+        # Different stale outputs are only evidence, not proof of completion;
+        # choose the tab showing fewer passes and record that uncertainty.
+        chosen = min(clean, key=lambda row: (row[4], row[0]))
+        return chosen[:2] + ({'count': len(target_ids), 'verified': len(clean),
+                              'display_variance': len({row[3] for row in clean}) > 1},)
+    raise engine.StopRun('Duplicate Programming Assignment lab tabs have ambiguous saved notebook state.')
+
+
 async def _open_lab(tab, path, heading):
     targets = await lab_flow._page_targets(tab)
     existing = _lab_target_ids(targets, path)
     if existing:
-        return existing[0], await _lab_address(existing[0]), True
+        if len(existing) == 1:
+            return (existing[0], await _lab_address(existing[0]), True,
+                    {'count': 1, 'verified': 1, 'display_variance': False})
+        target_id, address, selection = await _choose_existing_lab(existing, path)
+        return target_id, address, True, selection
     page = await _wait_page(tab, path, heading)
     options = [(kind, page['counts'].get(kind, 0)) for kind in ('resume', 'launch')]
     available = [kind for kind, count in options if count == 1]
@@ -426,8 +538,10 @@ async def _open_lab(tab, path, heading):
     mode, target_id, _ = await lab_flow._wait_launched_site(tab, path, source_id, targets,
                                                             launch.get('action_href'))
     if mode == 'popup':
-        return target_id, await _lab_address(target_id), False
-    return source_id, tab.address, False
+        return (target_id, await _lab_address(target_id), False,
+                {'count': 1, 'verified': 0, 'display_variance': False})
+    return (source_id, tab.address, False,
+            {'count': 1, 'verified': 0, 'display_variance': False})
 
 
 def _test_summary(snapshot, tests):
@@ -476,8 +590,14 @@ def _feedback_summary(text):
     if not isinstance(text, str) or not text:
         return {'available': False}
     test_pattern = r'\bTest cell\s*\(Score:\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\)'
-    tests = [{'name': 'Test cell', 'score': f'{match[1]}/{match[2]}'}
-             for match in re.finditer(test_pattern, text, re.I)]
+    matches = list(re.finditer(test_pattern, text, re.I))
+    tests = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        tests.append({'index': index + 1, 'name': 'Test cell',
+                      'score': f'{match[1]}/{match[2]}',
+                      'passed': float(match[1]) >= float(match[2]),
+                      'details': text[match.end():end].strip()})
     # The HTML text is flattened, so a test-cell score can appear to be the
     # first "Score:" token. Remove those labels before reading the overall
     # grade; a page containing only test scores has no known total.
@@ -488,30 +608,74 @@ def _feedback_summary(text):
     return {'available': True,
             'raw_score': f'{title[1]}/{title[2]}' if title else None,
             'blank_submission': blank,
-            'test_scores': tests[:MAX_TEST_CELLS],
-            'failed_test_count': sum(float(earned) < float(possible)
-                                     for earned, possible in (score['score'].split('/') for score in tests)),
-            'excerpt': text[:12000]}
+             'test_scores': tests,
+             'failed_test_count': sum(not row['passed'] for row in tests),
+             'excerpt': text[:12000], 'full_text': text}
 
 
-async def _read_grader_feedback(tab, path):
+async def _read_grader_feedback(tab, path, heading=None):
     """Read an existing result from Coursera, then restore the assignment tab."""
     assignment_url = 'https://www.coursera.org' + path
+    summary = {'available': False}
     try:
-        await tab.navigate(assignment_url + '/submission')
+        if heading is None:
+            await tab.navigate(assignment_url + '/submission')
+        else:
+            page = await _wait_page(tab, path, heading)
+            count = (page.get('counts') or {}).get('submissions', 0)
+            if count > 1:
+                raise engine.StopRun('The Programming Assignment has ambiguous My submissions controls.')
+            if count == 1:
+                opened = await _page_snapshot(tab, path, heading, 'submissions')
+                if opened.get('clicked') != 'submissions':
+                    raise engine.StopRun('The Programming Assignment did not open My submissions.')
+            else:
+                # Older layouts omit the tab, but the validated assignment URL
+                # still has a canonical submission page.
+                await tab.navigate(assignment_url + '/submission')
         observed = {'available': False}
-        for _ in range(40):
-            observed = await tab.evaluate(PROGRAMMING_FEEDBACK_JS + '(' + json.dumps({'path': path}) + ')')
+        expanded = False
+        seen_submission = False
+        for probe in range(40):
+            try:
+                observed = await tab.evaluate(PROGRAMMING_FEEDBACK_JS + '(' + json.dumps({
+                    'path': path, 'expand': not expanded}) + ')')
+            except (OSError, TimeoutError, RuntimeError) as error:
+                detail = str(error).lower()
+                if (probe < 39 and not isinstance(error, engine.StopRun) and
+                        (isinstance(error, (OSError, TimeoutError)) or
+                         'execution context' in detail or 'cannot find context' in detail)):
+                    await asyncio.sleep(0.5)
+                    continue
+                raise
             if not isinstance(observed, dict):
                 raise engine.StopRun('The grader feedback page returned an unreadable result.')
             if observed.get('error'):
                 raise engine.StopRun(observed['error'])
+            seen_submission = seen_submission or observed.get('submission_page') is True
+            if observed.get('on_assignment') and probe == 3:
+                # Some Coursera layouts open My submissions elsewhere. The
+                # canonical URL is still constrained to this assignment.
+                await tab.navigate(assignment_url + '/submission')
+            expanded = expanded or observed.get('expanded') is True
             if observed.get('available') or observed.get('ready') == 'complete':
                 break
             await asyncio.sleep(0.5)
-        return _feedback_summary(observed.get('text')) if observed.get('available') else {'available': False}
+        if heading is not None and not seen_submission:
+            raise engine.StopRun('My submissions did not open for the selected Programming Assignment.')
+        summary = (_feedback_summary(observed.get('text')) if observed.get('available')
+                   else {'available': False})
+        if summary.get('available'):
+            summary['submission_record'] = observed.get('submission_record')
+            summary['submission_count'] = observed.get('submission_count')
     finally:
         await tab.navigate(assignment_url)
+        if heading is not None:
+            await _wait_page(tab, path, heading)
+    if summary.get('available'):
+        summary['reviewed_via'] = 'Coursera View grader feedback'
+        summary['assignment_restored'] = True
+    return summary
 
 
 async def diagnose_programming(runner, item):
@@ -527,12 +691,17 @@ async def diagnose_programming(runner, item):
     previous_feedback = {'available': False}
     if grade or failed:
         try:
-            previous_feedback = await _read_grader_feedback(runner.tab, path)
+            previous_feedback = await _read_grader_feedback(runner.tab, path, heading)
+            if previous_feedback.get('available'):
+                runner.event('programming_feedback_reviewed', key=item['key'],
+                             raw_score=previous_feedback.get('raw_score'),
+                             failed_test_count=previous_feedback.get('failed_test_count'),
+                             assignment_restored=previous_feedback.get('assignment_restored') is True)
         except (asyncio.CancelledError, KeyboardInterrupt):
             raise
         except Exception as error:
             previous_feedback = {'available': False, 'error': str(error)[:300]}
-    lab_id, address, existing = await _open_lab(runner.tab, path, heading)
+    lab_id, address, existing, lab_selection = await _open_lab(runner.tab, path, heading)
     frame = FrameConnection(address)
     try:
         await frame.connect()
@@ -562,6 +731,7 @@ async def diagnose_programming(runner, item):
                   'server_saved': saved, 'solution_cells': [cell['index'] for cell in solutions],
                   'unfinished_solution_cells': unfinished, 'tests': result,
                   'ready_for_owner_review': ready, 'previous_feedback': previous_feedback,
+                  'lab_selection': lab_selection,
                   'cells': snapshot['cells']}
         directory = engine.ROOT / 'state' / 'programming_diagnostics'
         directory.mkdir(parents=True, exist_ok=True)
@@ -577,24 +747,27 @@ async def diagnose_programming(runner, item):
                      solution_count=len(solutions), unfinished_count=len(unfinished),
                      tests_passed=len(result['passed']), tests_total=result['total'],
                      server_saved=saved, lab_was_open=existing)
-        status = (f"{len(result['passed'])}/{result['total']} visible tests display pass output; "
-                  f"{len(unfinished)} unfinished solution cells; "
-                  + ('server copy confirmed' if saved else 'server copy needs checking'))
-        previous = (f" Previous submission: {grade} failed; grader feedback "
-                    + ('shows unfinished answers.' if previous_feedback.get('blank_submission') else
-                       'is saved in the local diagnostic.' if previous_feedback.get('available') else
-                       'was unavailable.')) if failed else ''
-        if ready:
-            next_step = ('The current notebook is saved and its visible tests display passes; '
-                         'a fresh run and the hidden grader are not confirmed. '
-                         'Review it and submit the assignment personally if it is your own work; '
-                         'Coursera will determine the actual grade.')
-        else:
-            next_step = ('The notebook still needs work or a fresh validation before personal submission. '
-                         'Review its incomplete cells, test results and server copy.')
-        return ('Programming Assignment requires your review before any Coursera Honor Code attestation. '
-                + status + '.' + previous + ' ' + next_step + ' The lab tab remains open. '
-                'Local diagnostic: ' + str(location))
+        old_tests = previous_feedback.get('test_scores') or []
+        old_failed = previous_feedback.get('failed_test_count')
+        old_checks = (f'{old_failed}/{len(old_tests)} grader tests failed' if
+                      isinstance(old_failed, int) and old_tests else 'grader tests unavailable')
+        old_placeholders = ('placeholders found' if previous_feedback.get('blank_submission') else
+                            'no placeholders detected' if previous_feedback.get('available') else
+                            'placeholders unknown')
+        prior = (f'Prior graded attempt: {grade or "score unavailable"}' +
+                 (f' (grader raw {previous_feedback["raw_score"]})' if
+                  previous_feedback.get('raw_score') else '') +
+                 f', {old_checks}, {old_placeholders}. ') if failed else ''
+        current = (f'Current notebook: {len(solutions)} solution cells, {len(unfinished)} unfinished, '
+                   + ('saved sources confirmed' if saved else 'saved sources unconfirmed') +
+                   f', {len(result["passed"])}/{result["total"]} visible tests report pass. ')
+        variance = ('Duplicate lab tabs show different outputs; selected a saved copy conservatively. '
+                    if lab_selection.get('display_variance') else '')
+        action = ('Fresh execution and hidden grading remain unconfirmed; review and submit personally '
+                  'if this is your own work.' if ready else
+                  'Review incomplete cells, visible tests, and saved state before personal submission.')
+        return ('Programming Assignment requires your review. ' + prior + current + variance +
+                action + ' Local diagnostic: ' + str(location))
     finally:
         with suppress(Exception):
             await frame.close()

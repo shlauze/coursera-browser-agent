@@ -411,6 +411,104 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(module['items'][KEY]['verified_complete'])
             self.assertEqual(module['manual_required'], ['Team assignment'])
 
+    async def test_programming_diagnosis_reconciles_only_a_live_completion_mark(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine.configure_course(URL)
+            runner, store = make_runner(directory)
+            item = {'key':'programming:final', 'title':'Final programming assignment',
+                    'url':URL + '/programming/final/assignment',
+                    'type':'programming', 'unsupported':True,
+                    'unsupported_reason':'Programming assignment needs review'}
+            row = {'url':item['url'], 'type':'programming',
+                   'aria_label':'Programming Assignment, Final, Completed, Grade: 92%',
+                   'evidence':['aria-label: Programming Assignment, Final, Completed, Grade: 92%'],
+                   'checked':True}
+            runner.open_item = AsyncMock()
+            runner.verified_item = AsyncMock(side_effect=[False, True])
+            runner.snapshot = AsyncMock(return_value={'url':item['url'], 'items':[row]})
+            with patch.object(queue, 'diagnose_programming', AsyncMock(
+                    return_value='Previous grade 31/100 failed; new result pending')) as diagnosed:
+                await runner.process_module(1, [item])
+            diagnosed.assert_awaited_once_with(runner, item)
+            self.assertEqual([call.kwargs.get('wait', 0)
+                              for call in runner.verified_item.await_args_list], [0, 8])
+            module = runner.checkpoint['modules']['1']
+            self.assertTrue(module['items'][item['key']]['verified_complete'])
+            self.assertTrue(module['verified_complete'])
+            self.assertNotIn('manual_required', module['items'][item['key']])
+            self.assertEqual(store.course('philosophy')['items_completed'], 1)
+            self.assertEqual(store.course('philosophy')['modules_completed'], 1)
+            self.assertIn('подтверждено Coursera', store.course('philosophy')['message'])
+            self.assertIn('programming_reconciled',
+                          [event['event'] for event in runner.data['events']])
+
+    async def test_programming_inspection_error_can_reconcile_new_live_mark(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine.configure_course(URL)
+            runner, store = make_runner(directory)
+            item = {'key':'programming:final', 'title':'Final programming assignment',
+                    'url':URL + '/programming/final/assignment',
+                    'type':'programming', 'unsupported':True}
+            row = {'url':item['url'], 'type':'programming', 'checked':True,
+                   'aria_label':'Programming Assignment, Final, Completed, Grade: 92%',
+                   'evidence':['aria-label: Programming Assignment, Final, Completed, Grade: 92%']}
+            runner.open_item = AsyncMock()
+            runner.verified_item = AsyncMock(side_effect=[False, True])
+            runner.snapshot = AsyncMock(return_value={'url':item['url'], 'items':[row]})
+            with patch.object(queue, 'diagnose_programming', AsyncMock(
+                    side_effect=engine.StopRun('Jupyter context unavailable'))):
+                await runner.process_module(1, [item])
+            module = runner.checkpoint['modules']['1']
+            self.assertTrue(module['verified_complete'])
+            self.assertTrue(module['items'][item['key']]['verified_complete'])
+            self.assertNotIn('manual_required', module['items'][item['key']])
+            self.assertIn('подтверждено Coursera', store.course('philosophy')['message'])
+
+    async def test_programming_recheck_error_keeps_original_inspection_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine.configure_course(URL)
+            runner, store = make_runner(directory)
+            item = {'key':'programming:final', 'title':'Final programming assignment',
+                    'url':URL + '/programming/final/assignment',
+                    'type':'programming', 'unsupported':True}
+            runner.open_item = AsyncMock()
+            runner.verified_item = AsyncMock(side_effect=[
+                False, engine.StopRun('Course outline unavailable')])
+            with patch.object(queue, 'diagnose_programming', AsyncMock(
+                    side_effect=engine.StopRun('Jupyter context unavailable'))):
+                await runner.process_module(1, [item])
+            module = runner.checkpoint['modules']['1']
+            self.assertFalse(module['verified_complete'])
+            self.assertTrue(module['items'][item['key']]['manual_required'])
+            self.assertIn('Jupyter context unavailable', module['items'][item['key']]['reason'])
+            self.assertNotIn('Course outline unavailable', module['items'][item['key']]['reason'])
+            self.assertIn('Jupyter context unavailable', store.course('philosophy')['message'])
+
+    async def test_failed_programming_grade_stays_pending_despite_visible_notebook_tests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine.configure_course(URL)
+            runner, store = make_runner(directory)
+            item = {'key':'programming:final', 'title':'Final programming assignment',
+                    'url':URL + '/programming/final/assignment',
+                    'type':'programming', 'unsupported':True}
+            runner.open_item = AsyncMock()
+            # A contradictory checkbox never overrides a live Failed label.
+            runner.snapshot = AsyncMock(return_value={'url':item['url'], 'items':[
+                {'url':item['url'], 'type':'programming', 'checked':True,
+                'aria_label':'Programming Assignment, Final, Completed, Grade: 31%, Failed',
+                'evidence':['aria-label: Programming Assignment, Final, Completed, Grade: 31%, Failed']}]})
+            with patch.object(queue, 'PROGRAMMING_MARK_RECHECK_SECONDS', 0), \
+                 patch.object(queue, 'diagnose_programming', AsyncMock(
+                     return_value='10/10 visible notebook tests pass; previous grade 31/100 failed')):
+                await runner.process_module(1, [item])
+            module = runner.checkpoint['modules']['1']
+            self.assertFalse(module['items'][item['key']]['verified_complete'])
+            self.assertTrue(module['items'][item['key']]['manual_required'])
+            self.assertFalse(module['verified_complete'])
+            self.assertEqual(store.course('philosophy')['items_completed'], 0)
+            self.assertNotIn('programming_reconciled',
+                             [event['event'] for event in runner.data['events']])
+
     async def test_unsupported_lab_does_not_block_later_supported_quiz(self):
         with tempfile.TemporaryDirectory() as directory:
             engine.configure_course(URL)

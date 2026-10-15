@@ -33,6 +33,7 @@ from incident_report import write_incident
 ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
 CERTIFICATE_RETRY_DELAY = 20
+PROGRAMMING_MARK_RECHECK_SECONDS = 8
 
 
 def _known_module_floor(course, logs_root):
@@ -464,7 +465,6 @@ class QueueRunner(engine.CourseRunner):
                 print("Уже выполнен: подтверждено на сайте", flush=True)
             else:
                 if not supported(item):
-                    record["items"][item["key"]]["manual_required"] = True
                     reason = item.get("unsupported_reason", "No automatic handler for this lesson type")
                     if item["key"].startswith("programming:"):
                         await self.open_item(item)
@@ -476,6 +476,31 @@ class QueueRunner(engine.CourseRunner):
                         self.course["message"] = reason
                         self.store.event("programming_manual_review", reason, self.course["id"])
                         print("PROGRAMMING_REVIEW:", reason, flush=True)
+                        # A grading result can arrive while the notebook is
+                        # being inspected. Reconcile the exact lesson with
+                        # Coursera before retaining a stale manual flag. The
+                        # old grade and visible notebook tests are not proof.
+                        self.current_operation = "verify_mark"
+                        try:
+                            site_completed = await self.verified_item(
+                                item, wait=PROGRAMMING_MARK_RECHECK_SECONDS)
+                        except Exception as error:
+                            # Preserve the diagnostic reason if the course
+                            # outline itself cannot be read. An inspection
+                            # failure is not evidence of completion.
+                            site_completed = False
+                            self.store.event("programming_recheck_attention",
+                                             type(error).__name__, self.course["id"])
+                        if site_completed:
+                            record["items"][item["key"]]["verified_complete"] = True
+                            self.update_counts()
+                            self.course["message"] = "Programming Assignment: выполнение подтверждено Coursera"
+                            self.store.save()
+                            self.store.event("item_completed", item["title"], self.course["id"])
+                            self.event("programming_reconciled", key=item["key"],
+                                       evidence="live_course_outline")
+                            continue
+                    record["items"][item["key"]]["manual_required"] = True
                     record["items"][item["key"]]["reason"] = reason
                     self.store.event("item_manual_required", item["title"], self.course["id"])
                     print("МАТЕРИАЛ ТРЕБУЕТ РУЧНОГО ВЫПОЛНЕНИЯ:", item["title"], flush=True)

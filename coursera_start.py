@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.49"
+RUNNER_VERSION = "4.0-groq.50"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
