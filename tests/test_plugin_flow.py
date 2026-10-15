@@ -57,7 +57,32 @@ class PluginFlowTests(unittest.IsolatedAsyncioTestCase):
                          "Threat model")
         self.assertEqual(flow.lesson_heading(
             "Overview Ungraded Plugin . Duration: 1 minute 1 min"), "Overview")
+        self.assertEqual(flow.lesson_heading(
+            "Adversarial inputs Ungraded Plugin • 25 min Resume"), "Adversarial inputs")
+        self.assertEqual(flow.lesson_heading(
+            "Adversarial inputs Ungraded Plugin \uFFFD 25 min Resume"), "Adversarial inputs")
+        self.assertEqual(flow.lesson_heading(
+            "Threat model Ungraded Widget · 15 minutes Get started"), "Threat model")
+        self.assertEqual(flow.lesson_heading(
+            "Overview Ungraded Plugin . Duration: 1 minute 1 min Resume"), "Overview")
         self.assertEqual(flow.lesson_heading("Overview"), "Overview")
+
+    def test_unknown_outline_suffix_fails_closed(self):
+        for title in ("Adversarial inputs Ungraded Plugin • 25 min Review",
+                      "Adversarial inputs Ungraded Plugin \uFFFD 25 min Review",
+                      "Adversarial inputs Ungraded Plugin \uFFFD Resume",
+                      "Threat model Ungraded Widget · 15 minutes Resume now",
+                      "Overview Ungraded Plugin • 5 min Submit"):
+            with self.subTest(title=title):
+                self.assertEqual(flow.lesson_heading(title), "")
+
+    async def test_unknown_suffix_stops_before_browser_action(self):
+        tab = FakeTab()
+        item = {**ITEM, "title": "Overview Ungraded Plugin • 5 min Continue"}
+        with self.assertRaisesRegex(engine.StopRun, "no roster heading"):
+            await flow.complete_plugin(FakeRunner(tab), item)
+        self.assertEqual(tab.inspected, 0)
+        self.assertEqual(tab.clicked, 0)
 
     def test_exact_course_and_identity_are_required(self):
         self.assertEqual(flow.plugin_path(ITEM, COURSE),

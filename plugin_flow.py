@@ -111,15 +111,24 @@ def plugin_path(item, course_url):
 
 
 def lesson_heading(title):
-    """Strip only a known outline type/duration suffix from the lesson name."""
+    """Strip known outline metadata and its optional Resume/Get started control."""
     if not isinstance(title, str):
         return ""
     cleaned = " ".join(title.split())
     match = re.fullmatch(
-        r"(.+?)\s+Ungraded\s+(?:Plugin|Widget)(?:\s*[•·]\s*\d+\s*min(?:utes?)?"
-        r"|\s+\.\s+Duration:\s+\d+\s+minutes?\s+\d+\s+min)?",
+        # The outline snapshot can contain U+FFFD in place of its bullet.
+        # Accept it only at the separator position before a numeric duration.
+        r"(.+?)\s+Ungraded\s+(?:Plugin|Widget)(?:\s*[•·\uFFFD]\s*\d+\s*min(?:utes?)?"
+        r"|\s+\.\s+Duration:\s+\d+\s+minutes?\s+\d+\s+min)?"
+        r"(?:\s+(?:Resume|Get started))?",
         cleaned, flags=re.I)
-    return match.group(1).strip() if match else cleaned
+    if match:
+        return match.group(1).strip()
+    # A changed control or extra outline text must not become the expected
+    # lesson heading. It would otherwise be mistaken for a changed page.
+    if re.search(r"\s+Ungraded\s+(?:Plugin|Widget)\b", cleaned, re.I):
+        return ""
+    return cleaned
 
 
 async def complete_plugin(runner, item, *, probes=PROBES, probe_delay=PROBE_DELAY):

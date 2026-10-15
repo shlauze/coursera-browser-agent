@@ -17,11 +17,15 @@ engine = importlib.import_module("coursera_start")
 COURSE = "https://www.coursera.org/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa"
 ITEM = {"key": "ungradedWidget:3z0Im", "title": "Threat model Ungraded Plugin • 15 min",
         "url": "https://www.coursera.org" + flow.THREAT_MODEL_PATH}
+REMARKS_ITEM = {"key": "ungradedWidget:2sbQI",
+                "title": "Adversarial inputs Ungraded Plugin \uFFFD 25 min Resume",
+                "url": "https://www.coursera.org" + flow.ADVERSARIAL_INPUTS_PATH}
 
 
 class OuterTab:
-    def __init__(self, *, confirm=True):
+    def __init__(self, *, confirm=True, frame=flow.THREAT_MODEL_FRAME):
         self.confirm = confirm
+        self.frame = frame
         self.marked = False
         self.calls = []
 
@@ -30,7 +34,7 @@ class OuterTab:
         if '"action": "mark"' in expression:
             self.marked = True
             return {"clicked": "mark"}
-        return {"ready": "complete", "frame": flow.THREAT_MODEL_FRAME,
+        return {"ready": "complete", "frame": self.frame,
                 "mark_count": 1, "mark_disabled": False, "modal": False, "other": []}
 
 
@@ -51,6 +55,30 @@ class InnerTab:
         self.closed = True
 
 
+class RemarksTab(InnerTab):
+    def __init__(self, *, interactive=False):
+        super().__init__()
+        self.expanded = False
+        self.interactive = interactive
+        self.actions = []
+
+    async def evaluate(self, expression):
+        if self.interactive:
+            return {"error": "The SCORM lesson contains an interactive activity."}
+        action = ("expand" if '"action": "expand"' in expression else
+                  "scroll" if '"action": "scroll"' in expression else "inspect")
+        self.actions.append(action)
+        if action == "expand":
+            self.expanded = True
+        elif action == "scroll":
+            self.top = min(3330, self.top + 600)
+        return {"url": flow.ADVERSARIAL_INPUTS_FRAME, "lesson": "LESSON 1 OF 1",
+                "text_length": 2464 if self.expanded else 2229,
+                "top": self.top, "max": 3330 if self.expanded else 3100,
+                "progress": "0% COMPLETE", "accordion_expanded": self.expanded,
+                "clicked": "Remarks" if action == "expand" else None}
+
+
 class Runner:
     def __init__(self, tab):
         self.tab = tab
@@ -67,10 +95,15 @@ class Runner:
 class StaticScormTests(unittest.IsolatedAsyncioTestCase):
     def test_only_audited_exact_lesson_can_enter_static_flow(self):
         self.assertTrue(flow.is_static_scorm(flow.THREAT_MODEL_PATH, "Threat model"))
+        self.assertTrue(flow.is_static_scorm(flow.ADVERSARIAL_INPUTS_PATH,
+                                             "Adversarial inputs"))
         self.assertFalse(flow.is_static_scorm(flow.THREAT_MODEL_PATH, "Harmful outputs"))
+        self.assertFalse(flow.is_static_scorm(
+            flow.ADVERSARIAL_INPUTS_PATH.replace("2sbQI", "other"), "Adversarial inputs"))
         self.assertFalse(flow.is_static_scorm(flow.THREAT_MODEL_PATH.replace("3z0Im", "other"),
                                              "Threat model"))
         self.assertEqual(plugins.plugin_path(ITEM, COURSE), flow.THREAT_MODEL_PATH)
+        self.assertEqual(plugins.plugin_path(REMARKS_ITEM, COURSE), flow.ADVERSARIAL_INPUTS_PATH)
 
     async def test_iframe_connection_requires_exact_parent_and_asset(self):
         class Owner:
@@ -120,6 +153,26 @@ class StaticScormTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(frame.closed)
         self.assertFalse(tab.marked)
 
+    async def test_remarks_are_expanded_and_read_before_mark(self):
+        tab = OuterTab(frame=flow.ADVERSARIAL_INPUTS_FRAME)
+        frame = RemarksTab()
+        with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)), \
+             patch.object(flow.asyncio, "sleep", new=AsyncMock()):
+            await plugins.complete_plugin(Runner(tab), REMARKS_ITEM)
+        self.assertEqual(frame.actions[:3], ["inspect", "expand", "inspect"])
+        self.assertEqual(frame.top, 3330)
+        self.assertTrue(frame.closed)
+        self.assertTrue(tab.marked)
+
+    async def test_interactive_remarks_widget_cannot_be_marked(self):
+        tab = OuterTab(frame=flow.ADVERSARIAL_INPUTS_FRAME)
+        frame = RemarksTab(interactive=True)
+        with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)):
+            with self.assertRaisesRegex(engine.StopRun, "interactive activity"):
+                await plugins.complete_plugin(Runner(tab), REMARKS_ITEM)
+        self.assertTrue(frame.closed)
+        self.assertFalse(tab.marked)
+
     async def test_coursera_green_mark_is_required_after_click(self):
         tab, frame = OuterTab(confirm=False), InnerTab()
         with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)), \
@@ -134,8 +187,9 @@ const fs=require('node:fs'),vm=require('node:vm');
 const data=JSON.parse(fs.readFileSync(0,'utf8'));
 const wrap={innerText:'A'.repeat(5339),scrollHeight:1500,clientHeight:600,scrollTop:0};
 const page={readyState:'complete',querySelectorAll:selector=>
-  selector==='div.page-wrap'?[wrap]:selector==='iframe'?[]:[],
-  querySelector:selector=>selector.startsWith('button') && data.interactive?{}:null};
+  selector==='div.page-wrap'?[wrap]:
+  selector==='button,[role="button"]' && data.interactive?[{}]:[],
+  querySelector:selector=>null};
 const frame={contentDocument:page};
 const labels=['SKIP TO LESSON','Open navigation menu','Open search menu','Close search menu'];
 if(data.continue) labels.push('CONTINUE');
@@ -155,11 +209,66 @@ process.stdout.write(JSON.stringify({result,top:wrap.scrollTop}));
             with self.subTest(case=case):
                 result = subprocess.run(["node", "-e", harness], input=json.dumps({
                     **case, "script": flow.INNER_JS, "url": flow.THREAT_MODEL_FRAME,
-                    "request": {"frame": flow.THREAT_MODEL_FRAME, "action": "scroll"}}),
+                    "request": {"frame": flow.THREAT_MODEL_FRAME, "action": "scroll",
+                                "accordion": None}}),
                     text=True, capture_output=True, check=True)
                 value = json.loads(result.stdout)
                 self.assertEqual("error" not in value["result"], case["accepted"])
                 self.assertEqual(value["top"] > 0, case["accepted"])
+
+    def test_remarks_script_rejects_other_controls_and_checks_expanded_panel(self):
+        harness = r'''
+const fs=require('node:fs'),vm=require('node:vm');
+const data=JSON.parse(fs.readFileSync(0,'utf8'));
+let expanded=false;
+const wrap={clientHeight:500,scrollTop:0,
+  get innerText(){return 'A'.repeat(expanded?2464:2229)},
+  get scrollHeight(){return expanded?3830:3600}};
+const panel={innerText:'B'.repeat(data.shortPanel?20:233),
+  matches:selector=>selector==='section.blocks-accordion__content',
+  getAttribute:name=>name==='aria-labelledby'?'title-dynamic':null,
+  querySelector:()=>null};
+const remarks={innerText:'Remarks',type:'button',closest:selector=>selector==='h2'?{}:null,
+  getAttribute:name=>name==='aria-controls'?'panel-dynamic':
+    name==='aria-expanded'?(expanded?'true':'false'):null,
+  click:()=>{expanded=true}};
+const page={readyState:'complete',getElementById:id=>id==='panel-dynamic'?panel:null,
+  querySelectorAll:selector=>selector==='div.page-wrap'?[wrap]:
+    selector==='button.blocks-accordion__header'?[remarks]:
+    selector==='button,[role="button"]'?[remarks,...(data.extra?[{}]:[])]:[],
+  querySelector:()=>null};
+const frame={contentDocument:page};
+const controls=['SKIP TO LESSON','Open navigation menu','Open search menu','Close search menu']
+  .map(innerText=>({innerText}));
+const document={readyState:'complete',body:{innerText:'LESSON 1 OF 1'},
+  querySelectorAll:selector=>selector==='iframe#content-frame'?[frame]:
+    selector==='button,[role="button"]'?controls:
+    selector==='input'?[{type:'search',disabled:true}]:[],
+  querySelector:selector=>selector==='.nav-sidebar-header__progress-text'?{innerText:'0% COMPLETE'}:null};
+const context={document,location:{href:data.frame}};
+const run=action=>vm.runInNewContext(data.script+'('+JSON.stringify({
+  frame:data.frame,accordion:'Remarks',action})+')',context);
+const before=run('inspect'),open=run('expand'),after=run('inspect'),read=run('scroll');
+process.stdout.write(JSON.stringify({before,open,after,read,top:wrap.scrollTop}));
+'''
+        for case in ({"extra": False, "shortPanel": False, "accepted": True},
+                     {"extra": True, "shortPanel": False, "accepted": False},
+                     {"extra": False, "shortPanel": True, "accepted": False}):
+            with self.subTest(case=case):
+                result = subprocess.run(["node", "-e", harness], input=json.dumps({
+                    **case, "script": flow.INNER_JS, "frame": flow.ADVERSARIAL_INPUTS_FRAME}),
+                    text=True, capture_output=True, check=True)
+                value = json.loads(result.stdout)
+                if case["accepted"]:
+                    self.assertEqual(value["before"]["text_length"], 2229)
+                    self.assertEqual(value["open"]["clicked"], "Remarks")
+                    self.assertTrue(value["after"]["accordion_expanded"])
+                    self.assertEqual(value["after"]["text_length"], 2464)
+                    self.assertGreater(value["top"], 0)
+                else:
+                    self.assertTrue(any("error" in value[action] for action in
+                                        ("before", "open", "after", "read")))
+                    self.assertEqual(value["top"], 0)
 
 
 if __name__ == "__main__":
