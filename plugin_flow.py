@@ -130,6 +130,10 @@ async def complete_plugin(runner, item, *, probes=PROBES, probe_delay=PROBE_DELA
     heading = lesson_heading(item.get("title"))
     if not heading:
         raise StopRun("The plugin lesson has no roster heading.")
+    from scorm_flow import complete_static_scorm, is_static_scorm
+    if is_static_scorm(path, heading):
+        await complete_static_scorm(runner, item, path, heading)
+        return
     if await runner.verified_item(item):
         return
     last = None
