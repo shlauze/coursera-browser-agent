@@ -165,16 +165,22 @@ NOTEBOOK_JS = r"""(async request => {
   if (!Array.isArray(cells) || !cells.length || cells.length>request.max_cells)
     return {error:'The notebook has an unexpected number of cells.',cell_count:cells?.length};
   const source=cell=>String(cell.get_text ? cell.get_text() : '');
+  const executionCount=cell=>{
+    const prompt=typeof cell.get_input_prompt_number==='function'
+      ? cell.get_input_prompt_number() : null;
+    if (Number.isInteger(prompt)) return prompt;
+    if (Number.isInteger(cell.input_prompt_number)) return cell.input_prompt_number;
+    return Number.isInteger(cell.execution_count) ? cell.execution_count : null;
+  };
   const status=()=>({url:location.href,path,dirty:!!nb.dirty,
     kernel_status:String(nb.kernel?.status || ''),
     cells:cells.map((cell,index)=>({index,type:String(cell.cell_type || ''),
       source:source(cell).slice(0,request.max_cell_chars+1),
       metadata:{nbgrader:{solution:!!cell.metadata?.nbgrader?.solution,
         locked:!!cell.metadata?.nbgrader?.locked,grade:!!cell.metadata?.nbgrader?.grade}},
-      // Classic Jupyter stores the prompt number on the cell object; the
-      // notebook-file field is not always present in the live cell model.
-      execution_count:Number.isInteger(cell.input_prompt_number) ? cell.input_prompt_number :
-        (Number.isInteger(cell.execution_count) ? cell.execution_count : null),
+      // Classic Jupyter exposes the live prompt through a method. Saved-file
+      // fields are fallbacks because the live cell model may not contain them.
+      execution_count:executionCount(cell),
       outputs:(cell.output_area?.outputs || []).slice(0,10).map(output=>({
         type:String(output.output_type || ''),ename:String(output.ename || ''),
         text:String(output.text || output.data?.['text/plain'] || '').slice(0,3000)}))}))});

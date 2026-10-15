@@ -260,16 +260,19 @@ const run=async html=>vm.runInNewContext('('+script+')({path,expand:false})',
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const script=JSON.parse(fs.readFileSync(0,'utf8'));
 const cells=[
-  {cell_type:'code',get_text:()=> 'a=1',input_prompt_number:7,metadata:{},output_area:{outputs:[]}},
-  {cell_type:'code',get_text:()=> 'b=2',execution_count:9,metadata:{},output_area:{outputs:[]}},
-  {cell_type:'code',get_text:()=> 'c=3',metadata:{},output_area:{outputs:[]}}];
+  {cell_type:'code',get_text:()=> 'a=1',get_input_prompt_number:()=>4,
+    input_prompt_number:8,metadata:{},output_area:{outputs:[]}},
+  {cell_type:'code',get_text:()=> 'b=2',get_input_prompt_number:()=>null,
+    input_prompt_number:7,metadata:{},output_area:{outputs:[]}},
+  {cell_type:'code',get_text:()=> 'c=3',execution_count:9,metadata:{},output_area:{outputs:[]}},
+  {cell_type:'code',get_text:()=> 'd=4',metadata:{},output_area:{outputs:[]}}];
 const Jupyter={notebook:{notebook_path:'release/Task.ipynb',dirty:false,
   get_cells:()=>cells,save_notebook:()=>{},kernel:{status:'idle'}}};
 const location={href:'https://lab.labs.coursera.org/notebooks/release/Task.ipynb'};
 (async()=>{
   const result=await vm.runInNewContext('('+script+')({action:"snapshot",max_cells:80,max_cell_chars:24000})',
     {Jupyter,location});
-  assert.deepEqual(Array.from(result.cells,x=>x.execution_count),[7,9,null]);
+  assert.deepEqual(Array.from(result.cells,x=>x.execution_count),[4,7,9,null]);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
         result = subprocess.run(['node', '-e', harness], input=json.dumps(flow.NOTEBOOK_JS),
