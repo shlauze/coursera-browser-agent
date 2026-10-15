@@ -50,7 +50,9 @@ PROGRAMMING_PAGE_JS = r"""(request => {
   const roots=[...document.querySelectorAll('main,[role="main"]')].filter(visible);
   const main=roots.find(element => !roots.some(other => other!==element && other.contains(element))) || document.body;
   const headings=[...main.querySelectorAll('h1')].filter(visible).map(element=>clean(element.innerText));
-  if (headings.length!==1 || headings[0]!==request.heading)
+  // Instructions may contain their own h1 headings. Only the assignment
+  // title must be unique; other section headings do not change its identity.
+  if (headings.filter(value=>value===request.heading).length!==1)
     return {error:'The Programming Assignment heading is missing or ambiguous.',url:location.href,
       ready:document.readyState,headings};
   const controls=[...main.querySelectorAll('button,a[href],[role="button"]')].filter(visible)
@@ -61,7 +63,7 @@ PROGRAMMING_PAGE_JS = r"""(request => {
   const counts={launch:find('Launch lab').length,resume:find('Resume lab').length,
     submit:find('Submit assignment').length};
   const pageText=clean(main.innerText).slice(0,12000);
-  const result={url:location.href,ready:document.readyState,heading:headings[0],
+  const result={url:location.href,ready:document.readyState,heading:request.heading,
     counts,buttons:labels.slice(0,40),page_text:pageText};
   if (!request.action || request.action==='inspect') return result;
   const selected=request.action==='launch' ? find('Launch lab') :
@@ -73,6 +75,41 @@ PROGRAMMING_PAGE_JS = r"""(request => {
   const href=selected[0].element.matches('a[href]') ? selected[0].element.href :
     selected[0].element.closest('a[href]')?.href || null;
   return {...result,clicked:request.action,action_href:href};
+})"""
+
+
+PROGRAMMING_FEEDBACK_JS = r"""(async request => {
+  const clean=value => String(value || '').replace(/\s+/g,' ').trim();
+  const here=new URL(location.href);
+  if (here.protocol!=='https:' || !['coursera.org','www.coursera.org'].includes(here.hostname) ||
+      here.username || here.password || (here.port && here.port!=='443') ||
+      here.pathname.replace(/\/$/,'')!==request.path+'/submission')
+    return {error:'The Programming Assignment submission page changed.'};
+  const links=[...document.querySelectorAll('a[href]')].filter(link =>
+    clean(link.innerText)==='View grader feedback' && link.getClientRects().length);
+  if (!links.length) {
+    const buttons=[...document.querySelectorAll('button')].filter(button =>
+      clean(button.innerText)==='Show grader output' && button.getClientRects().length);
+    if (buttons.length>1) return {error:'Multiple grader output controls need review.'};
+    if (buttons.length===1 && !buttons[0].disabled) buttons[0].click();
+    // React may report document.readyState='complete' before it loads the
+    // submissions or reveals the feedback link. Keep polling the page.
+    return {available:false,ready:'pending'};
+  }
+  if (links.length!==1) return {error:'Multiple grader feedback links need review.'};
+  const target=new URL(links[0].href);
+  const ids=target.searchParams.getAll('id');
+  if (target.origin!==here.origin || target.pathname!=='/api/rest/v1/executorruns/richfeedback' ||
+      ids.length!==1 || !/^[A-Za-z0-9_-]{8,128}$/.test(ids[0]) ||
+      target.searchParams.get('feedbackType')!=='HTML')
+    return {error:'The grader feedback link is not a verified Coursera result.'};
+  const response=await fetch(target.href,{credentials:'same-origin',cache:'no-store'});
+  if (!response.ok) return {error:'Coursera did not return grader feedback.',status:response.status};
+  const html=await response.text();
+  if (html.length>2_000_000) return {error:'The grader feedback is too large to inspect.'};
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  doc.querySelectorAll('script,style').forEach(node=>node.remove());
+  return {available:true,text:clean(doc.body?.textContent).slice(0,60000)};
 })"""
 
 
@@ -334,7 +371,10 @@ async def _wait_page(tab, path, heading):
         last = await _page_snapshot(tab, path, heading)
         if last.get('error') == 'The selected tab is not the expected Programming Assignment.':
             raise engine.StopRun(last['error'])
-        if not last.get('error') and last.get('ready') == 'complete' and last.get('heading') == heading:
+        controls = last.get('counts') or {}
+        lab_controls = controls.get('launch', 0) + controls.get('resume', 0)
+        if (not last.get('error') and last.get('ready') == 'complete' and
+                last.get('heading') == heading and lab_controls == 1):
             return last
         await asyncio.sleep(POLL_SECONDS)
     raise engine.StopRun('The Programming Assignment page did not show its expected heading and controls.')
@@ -408,12 +448,62 @@ def _saved_sources_match(snapshot, server):
 
 def _grade_text(page_text):
     text = ' '.join(str(page_text or '').split())
-    match = re.search(r'(?:grade|score)\s*[:\s]*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)', text, re.I)
-    if not match:
-        match = re.search(r'\b(\d+(?:\.\d+)?)\s*/\s*(100)\b', text)
-    grade = (f'{match[1]}/{match[2]}' if match else None)
-    failed = bool(re.search(r'\bfailed\b|\bdid not pass\b', text, re.I))
+    # The page shows the passing threshold before the actual score, e.g.
+    # "To pass you need at least 70/100 points. 31/100". Never report the
+    # threshold as the learner's grade.
+    result = re.search(r'\bto pass you need at least\s+\d+(?:\.\d+)?\s*/\s*\d+(?:\.\d+)?\s+points?[.!]?\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)', text, re.I)
+    if result:
+        grade = f'{result[1]}/{result[2]}'
+    else:
+        # A course outline can list grades for unrelated assignments. Without
+        # a specific result sentence, multiple generic grades are ambiguous.
+        matches = list(re.finditer(r'\b(?:your grade|your score|grade|score)\s*:\s*(\d+(?:\.\d+)?)\s*(%|/\s*\d+(?:\.\d+)?)', text, re.I))
+        grade = matches[0][1] + re.sub(r'\s+', '', matches[0][2]) if len(matches) == 1 else None
+    failed = bool(re.search(r'\bfailed\b|\b(?:did not|didn[\'’]t) pass\b', text, re.I))
     return grade, failed
+
+
+def _feedback_summary(text):
+    """Summarize the grader's previous submission, not the live notebook."""
+    if not isinstance(text, str) or not text:
+        return {'available': False}
+    test_pattern = r'\bTest cell\s*\(Score:\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\)'
+    tests = [{'name': 'Test cell', 'score': f'{match[1]}/{match[2]}'}
+             for match in re.finditer(test_pattern, text, re.I)]
+    # The HTML text is flattened, so a test-cell score can appear to be the
+    # first "Score:" token. Remove those labels before reading the overall
+    # grade; a page containing only test scores has no known total.
+    without_tests = re.sub(test_pattern, '', text, flags=re.I)
+    title = re.search(r'\bScore:\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)', without_tests, re.I)
+    blank = bool(re.search(r"Student['’]s answer.{0,400}?(?:#\s*your code here|raise\s+NotImplementedError)",
+                           text, re.I))
+    return {'available': True,
+            'raw_score': f'{title[1]}/{title[2]}' if title else None,
+            'blank_submission': blank,
+            'test_scores': tests[:MAX_TEST_CELLS],
+            'failed_test_count': sum(float(earned) < float(possible)
+                                     for earned, possible in (score['score'].split('/') for score in tests)),
+            'excerpt': text[:12000]}
+
+
+async def _read_grader_feedback(tab, path):
+    """Read an existing result from Coursera, then restore the assignment tab."""
+    assignment_url = 'https://www.coursera.org' + path
+    try:
+        await tab.navigate(assignment_url + '/submission')
+        observed = {'available': False}
+        for _ in range(40):
+            observed = await tab.evaluate(PROGRAMMING_FEEDBACK_JS + '(' + json.dumps({'path': path}) + ')')
+            if not isinstance(observed, dict):
+                raise engine.StopRun('The grader feedback page returned an unreadable result.')
+            if observed.get('error'):
+                raise engine.StopRun(observed['error'])
+            if observed.get('available') or observed.get('ready') == 'complete':
+                break
+            await asyncio.sleep(0.5)
+        return _feedback_summary(observed.get('text')) if observed.get('available') else {'available': False}
+    finally:
+        await tab.navigate(assignment_url)
 
 
 async def diagnose_programming(runner, item):
@@ -426,6 +516,14 @@ async def diagnose_programming(runner, item):
     path, heading = _path_and_heading(item, runner.course['url'])
     page = await _wait_page(runner.tab, path, heading)
     grade, failed = _grade_text(page.get('page_text'))
+    previous_feedback = {'available': False}
+    if grade or failed:
+        try:
+            previous_feedback = await _read_grader_feedback(runner.tab, path)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except Exception as error:
+            previous_feedback = {'available': False, 'error': str(error)[:300]}
     lab_id, address, existing = await _open_lab(runner.tab, path, heading)
     frame = FrameConnection(address)
     try:
@@ -442,6 +540,9 @@ async def diagnose_programming(runner, item):
         unfinished = [cell['index'] for cell in solutions if _unfinished(cell['source'])]
         if snapshot.get('dirty'):
             saved = False
+        ready = (saved and not unfinished and result['total'] > 0 and
+                 len(result['passed']) == result['total'] and
+                 not result['errored'] and not result['not_run'] and not result['unconfirmed'])
         content = json.dumps(snapshot.get('cells', []), ensure_ascii=False, sort_keys=True)
         fingerprint = hashlib.sha256(content.encode('utf-8')).hexdigest()
         report = {'recorded_at': datetime.now().astimezone().isoformat(timespec='seconds'),
@@ -452,6 +553,7 @@ async def diagnose_programming(runner, item):
                   'kernel_status': snapshot.get('kernel_status'), 'dirty': snapshot.get('dirty'),
                   'server_saved': saved, 'solution_cells': [cell['index'] for cell in solutions],
                   'unfinished_solution_cells': unfinished, 'tests': result,
+                  'ready_for_owner_review': ready, 'previous_feedback': previous_feedback,
                   'cells': snapshot['cells']}
         directory = engine.ROOT / 'state' / 'programming_diagnostics'
         directory.mkdir(parents=True, exist_ok=True)
@@ -459,19 +561,32 @@ async def diagnose_programming(runner, item):
         location = directory / filename
         engine.save_json(location, report)
         summary = {key: report[key] for key in ('recorded_at', 'parent_grade', 'parent_failed',
-                   'notebook_hash', 'dirty', 'server_saved', 'solution_cells', 'unfinished_solution_cells', 'tests')}
+                   'notebook_hash', 'dirty', 'server_saved', 'solution_cells',
+                   'unfinished_solution_cells', 'tests', 'ready_for_owner_review')}
         runner.checkpoint.setdefault('programming_diagnostics', {})[item['key']] = summary
         runner.store.save()
         runner.event('programming_inspected', key=item['key'], grade=grade, failed=failed,
                      solution_count=len(solutions), unfinished_count=len(unfinished),
                      tests_passed=len(result['passed']), tests_total=result['total'],
                      server_saved=saved, lab_was_open=existing)
-        status = (f"{len(result['passed'])}/{result['total']} visible tests passed; "
+        status = (f"{len(result['passed'])}/{result['total']} visible tests display pass output; "
                   f"{len(unfinished)} unfinished solution cells; "
                   + ('server copy confirmed' if saved else 'server copy needs checking'))
+        previous = (f" Previous submission: {grade} failed; grader feedback "
+                    + ('shows unfinished answers.' if previous_feedback.get('blank_submission') else
+                       'is saved in the local diagnostic.' if previous_feedback.get('available') else
+                       'was unavailable.')) if failed else ''
+        if ready:
+            next_step = ('The current notebook is saved and its visible tests display passes; '
+                         'a fresh run and the hidden grader are not confirmed. '
+                         'Review it and submit the assignment personally if it is your own work; '
+                         'Coursera will determine the actual grade.')
+        else:
+            next_step = ('The notebook still needs work or a fresh validation before personal submission. '
+                         'Review its incomplete cells, test results and server copy.')
         return ('Programming Assignment requires your review before any Coursera Honor Code attestation. '
-                + status + '. The lab tab remains open for inspection; close that extra Coursera tab '
-                'before restarting the script. Local diagnostic: ' + str(location))
+                + status + '.' + previous + ' ' + next_step + ' The lab tab remains open. '
+                'Local diagnostic: ' + str(location))
     finally:
         with suppress(Exception):
             await frame.close()

@@ -434,6 +434,7 @@ class QueueRunner(engine.CourseRunner):
                             self.store.event("programming_inspection_attention", reason, self.course["id"])
                         self.course["message"] = reason
                         self.store.event("programming_manual_review", reason, self.course["id"])
+                        print("PROGRAMMING_REVIEW:", reason, flush=True)
                     record["items"][item["key"]]["reason"] = reason
                     self.store.event("item_manual_required", item["title"], self.course["id"])
                     print("МАТЕРИАЛ ТРЕБУЕТ РУЧНОГО ВЫПОЛНЕНИЯ:", item["title"], flush=True)
@@ -1109,6 +1110,12 @@ async def run_queue(store, args, tab):
                     if proof is None:
                         await _remember_visible_certificate(store, tab, course)
                         proof = await verify_course_completion(tab, course["url"], modules, verified_rosters)
+                    programming_reviews = [item.get("reason") for module in runner.checkpoint["modules"].values()
+                        for key, item in module.get("items", {}).items()
+                        if key.startswith("programming:") and item.get("manual_required") and item.get("reason")]
+                    if (programming_reviews and not proof.get("verified") and
+                            not valid_certificate_url(course.get("certificate_page_url"))):
+                        raise engine.StopRun("Manual work still required: " + programming_reviews[0])
                     if auto_my_learning and not valid_certificate_url(course.get("certificate_page_url")):
                         await _wait_for_completed_certificate(store, tab, course)
                     if not valid_certificate_url(course.get("certificate_page_url")):

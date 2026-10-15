@@ -1036,6 +1036,57 @@ class InterleavedModuleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(programming['title'], final['manual_required'])
             self.assertIn('Manual work still required', course['message'])
 
+    async def test_verified_course_with_manual_programming_waits_for_delayed_certificate(self):
+        """A stale manual flag must not short-circuit verified site completion."""
+        with tempfile.TemporaryDirectory() as directory:
+            identity = 'deep-learning-with-pytorch'
+            url = 'https://www.coursera.org/learn/' + identity
+            store = QueueStore(Path(directory) / 'state.json', [
+                {'id': identity, 'url': url, 'title': 'Deep Learning with PyTorch',
+                 'modules': [1]}])
+            assignment = {'key': 'programming:final', 'title': 'Final programming assignment',
+                          'url': url + '/programming/final/assignment',
+                          'checked': False, 'completed': False}
+            tab = SimpleNamespace()
+            args = copy.copy(ARGS)
+            args.auto_my_learning = True
+
+            async def record_manual(runner, number, roster):
+                record = {'roster': roster, 'verified_complete': False,
+                          'manual_required': [assignment['title']],
+                          'items': {assignment['key']: {
+                              'title': assignment['title'], 'verified_complete': False,
+                              'manual_required': True, 'reason': 'Prior graded attempt failed'}}}
+                runner.checkpoint['modules'][str(number)] = record
+                runner.data['modules'][str(number)] = record
+
+            async def publish_certificate(saved_store, browser_tab, course):
+                course['certificate_page_url'] = certificate_url(identity)
+                saved_store.save()
+
+            with patch.object(queue, 'ROOT', Path(directory)), \
+                 patch.object(queue, '_recover_visible_optional_reflection', AsyncMock()), \
+                 patch.object(queue, 'recover_pending_quizzes', AsyncMock()), \
+                 patch.object(queue, '_next_course_id', AsyncMock(side_effect=[identity, None])), \
+                 patch.object(queue, 'discover_modules', AsyncMock(return_value=[1])), \
+                 patch.object(queue, 'discover_roster', AsyncMock(return_value=[assignment])), \
+                 patch.object(queue.QueueRunner, 'process_module', new=record_manual), \
+                 patch.object(queue, 'observed_certificate_url', AsyncMock(return_value=None)), \
+                 patch.object(queue, 'verify_course_completion', AsyncMock(return_value={
+                     'verified': True, 'evidence': ['Course complete on Coursera']})) as verify, \
+                 patch.object(queue, '_wait_for_completed_certificate', new=AsyncMock(
+                     side_effect=publish_certificate)) as wait_certificate, \
+                 patch.object(queue, 'open_certificate_page', new=opened_certificate), \
+                 patch.object(queue, 'verify_saved_certificate', new=matching_certificate), \
+                 patch.object(queue, '_open_my_learning_with_retry', AsyncMock()):
+                result = await queue.run_queue(store, args, tab)
+
+            self.assertEqual(result, 0)
+            verify.assert_awaited_once()
+            wait_certificate.assert_awaited_once()
+            self.assertEqual(store.course(identity)['completion_method'], 'certificate')
+            self.assertEqual(store.course(identity)['status'], 'completed')
+
     async def test_previous_course_tab_uses_cached_anchor_before_resuming(self):
         with tempfile.TemporaryDirectory() as directory:
             one_course = configs()[:1]
