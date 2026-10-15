@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.52"
+RUNNER_VERSION = "4.0-groq.53"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -1715,7 +1715,7 @@ class CourseRunner:
             # is ready. A matching heading proves the lesson rendered; the
             # outline row may still be collapsed or waiting for hydration.
             rendered = bool(value.get("ready") == "interactive" and heading and
-                            re.match(re.escape(heading) + r"(?:$|\s+(?:Video|Reading|Lab|Dialogue|Practice Assignment|Graded Assignment|Assignment)\b)", title))
+                            re.match(re.escape(heading) + r"(?:$|\s+(?:Video|Reading|Lab|Dialogue|Role Play|Practice Assignment|Graded Assignment|Assignment)\b)", title))
             loaded = item_key(value.get("url", "")) == item["key"] and (value.get("ready") == "complete" or rendered)
             saw_lesson = saw_lesson or loaded
             if loaded:

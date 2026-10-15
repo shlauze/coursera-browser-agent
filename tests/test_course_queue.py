@@ -563,8 +563,11 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
                     completed.add(target['key'])
                 setattr(runner, method, AsyncMock(side_effect=finish))
                 runner.snapshot = AsyncMock(return_value={'url':item['url']})
+                # This fixture has no browser tab. The real runner probes the
+                # opened Coach page before choosing Dialogue or Role Play.
                 with patch.object(engine, 'rows_by_key', return_value={
-                        item['key']:{'status':'completed', 'checked':True}}):
+                        item['key']:{'status':'completed', 'checked':True}}), \
+                     patch.object(queue, 'probe_role_play', AsyncMock(return_value=False)):
                     await runner.process_module(1, [item])
                 getattr(runner, method).assert_awaited_once_with(item)
                 self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])

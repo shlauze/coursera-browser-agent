@@ -1,0 +1,18 @@
+{
+  "course": "Adversarial AI: Attacking, Defending & Governing ML Systems",
+  "title": "The Insider Threat: Investigating Suspected Data Poisoning",
+  "url": "https://www.coursera.org/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa/coach/T6QZ8/the-insider-threat-investigating-suspected-data-poisoning",
+  "key": "coach:T6QZ8",
+  "kind": "Role Play",
+  "initial_task_complete": 0,
+  "tasks": [
+    "Present evidence: Describe anomalous behavior and poisoning evidence.",
+    "Discuss alternatives: Evaluate drift and decay possibilities.",
+    "Recommend steps: Propose audit and review actions.",
+    "Address threats: Navigate sensitive insider threat implications.",
+    "Request resources: Justify necessary investigation support resources."
+  ],
+  "opening_prompt": "Thanks for coming in. I've been reviewing the recent performance reports for our malware detection model, and the drop in accuracy is concerning. I understand you've been looking into this—what have you found so far?",
+  "premature_feedback": "Task 1: Present evidence. I did not find evidence of this task being performed. Task 2: Acknowledge alternative explanations. You did not discuss potential causes like data drift or model decay. Task 3: Recommend investigation steps. You did not propose any next steps. Task 4: Address insider threat sensitivity. The sensitivity of potential insider threats was not addressed. Task 5: Request appropriate resources. You did not make a case for the resources needed for this investigation.",
+  "successful_feedback": "Task 1: You clearly presented the observed drop in accuracy and identified the evidence needed to assess poisoning. Task 2: You thoughtfully considered data drift and model decay as alternative explanations. Task 3: You proposed a concrete audit of data provenance, access logs, and baseline performance. Task 4: You handled the potential insider threat sensitively without accusing colleagues prematurely. Task 5: You justified the security and data science resources needed for the investigation."
+}

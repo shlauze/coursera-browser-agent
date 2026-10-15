@@ -25,6 +25,7 @@ from my_learning import (MY_LEARNING_URL, MyLearningSelectionChanged,
 from lab_flow import complete_lab
 from programming_flow import diagnose_programming
 from dialogue_flow import run_dialogue
+from role_play_flow import probe_role_play, run_role_play
 from reflection_flow import maybe_complete_reflection, recover_pending_reflection, pending_reflections
 from pending_preflight import recover_pending_quizzes, _unresolved, explicit_platform_attempt
 from recovery_policy import classify_transient, retry_read
@@ -35,6 +36,12 @@ ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
 CERTIFICATE_RETRY_DELAY = 20
 PROGRAMMING_MARK_RECHECK_SECONDS = 8
+
+
+def _requires_role_play_review(roster):
+    """A green Coach outline can hide a Role Play finished with zero tasks."""
+    return any(isinstance(item, dict) and str(item.get("key", "")).startswith("coach:")
+               for item in roster)
 
 
 class ControlStopped(Exception):
@@ -519,7 +526,15 @@ class QueueRunner(engine.CourseRunner):
             self.store.update(self.course["id"], current_item=item["title"], message="Проверка материала")
             self.store.event("item_started", item["title"], self.course["id"])
             record["items"][item["key"]] = {"title":item["title"], "verified_complete":False}
-            already_completed = await self.verified_item(item)
+            kind = item["key"].split(":", 1)[0]
+            is_role_play = False
+            if kind == "coach":
+                # The sidebar can show green after an early End Role Play with
+                # Tasks 0/5. Open the actual Coach lesson to distinguish it
+                # from Dialogue before trusting the course outline mark.
+                await self.open_item(item)
+                is_role_play = await probe_role_play(self, item)
+            already_completed = False if is_role_play else await self.verified_item(item)
             if already_completed:
                 print("Уже выполнен: подтверждено на сайте", flush=True)
             else:
@@ -564,16 +579,24 @@ class QueueRunner(engine.CourseRunner):
                     self.store.event("item_manual_required", item["title"], self.course["id"])
                     print("МАТЕРИАЛ ТРЕБУЕТ РУЧНОГО ВЫПОЛНЕНИЯ:", item["title"], flush=True)
                     continue
-                kind = item["key"].split(":", 1)[0]
-                await self.open_item(item)
-                if not await self.verified_item(item):
+                if kind != "coach":
+                    await self.open_item(item)
+                if is_role_play or not await self.verified_item(item):
                     operation, timeout = {"supplement":(self.reading, 120), "lecture":(self.video, 180),
                                           "assignment":(self.quiz, None), "ungradedLab":(self.lab, 240),
-                                          "coach":(self.dialogue, 1300)}[kind]
+                                          "coach":(self.role_play if is_role_play else self.dialogue, 1300)}[kind]
                     self.current_operation = kind
                     try:
                         await asyncio.wait_for(operation(item), timeout=timeout)
                     except TimeoutError:
+                        if is_role_play and self.checkpoint.get("role_plays", {}).get(
+                                item["key"], {}).get("phase") != "completed":
+                            # The green mark can be present after an early
+                            # 0/N End Role Play. A timeout cannot be recovered
+                            # from the outline icon alone.
+                            raise engine.StopRun(
+                                "Role Play timed out before task and feedback verification; "
+                                "its saved state was preserved.") from None
                         # A timed-out browser action may still have completed
                         # on Coursera. Observe the site's mark before failing.
                         try:
@@ -660,6 +683,9 @@ class QueueRunner(engine.CourseRunner):
 
     async def dialogue(self, item):
         await run_dialogue(self, item)
+
+    async def role_play(self, item):
+        await run_role_play(self, item)
 
     def update_counts(self):
         modules = self.checkpoint["modules"].values()
@@ -1260,10 +1286,11 @@ async def run_queue(store, args, tab):
                         runner.event("module_roster", module=number, roster=roster)
                         if not verified:
                             verified = verified_sidebar_module(sidebar, number, expected_roster=roster)
-                        if verified:
+                        if verified and not _requires_role_play_review(roster):
                             _record_sidebar_completion(runner, number, roster)
                         else:
-                            if any(item.get("unsupported") for item in roster):
+                            if (any(item.get("unsupported") for item in roster) and
+                                    not _requires_role_play_review(roster)):
                                 # A course may grant completion after its final
                                 # graded test while an optional peer task remains.
                                 # The site statement may skip an optional item,
