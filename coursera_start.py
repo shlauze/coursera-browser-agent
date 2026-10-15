@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.39"
+RUNNER_VERSION = "4.0-groq.40"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -330,7 +330,7 @@ EXPAND_JS = r"""(() => {
 })()"""
 
 
-LESSON_OUTLINE_JS = r"""(expectedKey => {
+LESSON_OUTLINE_JS = r"""((expectedKey, moduleNumber) => {
   if (!['www.coursera.org','coursera.org'].includes(location.hostname))
     return {error:'Wrong course page; no outline action made.'};
   const parts=location.pathname.split('/').filter(Boolean);
@@ -339,13 +339,81 @@ LESSON_OUTLINE_JS = r"""(expectedKey => {
   if (parts[0]!=='learn' || parts[1]!=='philosophy' || kind+':'+parts[3]!==expectedKey)
     return {error:'Wrong lesson page; no outline action made.'};
   const clean=x=>(x || '').replace(/\s+/g,' ').trim();
-  const matches=Array.from(document.querySelectorAll('button,[role="button"]')).filter(e=>
+  const controls=Array.from(document.querySelectorAll('button,[role="button"]')).filter(e=>
     e.getClientRects().length && getComputedStyle(e).visibility!=='hidden' &&
-    !e.disabled && e.getAttribute('aria-disabled')!=='true' &&
-    [e.getAttribute('aria-label'),e.innerText].some(label=>/^Expand course outline$/i.test(clean(label))));
-  if (matches.length!==1) return {clicked:false,matches:matches.length};
-  matches[0].click();
-  return {clicked:true,label:'Expand course outline'};
+    !e.disabled && e.getAttribute('aria-disabled')!=='true');
+  const labels=e=>[e.getAttribute('aria-label'),e.innerText].map(clean).filter(Boolean);
+  const label=e=>labels(e)[0] || '';
+  const hasLabel=(e,re)=>labels(e).some(value=>re.test(value));
+  const expand=controls.filter(e=>hasLabel(e,/^Expand course outline$/i));
+  if (expand.length===1) {
+    expand[0].click();
+    return {clicked:true,label:'Expand course outline'};
+  }
+  if (expand.length>1) return {clicked:false,error:'Ambiguous outline controls',matches:expand.length};
+
+  // Coursera can keep the outline open yet leave the current module collapsed.
+  // Its lesson links may also be virtualized above the outline's scroll position.
+  // Only expand/scroll the identified module; status is still read separately
+  // from a real green mark, never inferred from these navigation actions.
+  if (!Number.isInteger(moduleNumber) || moduleNumber<1) return {clicked:false,matches:0};
+  const modulePattern=new RegExp('^Module\\s+'+moduleNumber+'(?:\\b|\\s|:)','i');
+  const modules=controls.filter(e=>hasLabel(e,modulePattern));
+  const scrollContainer=node=>{
+    let ancestor=node?.parentElement;
+    while (ancestor) {
+      const style=getComputedStyle(ancestor);
+      if (ancestor.scrollHeight>ancestor.clientHeight+40 &&
+          /(auto|scroll)/.test(style.overflowY || '')) return ancestor;
+      ancestor=ancestor.parentElement;
+    }
+    return null;
+  };
+  if (!modules.length) {
+    // Virtualized outlines may unmount a module that is outside the viewport.
+    // A visible sibling module supplies the correct scroll container and the
+    // direction in which to search; never guess completion from this.
+    const siblings=controls.map(e=>({element:e,
+      number:Number(labels(e).map(v=>/^Module\s+(\d+)\b/i.exec(v)?.[1]).find(Boolean))}))
+      .filter(row=>Number.isInteger(row.number) && row.number>0);
+    const nearest=siblings.sort((a,b)=>Math.abs(a.number-moduleNumber)-Math.abs(b.number-moduleNumber))[0];
+    const scroller=nearest && scrollContainer(nearest.element);
+    if (scroller && nearest.number!==moduleNumber) {
+      const before=scroller.scrollTop;
+      const step=Math.max(150,Math.floor(scroller.clientHeight*.8));
+      const max=Math.max(0,scroller.scrollHeight-scroller.clientHeight);
+      scroller.scrollTop=Math.min(max,Math.max(0,before+(moduleNumber<nearest.number ? -step : step)));
+      if (Math.abs(scroller.scrollTop-before)>2)
+        return {clicked:false,scrolled:true,label:'Find module '+moduleNumber};
+    }
+    return {clicked:false,matches:0};
+  }
+  if (modules.length!==1) return {clicked:false,matches:modules.length};
+  const target=modules[0];
+  if (target.getAttribute('aria-expanded')==='false' ||
+      hasLabel(target,/^Expand module\s+\d+\b/i)) {
+    target.click();
+    return {clicked:true,label:'Expand module '+moduleNumber};
+  }
+  const scroller=scrollContainer(target);
+  if (scroller) {
+    const before=scroller.scrollTop;
+    target.scrollIntoView({block:'start',behavior:'instant'});
+    if (Math.abs(scroller.scrollTop-before)>2)
+      return {clicked:false,scrolled:true,label:'Scroll to module '+moduleNumber};
+  }
+  // A module's lessons can be separately collapsed. Restrict this to the
+  // controls between the selected module heading and the next module heading.
+  const index=controls.indexOf(target);
+  const next=controls.findIndex((e,i)=>i>index && hasLabel(e,/^Module\s+\d+\b/i));
+  const lessonControls=controls.slice(index+1,next<0 ? undefined : next).filter(e=>
+    e.getAttribute('aria-expanded')==='false' &&
+    hasLabel(e,/^(?:Lesson\s+\d+\b|Review(?:\s|$))/i));
+  if (lessonControls.length) {
+    lessonControls[0].click();
+    return {clicked:true,label:'Expand lesson in module '+moduleNumber};
+  }
+  return {clicked:false,matches:1};
 })"""
 
 
@@ -1624,6 +1692,14 @@ class CourseRunner:
         await self.tab.navigate(item["url"])
         loaded = False
         next_outline_probe = 0
+        module_number = item.get("module_number")
+        if type(module_number) is not int:
+            module_number = getattr(self, "_current_module", None)
+        if type(module_number) is not int:
+            course = getattr(self, "course", None)
+            module_number = course.get("current_module") if isinstance(course, dict) else None
+        if type(module_number) is not int or module_number < 1:
+            module_number = None
         for probe in range(15):
             value = await self.snapshot()
             row = rows_by_key(value).get(item["key"])
@@ -1641,9 +1717,10 @@ class CourseRunner:
                 if item["key"] in rows_by_key(value):
                     return value
                 if probe >= next_outline_probe:
-                    result = await self.tab.evaluate(LESSON_OUTLINE_JS + "(" + json.dumps(item["key"]) + ")")
-                    next_outline_probe = probe + 4
-                    if result.get("clicked"):
+                    result = await self.tab.evaluate(LESSON_OUTLINE_JS + "(" +
+                        json.dumps(item["key"]) + "," + json.dumps(module_number) + ")")
+                    next_outline_probe = probe + 2
+                    if result.get("clicked") or result.get("scrolled"):
                         self.event("lesson_outline_opened", key=item["key"], result=result)
             await asyncio.sleep(1)
         if loaded:
@@ -2276,6 +2353,7 @@ class CourseRunner:
 
 
     async def module(self, number):
+        self._current_module = number
         self.data["modules"][str(number)] = {"verified_complete":False,"items":{}}
         record = self.data["modules"][str(number)]
         print(f"\nMODULE {number}: loading its item list",flush=True)

@@ -696,7 +696,7 @@ async def _open_my_learning_with_retry(store, tab, course_id):
 
 
 async def _next_course_id(store, args, tab, processed, auto_my_learning):
-    """Finish interrupted work, then exhaust In Progress before new courses.
+    """Visit In Progress before trusting a local checkpoint.
 
     A saved certificate is also pending work: verify it before choosing a
     different course. My Learning may contain a course removed from the local
@@ -704,6 +704,25 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
     """
     active_ids = _configured_course_ids(store, args)
     remaining = [identity for identity in active_ids if identity not in processed]
+    if auto_my_learning:
+        # A crash can leave a certificate link saved before its matching page
+        # was verified. Visit My Learning first, then finish that check before
+        # opening another course's Get started or Resume card.
+        pending_certificate = next((identity for identity in remaining
+                                    if valid_certificate_url(store.course(identity).get("certificate_page_url"))), None)
+        if pending_certificate is not None:
+            await _open_my_learning_with_retry(store, tab, pending_certificate)
+            return pending_certificate
+        discovered = await _discover_with_retry(store, tab, set(processed))
+        if discovered is not None:
+            identity, url = course_identity(discovered.get("url", ""))
+            if identity != discovered.get("id"):
+                raise engine.StopRun("My Learning returned an inconsistent course link.")
+            if identity not in active_ids:
+                _append_my_learning_course(store, args, discovered)
+            elif store.course(identity)["url"] != url:
+                raise engine.StopRun("My Learning returned a different link for a configured course.")
+            return identity
     for identity in remaining:
         course = store.course(identity)
         if course.get("previous_status") == "completed":
@@ -716,21 +735,26 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
         if (course.get("previous_status") in {"running", "attention"} or
                 course.get("current_module") is not None or saved_counts or saved_work or
                 (course.get("run_directory") and course.get("previous_status") != "completed")):
-            return identity
+            if not auto_my_learning:
+                return identity
     for identity in remaining:
         if valid_certificate_url(store.course(identity).get("certificate_page_url")):
             return identity
     if auto_my_learning:
-        discovered = await _discover_with_retry(store, tab, set(processed))
-        if discovered is not None:
-            identity, url = course_identity(discovered.get("url", ""))
-            if identity != discovered.get("id"):
-                raise engine.StopRun("My Learning returned an inconsistent course link.")
-            if identity not in active_ids:
-                _append_my_learning_course(store, args, discovered)
-            elif store.course(identity)["url"] != url:
-                raise engine.StopRun("My Learning returned a different link for a configured course.")
-            return identity
+        # A verified empty In Progress list gives new configured courses
+        # priority over old checkpoints. If none are new, revisit the old
+        # course to reconcile a delayed certificate or incomplete site state.
+        for identity in remaining:
+            course = store.course(identity)
+            checkpoint = course.get("checkpoint")
+            if (course.get("previous_status") == "pending" and
+                    not course.get("run_directory") and course.get("current_module") is None and
+                    not any(type(course.get(field)) is int and course[field] > 0
+                            for field in ("modules_discovered", "items_completed")) and
+                    (not isinstance(checkpoint, dict) or not any(checkpoint.get(field)
+                        for field in ("modules", "attempts", "feedback", "answer_history")))):
+                return identity
+        return remaining[0] if remaining else None
     return remaining[0] if remaining else None
 
 
@@ -1110,15 +1134,18 @@ def _wait_for_start_tab(seconds=20):
 
 async def session(store, args):
     course_pages = learning_tabs()
-    pages = _preferred_learning_tabs(course_pages, store)
+    learning_pages = sorted(my_learning_tabs(),
+                            key=lambda row: ("myLearningTab=IN_PROGRESS" not in row.get("url", ""),
+                                             row.get("id", "")))
+    if getattr(args, "auto_my_learning", True):
+        pages = learning_pages or _preferred_learning_tabs(course_pages, store)
+    else:
+        pages = _preferred_learning_tabs(course_pages, store) or learning_pages
+    if not pages and course_pages:
+        # The automatic route immediately navigates its selected tab to My
+        # Learning. Other Coursera tabs can remain open, including old labs.
+        pages = sorted(course_pages, key=lambda row: (row.get("url", ""), row.get("id", "")))
     if not pages:
-        pages = sorted(my_learning_tabs(),
-                       key=lambda row: "myLearningTab=IN_PROGRESS" not in row.get("url", ""))
-    if not pages and len(course_pages) == 1:
-        pages = course_pages
-    if not pages:
-        if course_pages:
-            raise engine.StopRun("Открыто несколько вкладок курсов Coursera; не удалось однозначно выбрать текущий курс.")
         raise engine.StopRun("Откройте вкладку курса или My Learning в отдельном окне Chrome и войдите в Coursera.")
     last_error = None
     for page in pages:

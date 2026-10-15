@@ -878,6 +878,74 @@ class InterleavedModuleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.course('philosophy')['checkpoint']['modules']['1']['source'], 'live_sidebar')
             self.assertEqual(store.course('philosophy')['items_completed'], 11)
 
+    async def test_restart_skips_green_modules_but_keeps_failed_programming_item_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = 'deep-learning-with-pytorch'
+            course_url = 'https://www.coursera.org/learn/' + identity
+            config = [{'id':identity, 'url':course_url, 'title':'Deep Learning with PyTorch',
+                       'modules':[1, 2, 3]}]
+            store = QueueStore(Path(directory) / 'state.json', config)
+            completed = [
+                {'key':f'lecture:{number}', 'title':f'Module {number} video',
+                 'url':f'{course_url}/lecture/{number}/video', 'label':'Completed',
+                 'checked':True, 'completed':True}
+                for number in (1, 2)]
+            reading = {'key':'supplement:capstone', 'title':'Capstone overview',
+                       'url':course_url + '/supplement/capstone/overview',
+                       'label':'Completed', 'checked':True, 'completed':True}
+            programming = {'key':'programming:final', 'title':'Final programming assignment',
+                           'url':course_url + '/programming/final/assignment',
+                           'label':'Grade: 31% • Failed', 'checked':False,
+                           'completed':False, 'unsupported':True}
+            final_roster = [reading, programming]
+            store.update(identity, checkpoint={'modules':{
+                '1':{'roster':[completed[0]]},
+                '2':{'roster':[completed[1]]},
+                '3':{'roster':final_roster}}})
+            sidebar = {'modules':[1, 2, 3], 'rows':{
+                1:{'number':1, 'items':[completed[0]]},
+                2:{'number':2, 'items':[completed[1]]},
+                3:{'number':3, 'items':final_roster}}}
+            tab = SimpleNamespace(evaluate=AsyncMock(return_value={'url':course_url + '/home'}))
+            current = {'url':reading['url'], 'items':[
+                {'url':reading['url'], 'type':'supplement',
+                 'aria_label':'Completed', 'checked':True}]}
+
+            async def item_complete(runner, item, wait=0):
+                return item['key'] == reading['key']
+
+            with patch.object(queue, 'ROOT', Path(directory)), \
+                 patch.object(queue, 'inspect_sidebar_progress', AsyncMock(return_value=sidebar)), \
+                 patch.object(queue, 'discover_modules', AsyncMock()) as modules, \
+                 patch.object(queue, 'discover_roster', AsyncMock(return_value=final_roster)) as roster, \
+                 patch.object(queue.QueueRunner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(queue.QueueRunner, 'verified_item', new=item_complete), \
+                 patch.object(queue.QueueRunner, 'snapshot', AsyncMock(return_value=current)), \
+                 patch.object(queue, 'diagnose_programming', AsyncMock(
+                     return_value='31/100; the graded programming assignment is not passed')) as diagnosed, \
+                 patch.object(queue, 'verify_course_completion', AsyncMock(return_value={
+                     'verified':False, 'reason':'The final lesson is incomplete.'})), \
+                 patch.object(queue, 'observed_certificate_url', AsyncMock(return_value=None)):
+                result = await queue.run_queue(store, copy.copy(ARGS), tab)
+
+            self.assertEqual(result, 2)
+            modules.assert_not_awaited()
+            roster.assert_awaited_once()
+            self.assertEqual(roster.await_args.args[2], 3)
+            diagnosed.assert_awaited_once()
+            self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
+                             [reading['key'], programming['key'], reading['key']])
+            course = store.course(identity)
+            self.assertEqual(course['status'], 'attention')
+            self.assertEqual((course['modules_completed'], course['items_completed']), (2, 3))
+            self.assertEqual(course['checkpoint']['modules']['1']['source'], 'live_sidebar')
+            self.assertEqual(course['checkpoint']['modules']['2']['source'], 'live_sidebar')
+            final = course['checkpoint']['modules']['3']
+            self.assertFalse(final['verified_complete'])
+            self.assertFalse(final['items'][programming['key']]['verified_complete'])
+            self.assertIn(programming['title'], final['manual_required'])
+            self.assertIn('Manual work still required', course['message'])
+
     async def test_previous_course_tab_uses_cached_anchor_before_resuming(self):
         with tempfile.TemporaryDirectory() as directory:
             one_course = configs()[:1]

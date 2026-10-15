@@ -38,6 +38,7 @@ class FakeTab:
         self.snapshots = snapshots
         self.index = 0
         self.outline_calls = 0
+        self.outline_expressions = []
         self.navigation = []
 
     async def navigate(self, url):
@@ -50,6 +51,7 @@ class FakeTab:
             return copy.deepcopy(value)
         if expression.startswith(course.LESSON_OUTLINE_JS):
             self.outline_calls += 1
+            self.outline_expressions.append(expression)
             return {"clicked": True, "label": "Expand course outline"}
         raise AssertionError("Unexpected browser action in offline test")
 
@@ -79,6 +81,23 @@ class OutlineRegressionTests(unittest.IsolatedAsyncioTestCase):
         runner = self.runner(with_row())
         await runner.open_item(ITEM)
         self.assertEqual(runner.tab.outline_calls, 0)
+
+    async def test_retries_module_outline_actions_until_green_row_is_visible(self):
+        runner = self.runner(COLLAPSED, COLLAPSED, COLLAPSED, with_row(status="Completed"))
+        runner._current_module = 1
+        await runner.open_item(ITEM)
+        self.assertEqual(runner.tab.outline_calls, 2)
+        self.assertTrue(all(expression.endswith('("supplement:BvU8W",1)')
+                            for expression in runner.tab.outline_expressions))
+        self.assertTrue(await runner.verified_item(ITEM))
+
+    async def test_queue_runner_uses_current_course_module_to_open_outline(self):
+        runner = self.runner(COLLAPSED, with_row(status="Completed"))
+        runner.course = {"current_module": 3}
+        await runner.open_item(ITEM)
+        self.assertEqual(runner.tab.outline_calls, 1)
+        self.assertTrue(runner.tab.outline_expressions[0].endswith(
+            '("supplement:BvU8W",3)'))
 
     async def test_captured_interactive_lesson_is_ready_but_not_completed(self):
         log = ROOT / "tests/fixtures/logs/course_v3_20261014_151755_619347/progress.json"
@@ -194,6 +213,54 @@ process.stdout.write('14 DOM selector/guard checks passed');
                                 text=True, capture_output=True, timeout=10, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("14 DOM selector/guard checks passed", result.stdout)
+
+    def test_module_controls_and_scroll_only_target_course_outline(self):
+        harness = r"""
+const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
+const source=JSON.parse(fs.readFileSync(0,'utf8'));
+function run({path='/learn/philosophy/supplement/BvU8W/about-this-course',
+              moduleExpanded='true', atTop=false, lessonExpanded='true',
+              moduleNumber=1, hideModule1=false}) {
+  const clicked=[];
+  const scroll={scrollHeight:900,clientHeight:350,scrollTop:atTop ? 0 : 650,
+    parentElement:null,style:{visibility:'visible',overflowY:'auto'}};
+  const specs=(hideModule1 ? [] : [['Module 1: Introduction',moduleExpanded]]).concat([
+    ['Lesson 1: Getting Started',lessonExpanded],['Module 2: Next','false'],
+    ['Lesson 1: Different module','false']]);
+  const elements=specs.map(([title,expanded],i)=>({
+    innerText:title,disabled:false,parentElement:scroll,
+    getClientRects:()=>[{}],
+    getAttribute:name=>name==='aria-label' ? '' :
+      name==='aria-expanded' ? expanded : name==='aria-disabled' ? '' : '',
+    click:()=>clicked.push(i),
+    scrollIntoView:()=>{scroll.scrollTop=0;},
+    style:{visibility:'visible'}
+  }));
+  const ctx={location:{hostname:'www.coursera.org',pathname:path},
+    document:{querySelectorAll:()=>elements},getComputedStyle:e=>e.style};
+  const result=vm.runInNewContext('('+source+')('+JSON.stringify('supplement:BvU8W')+','+
+    JSON.stringify(moduleNumber)+')',ctx);
+  return {result,clicked,scrollTop:scroll.scrollTop};
+}
+assert.deepEqual(run({moduleExpanded:'false'}).clicked,[0]);
+const moved=run({});
+assert.equal(moved.scrollTop,0);
+assert.equal(moved.result.scrolled,true);
+assert.deepEqual(moved.clicked,[]);
+assert.deepEqual(run({atTop:true,lessonExpanded:'false'}).clicked,[1]);
+assert.deepEqual(run({atTop:true}).clicked,[]);
+assert.deepEqual(run({moduleNumber:3,atTop:true}).clicked,[]);
+assert.deepEqual(run({path:'/learn/other/supplement/BvU8W/item'}).clicked,[]);
+const virtualized=run({hideModule1:true});
+assert.equal(virtualized.result.scrolled,true);
+assert.equal(virtualized.scrollTop,370);
+assert.deepEqual(virtualized.clicked,[]);
+process.stdout.write('8 module expansion/scroll checks passed');
+"""
+        result = subprocess.run(["node", "-e", harness], input=json.dumps(course.LESSON_OUTLINE_JS),
+                                text=True, capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("8 module expansion/scroll checks passed", result.stdout)
 
 
 if __name__ == "__main__":
