@@ -279,6 +279,24 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([name for name, _ in tab.commands],
                          ["Page.navigate", "click_next", "Page.navigate", "click_next", "click_course"])
 
+    async def test_changed_next_page_is_reported_as_retryable_pagination_change(self):
+        tab = FakeTab([[card("new-course", "New course")],
+                       [card("later-course", "Later course")]])
+        original_evaluate = tab.evaluate
+
+        async def changed_before_click(expression):
+            if expression.startswith(learning.PAGE_JS):
+                request = json.loads(expression[len(learning.PAGE_JS) + 1:-1])
+                if request["action"] == "next_page":
+                    return {"error":"My Learning pagination changed before the next page."}
+            return await original_evaluate(expression)
+
+        tab.evaluate = changed_before_click
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaisesRegex(RuntimeError, "pagination changed"):
+                await learning.scan_in_progress(tab, set())
+        self.assertEqual([name for name, _ in tab.commands], ["Page.navigate"])
+
     async def test_read_only_scan_rejects_unknown_later_page_before_course_open(self):
         unknown = card("unknown-course", "Unknown", action="unsupported")
         unknown["source"] = "Course · 40% complete"

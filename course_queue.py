@@ -378,10 +378,41 @@ class QueueRunner(engine.CourseRunner):
                 plan = ledger.get("last_plan") or {}
                 selected = plan.get("selected_controls")
                 numeric = plan.get("numeric_answers")
-                if not isinstance(selected, list) or not isinstance(numeric, dict):
+                text_answers = plan.get("text_answers", {})
+                if (not isinstance(selected, list) or not isinstance(numeric, dict) or
+                        not isinstance(text_answers, dict) or
+                        any(not isinstance(identity, str) for identity in selected)):
                     raise engine.StopRun("The saved answer plan is missing; the visible Submit confirmation needs review.")
+                # A saved plan also lists dropdown option ids for feedback
+                # memory. The live confirmation exposes their displayed text,
+                # while selected controls cover only radio and checkbox inputs.
+                # Derive the expected dropdown values from the saved question
+                # and its one chosen option, including older checkpoints.
+                selected_choices = set(selected)
+                expected_select = {}
+                questions = plan.get("questions", [])
+                if not isinstance(questions, list):
+                    raise engine.StopRun("The saved question list is unreadable.")
+                for question in questions:
+                    if not isinstance(question, dict) or question.get("control_type") not in {"select", "native_select"}:
+                        continue
+                    control_id = question.get("control_id")
+                    options = question.get("options")
+                    if (not isinstance(control_id, str) or not isinstance(options, list) or
+                            control_id in expected_select):
+                        raise engine.StopRun("The saved dropdown answer plan is unreadable.")
+                    chosen = [option for option in options if isinstance(option, dict) and
+                              option.get("id") in selected_choices]
+                    if (len(chosen) != 1 or not isinstance(chosen[0].get("text"), str) or
+                            not chosen[0]["text"]):
+                        raise engine.StopRun("The saved dropdown answer is ambiguous.")
+                    expected_select[control_id] = chosen[0]["text"]
+                    selected_choices.remove(chosen[0]["id"])
+                expected_selected = [identity for identity in selected if identity in selected_choices]
                 submitted = await quiz_ui("confirm_submit", snapshot_id=current.get("snapshot_id"),
-                                          expected_selected=selected, expected_numeric=numeric)
+                                          expected_selected=expected_selected,
+                                          expected_numeric=numeric, expected_text=text_answers,
+                                          expected_select=expected_select)
                 if submitted.get("clicked") != "Submit":
                     raise engine.StopRun("The saved submission confirmation changed before recovery.")
                 self.event("quiz_confirmation_recovered", key=key, count=ledger.get("count", 0))
@@ -891,10 +922,12 @@ async def _scan_with_retry(store, tab, excluded):
             message = str(exc).lower()
             disconnected = any(part in message for part in (
                 "no close frame", "connection closed", "websocket connection is closed"))
-            transient = (isinstance(exc, (TimeoutError, OSError)) or
+            transient = (isinstance(exc, (TimeoutError, OSError, MyLearningSelectionChanged)) or
                          disconnected or
                          any(part in message for part in (
-                             "stable course list", "pagination changed", "page did not load",
+                             "stable course list", "pagination changed",
+                             "the next my learning page could not be selected",
+                             "page did not load",
                              "chrome runtime.evaluate", "navigation failed")))
             if not transient or attempt == 2:
                 raise
@@ -1671,3 +1704,8 @@ if __name__ == "__main__":
     except Exception as exc:
         print("QUEUE_ERROR:", str(exc) or type(exc).__name__)
         raise SystemExit(2)
+    finally:
+        try:
+            engine.log_browser_lifecycle_exit()
+        except Exception:
+            pass

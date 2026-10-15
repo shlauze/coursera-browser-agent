@@ -863,6 +863,8 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
             break
         clicked = await _evaluate(tab, PAGE_JS,
                                   {"action": "next_page", "signature": snapshot["signature"]})
+        if clicked.get("error") == "My Learning pagination changed before the next page.":
+            raise MyLearningSelectionChanged(clicked["error"])
         if not clicked.get("clicked") or clicked.get("previous_page") != page:
             raise RuntimeError("The next My Learning page could not be selected.")
         snapshot = await _wait_for_page(tab, expected_page=page + 1,

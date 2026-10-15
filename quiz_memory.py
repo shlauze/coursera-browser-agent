@@ -18,6 +18,7 @@ MAX_OPTIONS = 40
 MAX_STEM_CHARS = 4_000
 MAX_OPTION_CHARS = 2_000
 MAX_FEEDBACK_CHARS = 2_000
+MAX_TEXT_ANSWER_CHARS = 4_000
 _PUNCTUATION = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'", "–": "-", "—": "-"})
 _SCORE = re.compile(r"(?im)^[ \t]*(\d{1,7}(?:[.,]\d{1,6})?)[ \t]*/[ \t]*"
                     r"(\d{1,7}(?:[.,]\d{1,6})?)[ \t]+points?[ \t]*$")
@@ -84,12 +85,12 @@ def _question(value, ids=False):
     text = _stem(value.get("text"))
     selection = value.get("selection")
     options = value.get("options")
-    if not text or len(text) > MAX_STEM_CHARS or selection not in ("one", "many", "number"):
+    if not text or len(text) > MAX_STEM_CHARS or selection not in ("one", "many", "number", "short_text"):
         return None
-    if selection == "number":
+    if selection in ("number", "short_text"):
         if options != []:
             return None
-        result = {"text": text, "selection": "number", "options": []}
+        result = {"text": text, "selection": selection, "options": []}
         if ids:
             identity = value.get("control_id")
             if not isinstance(identity, str) or not identity or len(identity) > 200:
@@ -135,9 +136,25 @@ def _stored_question(value):
     question = _question(value)
     if not question or not isinstance(value.get("selected_answers"), list):
         return None
-    selected = [_text(answer) for answer in value["selected_answers"]]
-    if question["selection"] == "number":
-        if len(selected) != 1 or len(selected[0]) > 32 or not _NUMBER.fullmatch(selected[0]):
+    if question["selection"] == "short_text":
+        raw = value["selected_answers"]
+        if len(raw) != 1 or not isinstance(raw[0], str):
+            return None
+        # Whitespace inside an exact-match answer is part of that answer.
+        # Normalizing it as an option label would turn saved full-score
+        # evidence into a different response on the next attempt.
+        selected = [raw[0]]
+    else:
+        selected = [_text(answer) for answer in value["selected_answers"]]
+    if question["selection"] in ("number", "short_text"):
+        if len(selected) != 1:
+            return None
+        if question["selection"] == "number" and (len(selected[0]) > 32 or not _NUMBER.fullmatch(selected[0])):
+            return None
+        if question["selection"] == "short_text" and (
+                not selected[0].strip() or selected[0] != selected[0].strip() or
+                len(selected[0]) > MAX_TEXT_ANSWER_CHARS or
+                any(ord(char) < 32 or ord(char) == 127 for char in selected[0])):
             return None
         feedback = _crop_feedback(value.get("feedback") if isinstance(value.get("feedback"), str) else "")
         score, full, _ = _score(feedback)
@@ -198,7 +215,7 @@ def _history(value, limit=MAX_HISTORY):
 
 
 def record_attempt(history, questions, selected_controls, question_feedback_records, limit=MAX_HISTORY,
-                   numeric_answers=None):
+                   numeric_answers=None, text_answers=None):
     """Return new bounded history; input objects are never mutated.
 
     Feedback must contain exactly one unique known stem and must be the only
@@ -221,6 +238,16 @@ def record_attempt(history, questions, selected_controls, question_feedback_reco
                 len(value) > 32 or not _NUMBER.fullmatch(value)
                 for identity, value in numeric_answers.items())):
         return _keep_history(prior, limit)
+    text_answers = {} if text_answers is None else text_answers
+    text_ids = {q["_ids"][0] for q in prepared if q["selection"] == "short_text"}
+    if (not isinstance(text_answers, dict) or
+            any(identity not in text_ids or not isinstance(value, str) or
+                not value.strip() or value != value.strip() or
+                len(value) > MAX_TEXT_ANSWER_CHARS or
+                any(ord(char) < 32 or ord(char) == 127 or
+                    0xD800 <= ord(char) <= 0xDFFF for char in value)
+                for identity, value in text_answers.items())):
+        return _keep_history(prior, limit)
     selected_ids = set(selected_controls)
     feedback_by_stem = {}
     records = question_feedback_records if isinstance(question_feedback_records, list) else []
@@ -239,6 +266,11 @@ def record_attempt(history, questions, selected_controls, question_feedback_reco
         identities = question.pop("_ids")
         if question["selection"] == "number":
             value = numeric_answers.get(identities[0])
+            if value is None:
+                continue
+            selected = [value]
+        elif question["selection"] == "short_text":
+            value = text_answers.get(identities[0])
             if value is None:
                 continue
             selected = [value]
@@ -262,6 +294,7 @@ def context_for_questions(history, current_questions):
 
     Current question IDs are deliberately unnecessary. Matching requires the
     exact normalized stem, unique option text set, and unchanged selection mode.
+    Text and numeric answers have no options and still require a unique stem.
     """
     attempts = _history(history)
     current = _unique_questions(current_questions)

@@ -60,6 +60,36 @@ class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scan.await_count, 2)
         wait.assert_awaited_once_with(1)
 
+    async def test_changed_my_learning_next_page_restarts_full_scan(self):
+        store = SimpleNamespace(event=Mock())
+        tab = SimpleNamespace()
+        excluded = {"finished"}
+        discovered = {"id":"next-course", "url":"https://www.coursera.org/learn/next-course"}
+        mismatch = RuntimeError("The next My Learning page could not be selected.")
+        with patch.object(queue, "scan_in_progress", AsyncMock(side_effect=[
+                 mismatch, discovered])) as scan, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as wait:
+            result = await queue._scan_with_retry(store, tab, excluded)
+        self.assertEqual(result, discovered)
+        self.assertEqual(scan.await_count, 2)
+        self.assertEqual(scan.await_args_list[0].args, (tab, excluded))
+        self.assertEqual(scan.await_args_list[1].args, (tab, excluded))
+        wait.assert_awaited_once_with(1)
+        store.event.assert_called_once()
+
+    async def test_repeated_my_learning_next_page_mismatch_stops_after_three_scans(self):
+        store = SimpleNamespace(event=Mock())
+        tab = SimpleNamespace()
+        mismatch = RuntimeError("The next My Learning page could not be selected.")
+        with patch.object(queue, "scan_in_progress", AsyncMock(side_effect=mismatch)) as scan, \
+             patch.object(queue.asyncio, "sleep", AsyncMock()) as wait:
+            with self.assertRaisesRegex(RuntimeError,
+                                        "The next My Learning page could not be selected"):
+                await queue._scan_with_retry(store, tab, set())
+        self.assertEqual(scan.await_count, 3)
+        self.assertEqual([call.args[0] for call in wait.await_args_list], [1, 2])
+        self.assertEqual(store.event.call_count, 2)
+
     async def test_my_learning_discovery_reconnects_after_closed_websocket(self):
         store = SimpleNamespace(event=Mock())
         tab = SimpleNamespace(connect=AsyncMock())

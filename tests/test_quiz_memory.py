@@ -19,7 +19,79 @@ def feedback(q, score="1 / 1 point", number=1, extra=""):
     return {"question_number": number, "text": f"Question {number}\n{q['text']}\n{extra}\n{score}"}
 
 
+def short_text_question(stem="Name one way to reduce overfitting.", identity="field-1"):
+    return {"id": "q1", "text": stem, "selection": "short_text",
+            "control_id": identity, "options": [], "min_length": 1, "max_length": 500}
+
+
 class QuizMemoryTests(unittest.TestCase):
+    def test_short_text_history_preserves_internal_spaces_exactly(self):
+        q = short_text_question()
+        answer = "weight  decay"
+        history = memory.record_attempt([], [q], [], [feedback(q)],
+                                        text_answers={"field-1": answer})
+        self.assertEqual(history[0]["questions"][0]["selected_answers"], [answer])
+        context = memory.context_for_questions(history, [short_text_question(identity="new-field")])
+        self.assertEqual(context[0]["attempts"][0]["selected_answers"], [answer])
+        self.assertTrue(context[0]["attempts"][0]["full_score"])
+
+    def test_short_text_history_rejects_control_characters_without_normalizing(self):
+        q = short_text_question()
+        for answer in ("weight\n decay", "weight\x00decay", "weight\x7fdecay"):
+            with self.subTest(answer=repr(answer)):
+                self.assertEqual(memory.record_attempt([], [q], [], [],
+                                 text_answers={"field-1": answer}), [])
+                history = memory.record_attempt([], [q], [], [feedback(q)],
+                                                text_answers={"field-1": "weight decay"})
+                history[0]["questions"][0]["selected_answers"] = [answer]
+                self.assertEqual(memory.context_for_questions(history, [q]), [])
+
+    def test_short_text_answer_matches_stem_after_control_id_changes(self):
+        original = short_text_question(identity="old-field")
+        history = memory.record_attempt([], [original], [], [feedback(original)],
+                                        text_answers={"old-field": "Dropout"})
+        self.assertEqual(history[0]["questions"][0]["selected_answers"], ["Dropout"])
+        current = short_text_question(identity="new-field")
+        context = memory.context_for_questions(history, [current])
+        self.assertEqual(context[0]["selection"], "short_text")
+        self.assertEqual(context[0]["attempts"][0]["selected_answers"], ["Dropout"])
+        self.assertTrue(context[0]["attempts"][0]["full_score"])
+        self.assertNotIn("old-field", json.dumps(context))
+        self.assertEqual(memory.context_for_questions(history,
+                         [short_text_question("Name a different strategy.")]), [])
+        self.assertEqual(memory.context_for_questions(history,
+                         [{"text": original["text"], "selection": "number", "options": []}]), [])
+
+    def test_short_text_answer_coexists_with_choices_and_numbers(self):
+        choice = question()
+        numeric = {"id": "n", "text": "How many layers?", "selection": "number",
+                   "control_id": "n-field", "options": []}
+        free = short_text_question(identity="text-field")
+        history = memory.record_attempt([], [choice, numeric, free], ["q1a"],
+                                        [feedback(choice), feedback(numeric, number=2),
+                                         feedback(free, number=3)],
+                                        numeric_answers={"n-field": "3"},
+                                        text_answers={"text-field": "Use dropout."})
+        entries = history[0]["questions"]
+        self.assertEqual([entry["selection"] for entry in entries], ["one", "number", "short_text"])
+        self.assertEqual([entry["selected_answers"] for entry in entries],
+                         [["Alpha"], ["3"], ["Use dropout."]])
+
+    def test_invalid_short_text_mapping_and_saved_answers_are_ignored(self):
+        q = short_text_question()
+        for answers in ({"wrong-control": "Dropout"}, {"field-1": " "},
+                        {"field-1": " Dropout"}, {"field-1": "Dropout "},
+                        {"field-1": "Drop\ud800out"},
+                        {"field-1": "x" * (memory.MAX_TEXT_ANSWER_CHARS + 1)},
+                        {"field-1": 123}, []):
+            self.assertEqual(memory.record_attempt([], [q], [], [], text_answers=answers), [])
+        history = memory.record_attempt([], [q], [], [feedback(q)],
+                                        text_answers={"field-1": "Dropout"})
+        corrupt = copy.deepcopy(history)
+        corrupt[0]["questions"][0]["selected_answers"] = ["x" * (memory.MAX_TEXT_ANSWER_CHARS + 1)]
+        self.assertEqual(memory.context_for_questions(corrupt, [q]), [])
+        self.assertEqual(history[0]["questions"][0]["selected_answers"], ["Dropout"])
+
     def test_shuffled_ids_options_and_questions_match_text_only(self):
         a, b = question(), question("Which symbol is named gamma?", "q2")
         history = memory.record_attempt([], [a, b], ["q1a", "q2b"], [feedback(a), feedback(b, "0 / 1 point", 2)])

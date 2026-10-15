@@ -54,11 +54,51 @@ ROLE_PLAY_JS = r"""(request=>{
   const starts=activityStarts.length===1?activityStarts:named('Start Role Play');
   const ends=named('End Role Play');
   const retries=named('Practice again');
-  const completedDialogue=named('Try again').length===1&&
-    /\bThe Dialogue has ended\b/i.test(clean(document.body?.innerText));
+  // A Coursera daily-goal modal can set aria-hidden on the completed lesson's
+  // ancestor.  Inspect this exact completed-state container read-only without
+  // treating aria-hidden as evidence that the Dialogue itself disappeared.
+  const renderedForType=e=>{
+    if(!e||!e.getClientRects().length)return false;
+    for(let p=e;p;p=p.parentElement){
+      const s=getComputedStyle(p);
+      if(p.hidden||s.display==='none'||['hidden','collapse'].includes(s.visibility))return false;
+    }
+    return true;
+  };
+  const completedRoots=[...document.querySelectorAll('[data-testid="dialogue-content"]')]
+    .filter(renderedForType);
+  const completedRoot=completedRoots.length===1?completedRoots[0]:null;
+  const endPanels=completedRoot?
+    [...completedRoot.querySelectorAll('[data-testid="chat-end-buttons"]')]
+      .filter(renderedForType):[];
+  const completedRetries=endPanels.length===1?
+    [...endPanels[0].querySelectorAll('button,[role="button"]')]
+      .filter(renderedForType).filter(enabled).filter(e=>label(e)==='Try again'):[];
+  const completedRoleRoots=[...document.querySelectorAll('[data-testid="learner-role-play-item"]')]
+    .filter(renderedForType);
+  const completedRoleRoot=completedRoleRoots.length===1&&
+    /\bThe Role Play activity has ended\b/i.test(clean(completedRoleRoots[0].innerText))?
+    completedRoleRoots[0]:null;
+  const roleEndPanels=completedRoleRoot?
+    [...completedRoleRoot.querySelectorAll('[data-testid="chat-end-buttons"]')]
+      .filter(renderedForType):[];
+  const roleRetries=roleEndPanels.length===1?
+    [...roleEndPanels[0].querySelectorAll('button,[role="button"]')]
+      .filter(renderedForType).filter(enabled).filter(e=>label(e)==='Practice again'):[];
+  const completedRolePlay=!!completedRoleRoot&&roleEndPanels.length===1&&
+    roleRetries.length===1&&
+    /\bThe Role Play activity has ended\b/i.test(clean(completedRoleRoot.innerText))&&
+    /\bTask\s*1\s*:/i.test(clean(completedRoleRoot.innerText))&&
+    document.querySelectorAll('[data-testid="dialogue-content"]').length===0;
+  const completedDialogue=(completedRoot&&endPanels.length===1&&
+    completedRetries.length===1&&
+    /\bThe Dialogue has ended\b/i.test(clean(completedRoot.innerText))&&
+    document.querySelectorAll('[data-testid="learner-role-play-item"]').length===0)||
+    (named('Try again').length===1&&
+     /\bThe Dialogue has ended\b/i.test(clean(document.body?.innerText)));
   const dialogue=named('Start Dialogue').length+named('End Dialogue').length+
     Number(completedDialogue);
-  const rolePlay=starts.length>0||ends.length>0||retries.length>0||
+  const rolePlay=starts.length>0||ends.length>0||retries.length>0||completedRolePlay||
     [...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')].filter(visible)
       .some(e=>/^End the Role Play\?/i.test(clean(e.innerText)));
   const kind=rolePlay&&dialogue?'ambiguous':rolePlay?'role_play':dialogue?'dialogue':null;
@@ -85,6 +125,16 @@ ROLE_PLAY_JS = r"""(request=>{
   const taskComplete=panel?.complete??null,taskTotal=panel?.total??null;
   const tasks=panel?.tasks||[];
   const dialogs=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')].filter(visible);
+  const goalDialogs=[...document.querySelectorAll(
+    '[role="dialog"][aria-modal="true"][data-testid="scroll-container"]')]
+    .filter(visible).filter(e=>{
+      const text=clean(e.innerText);
+      return text.startsWith("You've completed today's goals!")&&
+        text.includes('Continue to use this momentum to get you closer to completing this course.');
+    });
+  const goalButtons=goalDialogs.length===1?
+    [...goalDialogs[0].querySelectorAll('button,[role="button"]')]
+      .filter(visible).filter(enabled).filter(e=>label(e)==='Continue learning'):[];
   const modal=dialogs.length===1?dialogs[0]:null;
   const modalText=modal?clean(modal.innerText):'';
   const confirms=modal?[...modal.querySelectorAll('button,[role="button"]')].filter(visible)
@@ -109,13 +159,16 @@ ROLE_PLAY_JS = r"""(request=>{
     }
   }
   const main=document.querySelector('main,[role="main"]');
-  const conversationText=clean((main||document.body).innerText).slice(-12000);
+  const conversationText=clean((completedRolePlay?completedRoleRoot:main||document.body).innerText)
+    .slice(-12000);
   const scenario=clean(document.querySelector('[data-testid="role-play-scenario"]')?.innerText).slice(0,3500);
   const goal=clean(document.querySelector('[data-testid="role-play-goal"]')?.innerText).slice(0,2000);
-  const feedbackText=retries.length&&/\bTask\s*1\s*:/i.test(conversationText)?
+  const feedbackText=(retries.length||completedRolePlay)&&
+    /\bTask\s*1\s*:/i.test(conversationText)?
     conversationText.slice(conversationText.search(/\bTask\s*1\s*:/i),
       conversationText.search(/\bTask\s*1\s*:/i)+12000):'';
-  const phase=validModal?'confirm':retries.length?'feedback':starts.length?'intro':'active';
+  const phase=validModal?'confirm':(retries.length||completedRolePlay)?'feedback':
+    starts.length?'intro':'active';
   const state=()=>({url:location.href,ready:document.readyState,role_play:rolePlay,kind,
     phase,task_total:taskTotal,task_complete:taskComplete,tasks,
     latest_prompt:conversationText.slice(-3000),conversation_text:conversationText,
@@ -123,8 +176,15 @@ ROLE_PLAY_JS = r"""(request=>{
     last_user_message:'',user_message_count:0,composer_value:composer?.value||'',
     start_count:starts.length,end_count:ends.length,send_count:sends.length,
     practice_again_count:retries.length,confirm_count:confirms.length,
-    feedback_text:feedbackText,modal_text:modalText});
+    feedback_text:feedbackText,modal_text:modalText,
+    goal_modal_count:goalDialogs.length,goal_continue_count:goalButtons.length});
   if(!request.action||request.action==='inspect')return state();
+  if(request.action==='dismiss_goal'){
+    if(goalDialogs.length!==1||goalButtons.length!==1)
+      return {error:'The exact daily-goal modal has no unique Continue learning action.',...state()};
+    goalButtons[0].click();
+    return {clicked:'dismiss_goal',...state()};
+  }
   if(!rolePlay)return {error:'This Coach page is not a Role Play.',...state()};
   if(request.action==='start'){
     if(phase!=='intro'||starts.length!==1||dialogs.length)return {error:'Start Role Play is ambiguous.',...state()};
@@ -357,6 +417,9 @@ def _review_feedback(text, total):
                          r'acknowledged|identified|explained|addressed|requested|outlined|'
                          r'considered|showed|justified|clarified|evaluated|presented|'
                          r'noted|maintained)\b|'
+                         r'you (?:effectively|clearly|successfully|appropriately)\s+'
+                         r'(?:communicated|linked|used)\b|'
+                         r'you used (?:excellent|clear|effective|appropriate|strong|helpful)\b|'
                          r'your [^.]{0,100}\b(?:was|were|is|are)\s+(?:well|clear|logical|'
                          r'effective|appropriate|thorough|strong)\b|'
                          r'(?:excellent|well[- ]done|good|effective|strong|clear|appropriate|'
@@ -377,6 +440,22 @@ async def _wait_state(runner, url, expected, deadline, limit=30):
             break
         await asyncio.sleep(.8)
     raise engine.StopRun('The Role Play did not reach the expected state after a bounded wait.')
+
+
+async def _wait_feedback_retry(runner, url, deadline):
+    """Wait for the daily-goal backdrop to leave before using Practice again."""
+    for _ in range(30):
+        state = await _ui(runner.tab, url)
+        if state.get('error'):
+            raise engine.StopRun('The Role Play page changed after closing the daily-goal modal: ' +
+                                 state['error'])
+        if (state.get('role_play') and state.get('phase') == 'feedback' and
+                state.get('goal_modal_count') == 0 and state.get('practice_again_count') == 1):
+            return state
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(.4)
+    raise engine.StopRun('Practice again did not appear after the daily-goal modal closed.')
 
 
 async def _await_tasks(runner, url, state, deadline):
@@ -421,6 +500,12 @@ async def run_role_play(runner, item, *, max_seconds=MAX_SECONDS):
             ledger['previous_feedback'] = state['feedback_text'][:8000]
             _event(runner, 'feedback_recorded', item,
                    characters=len(ledger['previous_feedback']))
+        if state.get('practice_again_count') != 1 and state.get('goal_modal_count') == 1:
+            dismissed = await _ui(runner.tab, url, 'dismiss_goal')
+            if dismissed.get('clicked') != 'dismiss_goal':
+                raise engine.StopRun('The daily-goal modal could not be dismissed before Role Play retry.')
+            _event(runner, 'daily_goal_dismissed', item)
+            state = await _wait_feedback_retry(runner, url, deadline)
         if state.get('practice_again_count') != 1:
             raise engine.StopRun('The prior Role Play feedback is incomplete and Practice again is unavailable.')
         if ledger is not None and ledger.get('retry_count', 0) >= 2:

@@ -608,7 +608,9 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
             runner, store = make_runner(directory)
             async with engine.asyncio.timeout(0.04) as budget:
                 runner._course_timeout = budget
-                await runner.on_quiz_cooldown(0.10)
+                # Leave ample slack for a loaded CI host: the assertion is
+                # about extending the deadline, not millisecond scheduling.
+                await runner.on_quiz_cooldown(1.0)
                 await engine.asyncio.sleep(0.06)
             self.assertIn('Ожидание', store.course('philosophy')['message'])
 
@@ -683,6 +685,124 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ledger['count'], 1)
                 self.assertTrue(ledger['pending'])
                 self.assertEqual(ledger['submit_phase'], 'confirmation_observed')
+
+    async def test_restart_confirmation_rechecks_persisted_short_text_answers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store, result = self.prepare(directory,
+                {'count':1, 'pending':True, 'submit_phase':'confirmation_observed',
+                 'last_plan':{'questions':[], 'selected_controls':['c1'], 'numeric_answers':{},
+                              'text_answers':{'c0':'attack', 'c3':'audit'}}}, passed=True)
+            confirmation = {**result,
+                'url':URL + '/assignment-submission/test/attempt',
+                'result_page':False, 'blocking_dialog':True, 'editable_form':False,
+                'dialog_kind':'submit_confirmation', 'snapshot_id':'saved-form',
+                'page_text':'Ready to submit? Submit Cancel'}
+            requests = []
+            confirmed = False
+
+            async def evaluate(expression):
+                nonlocal confirmed
+                request = json.loads(expression[len(engine.QUIZ_UI_JS) + 1:-1])
+                requests.append(request)
+                if request['action'] == 'inspect':
+                    return result if confirmed else confirmation
+                self.assertEqual(request['action'], 'confirm_submit')
+                self.assertEqual(request['snapshot_id'], 'saved-form')
+                self.assertEqual(request['expected_selected'], ['c1'])
+                self.assertEqual(request['expected_numeric'], {})
+                self.assertEqual(request['expected_text'], {'c0':'attack', 'c3':'audit'})
+                confirmed = True
+                return {'url':confirmation['url'], 'clicked':'Submit'}
+
+            runner.tab.evaluate = evaluate
+            runner.snapshot = AsyncMock(return_value={
+                'url':result['url'], 'feedback':['You passed']})
+            runner.verified_item = AsyncMock(return_value=True)
+            with patch.object(engine.asyncio, 'sleep', new=AsyncMock()):
+                await runner.quiz({'key':KEY})
+
+            self.assertEqual([request['action'] for request in requests],
+                             ['inspect', 'confirm_submit', 'inspect'])
+            ledger = persisted_ledger(store)
+            self.assertEqual(ledger['count'], 1)
+            self.assertFalse(ledger['pending'])
+            self.assertTrue(ledger['passed'])
+
+    async def test_restart_confirmation_rechecks_mixed_dropdown_and_short_text_answers(self):
+        for dropdown_type in ('select', 'native_select'):
+            with self.subTest(dropdown_type=dropdown_type), tempfile.TemporaryDirectory() as directory:
+                runner, store, result = self.prepare(directory,
+                    {'count':1, 'pending':True, 'submit_phase':'confirmation_observed',
+                     'last_plan':{
+                         'questions':[{'id':'q2', 'control_type':dropdown_type,
+                                       'control_id':'c2', 'options':[
+                                           {'id':'c2:o0', 'text':'CNN'},
+                                           {'id':'c2:o1', 'text':'LSTM'}]}],
+                         'selected_controls':['c1', 'c2:o1'],
+                         'numeric_answers':{}, 'text_answers':{'c0':'attack'}}}, passed=True)
+                confirmation = {**result,
+                    'url':URL + '/assignment-submission/test/attempt',
+                    'result_page':False, 'blocking_dialog':True, 'editable_form':False,
+                    'dialog_kind':'submit_confirmation', 'snapshot_id':'saved-form',
+                    'page_text':'Ready to submit? Submit Cancel'}
+                requests = []
+                confirmed = False
+
+                async def evaluate(expression):
+                    nonlocal confirmed
+                    request = json.loads(expression[len(engine.QUIZ_UI_JS) + 1:-1])
+                    requests.append(request)
+                    if request['action'] == 'inspect':
+                        return result if confirmed else confirmation
+                    self.assertEqual(request['action'], 'confirm_submit')
+                    self.assertEqual(request['snapshot_id'], 'saved-form')
+                    self.assertEqual(request['expected_selected'], ['c1'])
+                    self.assertEqual(request['expected_numeric'], {})
+                    self.assertEqual(request['expected_text'], {'c0':'attack'})
+                    self.assertEqual(request['expected_select'], {'c2':'LSTM'})
+                    confirmed = True
+                    return {'url':confirmation['url'], 'clicked':'Submit'}
+
+                runner.tab.evaluate = evaluate
+                runner.snapshot = AsyncMock(return_value={
+                    'url':result['url'], 'feedback':['You passed']})
+                runner.verified_item = AsyncMock(return_value=True)
+                with patch.object(engine.asyncio, 'sleep', new=AsyncMock()):
+                    await runner.quiz({'key':KEY})
+
+                self.assertEqual([request['action'] for request in requests],
+                                 ['inspect', 'confirm_submit', 'inspect'])
+                ledger = persisted_ledger(store)
+                self.assertEqual(ledger['count'], 1)
+                self.assertFalse(ledger['pending'])
+                self.assertTrue(ledger['passed'])
+
+    async def test_restart_confirmation_rejects_ambiguous_dropdown_selection(self):
+        for selected in (['c2:o0', 'c2:o1'], ['c2:o9'], []):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as directory:
+                runner, store, result = self.prepare(directory,
+                    {'count':1, 'pending':True, 'submit_phase':'confirmation_observed',
+                     'last_plan':{
+                         'questions':[{'id':'q2', 'control_type':'select',
+                                       'control_id':'c2', 'options':[
+                                           {'id':'c2:o0', 'text':'CNN'},
+                                           {'id':'c2:o1', 'text':'LSTM'}]}],
+                         'selected_controls':['c1', *selected],
+                         'numeric_answers':{}, 'text_answers':{'c0':'attack'}}})
+                confirmation = {**result,
+                    'url':URL + '/assignment-submission/test/attempt',
+                    'result_page':False, 'blocking_dialog':True, 'editable_form':False,
+                    'dialog_kind':'submit_confirmation', 'snapshot_id':'saved-form',
+                    'page_text':'Ready to submit? Submit Cancel'}
+                runner.tab.evaluate = AsyncMock(return_value=confirmation)
+                with self.assertRaisesRegex(engine.StopRun, 'saved dropdown answer is ambiguous'):
+                    await runner.quiz({'key':KEY})
+                requests = [json.loads(call.args[0][len(engine.QUIZ_UI_JS) + 1:-1])
+                            for call in runner.tab.evaluate.await_args_list]
+                self.assertEqual([request['action'] for request in requests], ['inspect'])
+                ledger = persisted_ledger(store)
+                self.assertEqual(ledger['count'], 1)
+                self.assertTrue(ledger['pending'])
 
     async def test_previous_feedback_link_does_not_replace_pending_draft_result(self):
         with tempfile.TemporaryDirectory() as directory:

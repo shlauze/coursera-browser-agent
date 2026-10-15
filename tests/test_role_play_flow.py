@@ -22,11 +22,16 @@ ITEM = {"key": FIXTURE["key"], "url": FIXTURE["url"], "title": FIXTURE["title"]}
 class RolePlayTab:
     """A deterministic page exposing observable task progress, not a fake grade."""
 
-    def __init__(self, *, ended=False, feedback="", progress=0, advance=True):
+    def __init__(self, *, ended=False, feedback="", progress=0, advance=True,
+                 goal_modal=False, goal_dismiss_lag=0):
         self.ended = ended
         self.feedback = feedback
         self.progress = progress
         self.advance = advance
+        self.goal_modal = goal_modal
+        self.goal_dismiss_lag = goal_dismiss_lag
+        self.goal_dismiss_remaining = 0
+        self.goal_inspects_after_dismiss = 0
         self.phase = "feedback" if ended else "active"
         self.composer = ""
         self.messages = []
@@ -44,7 +49,9 @@ class RolePlayTab:
                 "start_count": 0, "end_count": int(self.phase == "active"),
                 "send_count": int(self.phase == "active"),
                 "feedback_text": self.feedback, "confirm_count": int(self.phase == "confirm"),
-                "practice_again_count": int(self.phase == "feedback"),
+                "practice_again_count": int(self.phase == "feedback" and not self.goal_modal),
+                "goal_modal_count": int(self.goal_modal),
+                "goal_continue_count": int(self.goal_modal),
                 "modal_text": "End the Role Play? Reason not provided Yes, end the Role Play Cancel"
                     if self.phase == "confirm" else "",
                 **extra}
@@ -55,6 +62,19 @@ class RolePlayTab:
         request = json.loads(expression[len(prefix):-1])
         action = request.get("action", "inspect")
         self.actions.append(action)
+        if action == "inspect" and self.goal_dismiss_remaining:
+            self.goal_inspects_after_dismiss += 1
+            self.goal_dismiss_remaining -= 1
+            if self.goal_dismiss_remaining == 0:
+                self.goal_modal = False
+        if action == "dismiss_goal":
+            if not self.goal_modal:
+                return self.state(error="The exact daily-goal modal was absent.")
+            if self.goal_dismiss_lag:
+                self.goal_dismiss_remaining = self.goal_dismiss_lag
+            else:
+                self.goal_modal = False
+            return self.state(clicked="dismiss_goal")
         if action == "practice_again":
             self.ended = False
             self.phase = "active"
@@ -176,6 +196,36 @@ class RolePlayValidationTests(unittest.TestCase):
         )
         self.assertTrue(role_play._review_feedback(feedback, 5))
 
+    def test_product_team_role_play_feedback_accepts_five_affirmative_sections(self):
+        feedback = (
+            "Task 1: Explain risk to the product team. You effectively communicated the model's "
+            "security risks in plain language and kept the team focused on observable behavior. "
+            "Task 2: Make the concepts accessible. You used excellent analogies to explain "
+            "model drift and monitoring so the stakeholders could follow the discussion. "
+            "Task 3: Connect risk and impact. You successfully linked technical model behavior "
+            "to concrete product outcomes and gave stakeholders a useful basis for decisions. "
+            "Task 4: Recommend action. You provided a practical sequence of review, validation, "
+            "and measured deployment steps with clear ownership. "
+            "Task 5: Communicate professionally. You maintained a professional tone, invited "
+            "questions, and kept uncertainty visible while requesting appropriate support."
+        )
+        self.assertTrue(role_play._review_feedback(feedback, 5))
+
+    def test_product_team_feedback_does_not_accept_unqualified_used_jargon(self):
+        feedback = (
+            "Task 1: Explain risk to the product team. You effectively communicated the model's "
+            "security risks in plain language and kept the team focused on observable behavior. "
+            "Task 2: Make the concepts accessible. You used jargon without explaining the terms, "
+            "which confused stakeholders and obscured the risk rather than clarifying it. "
+            "Task 3: Connect risk and impact. You successfully linked technical model behavior "
+            "to concrete product outcomes and gave stakeholders a useful basis for decisions. "
+            "Task 4: Recommend action. You provided a practical sequence of review, validation, "
+            "and measured deployment steps with clear ownership. "
+            "Task 5: Communicate professionally. You maintained a professional tone, invited "
+            "questions, and kept uncertainty visible while requesting appropriate support."
+        )
+        self.assertFalse(role_play._review_feedback(feedback, 5))
+
     def test_reply_request_contains_rubric_and_current_prompt(self):
         state = RolePlayTab().state()
         state["scenario"] = "The malware detector's accuracy fell; the cause is still unknown."
@@ -275,6 +325,131 @@ process.stdout.write(JSON.stringify({kind:state.kind,rolePlay:state.role_play}))
                                 capture_output=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {"kind": "dialogue", "rolePlay": False})
+
+    def test_completed_dialogue_is_classified_under_daily_goal_modal(self):
+        script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
+const url='https://www.coursera.org/learn/example-course/coach/DIALOGUE/lesson';
+const e=text=>({innerText:text,hidden:false,inert:false,parentElement:null,disabled:false,
+  getClientRects(){return [1]},getAttribute(){return null}});
+const hiddenAncestor=e('');hiddenAncestor.getAttribute=name=>
+  name==='aria-hidden'?'true':null;
+const again=e('Try again');again.parentElement=hiddenAncestor;
+const panel=e('Try again');panel.parentElement=hiddenAncestor;
+panel.querySelectorAll=selector=>selector==='button,[role="button"]'?[again]:[];
+const completed=e('The Dialogue has ended. Try again');
+completed.parentElement=hiddenAncestor;
+completed.querySelectorAll=selector=>
+  selector==='[data-testid="chat-end-buttons"]'?[panel]:[];
+const modal=e("You've completed today's goals!");
+modal.querySelectorAll=()=>[];
+global.location=new URL(url);
+global.document={readyState:'complete',body:e('The Dialogue has ended.'),
+  querySelector:()=>null,querySelectorAll:s=>{
+    if(s==='button,[role="button"]')return [again];
+    if(s==='[data-testid="dialogue-content"]')return [completed];
+    if(s==='[role="dialog"],[aria-modal="true"]')return [modal];
+    return [];
+  }};
+global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+const state=run({url,action:'inspect'});
+process.stdout.write(JSON.stringify({kind:state.kind,rolePlay:state.role_play,
+  endCount:state.end_count,startCount:state.start_count}));
+'''
+        result = subprocess.run(["node", "-"], input=script, text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "kind": "dialogue", "rolePlay": False, "endCount": 0, "startCount": 0})
+
+    def test_completed_role_play_feedback_is_read_only_under_daily_goal_modal(self):
+        script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
+const url='https://www.coursera.org/learn/example-course/coach/ROLE/lesson';
+const e=text=>({innerText:text,hidden:false,inert:false,parentElement:null,disabled:false,
+  getClientRects(){return [1]},getAttribute(){return null}});
+const hiddenAncestor=e('');hiddenAncestor.getAttribute=name=>
+  name==='aria-hidden'?'true':null;
+let clicks=0;
+const again=e('Practice again');again.parentElement=hiddenAncestor;
+again.click=()=>clicks++;
+const panel=e('Practice again');panel.parentElement=hiddenAncestor;
+panel.querySelectorAll=selector=>selector==='button,[role="button"]'?[again]:[];
+const completed=e('The Role Play activity has ended. Task 1: You described the evidence clearly.');
+completed.parentElement=hiddenAncestor;
+completed.querySelectorAll=selector=>
+  selector==='[data-testid="chat-end-buttons"]'?[panel]:[];
+const modal=e("You've completed today's goals!");modal.querySelectorAll=()=>[];
+global.location=new URL(url);
+global.document={readyState:'complete',body:e('The Role Play activity has ended.'),
+  querySelector:()=>null,querySelectorAll:s=>{
+    if(s==='button,[role="button"]')return [again];
+    if(s==='[data-testid="learner-role-play-item"]')return [completed];
+    if(s==='[role="dialog"],[aria-modal="true"]')return [modal];
+    return [];
+  }};
+global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+const state=run({url,action:'inspect'});
+const refused=run({url,action:'practice_again'});
+process.stdout.write(JSON.stringify({kind:state.kind,phase:state.phase,
+  feedback:state.feedback_text,practiceCount:state.practice_again_count,
+  refused:!!refused.error,clicks}));
+'''
+        result = subprocess.run(["node", "-"], input=script, text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value["kind"], "role_play")
+        self.assertEqual(value["phase"], "feedback")
+        self.assertIn("Task 1:", value["feedback"])
+        self.assertEqual(value["practiceCount"], 0)
+        self.assertTrue(value["refused"])
+        self.assertEqual(value["clicks"], 0)
+
+    def test_daily_goal_modal_is_dismissed_only_with_exact_continue_learning_button(self):
+        script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
+const url='https://www.coursera.org/learn/example-course/coach/ROLE/lesson';
+const e=text=>({innerText:text,hidden:false,inert:false,parentElement:null,disabled:false,
+  getClientRects(){return [1]},getAttribute(){return null}});
+let hidden=true,goalClicks=0,practiceClicks=0;
+const backdrop=e('');backdrop.getAttribute=name=>name==='aria-hidden'&&hidden?'true':null;
+const again=e('Practice again');again.parentElement=backdrop;
+again.click=()=>practiceClicks++;
+const endButtons=e('Practice again');endButtons.parentElement=backdrop;
+endButtons.querySelectorAll=s=>s==='button,[role="button"]'?[again]:[];
+const completed=e('The Role Play activity has ended. Task 1: No evidence was given.');
+completed.parentElement=backdrop;
+completed.querySelectorAll=s=>s==='[data-testid="chat-end-buttons"]'?[endButtons]:[];
+const continueButton=e('Continue learning');
+continueButton.click=()=>{goalClicks++;modal.hidden=true;hidden=false};
+const modal=e("You've completed today's goals! Wrong wording. Continue learning");
+modal.querySelectorAll=s=>s==='button,[role="button"]'?[continueButton]:[];
+global.location=new URL(url);
+global.document={readyState:'complete',body:e('The Role Play activity has ended.'),
+  querySelector:()=>null,querySelectorAll:s=>{
+    if(s==='button,[role="button"]')return [again,continueButton];
+    if(s==='[data-testid="learner-role-play-item"]')return [completed];
+    if(s==='[role="dialog"],[aria-modal="true"]')return [modal];
+    if(s==='[role="dialog"][aria-modal="true"][data-testid="scroll-container"]')return [modal];
+    return [];
+  }};
+global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+const wrong=run({url,action:'dismiss_goal'});
+const before=run({url,action:'inspect'});
+modal.innerText="You've completed today's goals! Continue to use this momentum to get you closer to completing this course. Continue learning";
+const dismissed=run({url,action:'dismiss_goal'});
+const after=run({url,action:'inspect'});
+const retried=run({url,action:'practice_again'});
+process.stdout.write(JSON.stringify({wrong:!!wrong.error,initialGoalClicks:wrong.goal_modal_count,
+  beforePractice:before.practice_again_count,dismissed:dismissed.clicked,
+  afterPractice:after.practice_again_count,afterGoal:after.goal_modal_count,
+  retried:retried.clicked,goalClicks,practiceClicks}));
+'''
+        result = subprocess.run(["node", "-"], input=script, text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "wrong": True, "initialGoalClicks": 0, "beforePractice": 0,
+            "dismissed": "dismiss_goal", "afterPractice": 1, "afterGoal": 0,
+            "retried": "Practice again", "goalClicks": 1, "practiceClicks": 1})
 
     def test_plain_numbered_task_panel_is_read_without_list_elements(self):
         script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
@@ -432,6 +607,33 @@ class RolePlayDraftValidationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RolePlayFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_incomplete_feedback_under_daily_goal_modal_dismisses_then_retries(self):
+        tab = RolePlayTab(ended=True, feedback=FIXTURE["premature_feedback"],
+                          progress=0, goal_modal=True)
+        runner = RolePlayRunner(tab)
+        with patch.object(role_play, "_draft_reply", AsyncMock(side_effect=substantive_reply)), \
+             patch.object(role_play.asyncio, "sleep", immediate_sleep):
+            await role_play.run_role_play(runner, ITEM, max_seconds=30)
+        self.assertFalse(tab.goal_modal)
+        self.assertEqual(tab.progress, len(FIXTURE["tasks"]))
+        self.assertLess(tab.actions.index("dismiss_goal"), tab.actions.index("practice_again"))
+        self.assertLess(tab.actions.index("practice_again"), tab.actions.index("send"))
+        self.assertEqual(tab.actions.count("confirm_end"), 1)
+        self.assertEqual(runner.checkpoint["role_plays"][ITEM["key"]]["phase"], "completed")
+
+    async def test_retry_waits_for_daily_goal_modal_to_disappear(self):
+        tab = RolePlayTab(ended=True, feedback=FIXTURE["premature_feedback"],
+                          progress=0, goal_modal=True, goal_dismiss_lag=3)
+        runner = RolePlayRunner(tab)
+        with patch.object(role_play, "_draft_reply", AsyncMock(side_effect=substantive_reply)), \
+             patch.object(role_play.asyncio, "sleep", immediate_sleep):
+            await role_play.run_role_play(runner, ITEM, max_seconds=30)
+        self.assertEqual(tab.goal_inspects_after_dismiss, 3)
+        self.assertFalse(tab.goal_modal)
+        self.assertLess(tab.actions.index("dismiss_goal"), tab.actions.index("practice_again"))
+        self.assertEqual(tab.actions.count("practice_again"), 1)
+        self.assertEqual(runner.checkpoint["role_plays"][ITEM["key"]]["phase"], "completed")
+
     async def test_auto_finish_accepts_positive_five_task_feedback_and_green(self):
         tab = AutoFinishRolePlayTab(FIXTURE["successful_feedback"], transient_active=True)
         runner = RolePlayRunner(tab)

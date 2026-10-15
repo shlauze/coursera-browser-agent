@@ -33,6 +33,31 @@ def attempt(selected="B", reordered=False, key=KEY):
     ]
 
 
+def short_text_attempt(answer="Dropout", *, text_control="c0", key=KEY):
+    stem = "Name one way to reduce overfitting."
+    number_stem = "How many letters are in CNN?"
+    return [
+        {"event":"quiz_questions", "key":key, "questions":[
+            {"id":"q1", "text":"1. Question 1 " + stem, "selection":"short_text",
+             "control_id":text_control, "options":[], "min_length":"1", "max_length":"100"},
+            {"id":"q2", "text":"2. Question 2 " + number_stem, "selection":"number",
+             "control_id":"c1", "options":[]},
+            {"id":"q3", "text":"3. Question 3 " + STEM, "selection":"one", "options":[
+                {"id":"c2", "text":"A"}, {"id":"c3", "text":"B"}]}]},
+        {"event":"quiz_answer_plan", "key":key, "plan":{"cannot_answer":False, "answers":[
+            {"question_id":"q1", "selected_controls":[], "numeric_answer":"",
+             "text_answer":answer, "reason":"Example"},
+            {"question_id":"q2", "selected_controls":[], "numeric_answer":"3",
+             "text_answer":"", "reason":"Example"},
+            {"question_id":"q3", "selected_controls":["c2"], "numeric_answer":"",
+             "text_answer":"", "reason":"Example"}]}},
+        {"event":"quiz_submitted_result", "key":key, "question_feedback":[
+            {"question_number":1, "text":"Question 1\n" + stem + "\n" + answer + "\n1 / 1 point"},
+            {"question_number":2, "text":"Question 2\n" + number_stem + "\n3\n1 / 1 point"},
+            {"question_number":3, "text":"Question 3\n" + STEM + "\nA\n1 / 1 point"}]},
+    ]
+
+
 class HistoryImportTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -137,6 +162,57 @@ class HistoryImportTests(unittest.TestCase):
         self.assertEqual(importer.import_previous_history(self.root, self.run, history), 2)
         self.assertEqual(history[KEY][0]["questions"][0]["selected_answers"], ["A"])
         self.assertEqual(history["assignment:other"][0]["questions"][0]["selected_answers"], ["B"])
+
+    def test_short_text_answers_import_with_numeric_and_choice_feedback(self):
+        self.write_events(short_text_attempt())
+        history = {}
+        self.assertEqual(importer.import_previous_history(self.root, self.run, history), 1)
+        questions = history[KEY][0]["questions"]
+        self.assertEqual([question["selection"] for question in questions],
+                         ["short_text", "number", "one"])
+        self.assertEqual([question["selected_answers"] for question in questions],
+                         [["Dropout"], ["3"], ["A"]])
+        self.assertTrue(all(question["full_score"] for question in questions))
+        self.assertNotIn('"control_id"', json.dumps(history))
+
+    def test_short_text_history_matches_question_after_control_id_changes(self):
+        first = short_text_attempt("Dropout", text_control="old-control")
+        second = short_text_attempt("Weight decay", text_control="new-control")
+        self.write_events(first + second)
+        history = {}
+        self.assertEqual(importer.import_previous_history(self.root, self.run, history), 2)
+        from quiz_memory import context_for_questions
+        context = context_for_questions(history[KEY], second[0]["questions"])
+        text_entry = next(entry for entry in context if entry["selection"] == "short_text")
+        self.assertEqual([record["selected_answers"] for record in text_entry["attempts"]],
+                         [["Dropout"], ["Weight decay"]])
+
+    def test_invalid_short_text_plans_do_not_import_partial_history(self):
+        variants = []
+        missing = short_text_attempt()
+        missing[1]["plan"]["answers"][0].pop("text_answer")
+        variants.append(missing)
+        whitespace = short_text_attempt("  Dropout  ")
+        variants.append(whitespace)
+        overlong = short_text_attempt("x" * 4001)
+        variants.append(overlong)
+        below_minimum = short_text_attempt("A")
+        below_minimum[0]["questions"][0]["min_length"] = "2"
+        variants.append(below_minimum)
+        duplicate_stem = short_text_attempt()
+        duplicate_stem[0]["questions"][1]["text"] = duplicate_stem[0]["questions"][0]["text"]
+        variants.append(duplicate_stem)
+        contaminated_number = short_text_attempt()
+        contaminated_number[1]["plan"]["answers"][1]["text_answer"] = "wrong"
+        variants.append(contaminated_number)
+        lone_surrogate = short_text_attempt("\ud800")
+        variants.append(lone_surrogate)
+        for events in variants:
+            with self.subTest(variant=events[1]["plan"]["answers"][0].get("text_answer")):
+                self.write_events(events)
+                history = {}
+                self.assertEqual(importer.import_previous_history(self.root, self.run, history), 0)
+                self.assertEqual(history, {})
 
 
 if __name__ == "__main__":

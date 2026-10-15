@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 
+from quiz_memory import MAX_STEM_CHARS, MAX_TEXT_ANSWER_CHARS, _normal, _stem
 from shared_io import open_read_shared
 
 
@@ -64,21 +65,38 @@ def _question_map(questions):
     if not isinstance(questions, list) or not 1 <= len(questions) <= 200:
         return None
     by_id, controls = {}, set()
+    stems = [_normal(_stem(question.get("text"))) if isinstance(question, dict) else ""
+             for question in questions]
+    if (any(not stem or len(stem) > MAX_STEM_CHARS for stem in stems) or
+            any(question.get("selection") == "short_text" and stems.count(stem) != 1
+                for question, stem in zip(questions, stems) if isinstance(question, dict))):
+        return None
     for question in questions:
         if not isinstance(question, dict):
             return None
         identity, options = question.get("id"), question.get("options")
         if (not isinstance(identity, str) or not identity or identity in by_id or
                 not isinstance(question.get("text"), str) or not question["text"].strip() or
-                question.get("selection") not in {"one", "many", "number"} or
+                question.get("selection") not in {"one", "many", "number", "short_text"} or
                 not isinstance(options, list)):
             return None
-        if question["selection"] == "number":
+        if question["selection"] in {"number", "short_text"}:
             control_id = question.get("control_id")
             if options or not isinstance(control_id, str) or not control_id or control_id in controls:
                 return None
+            if question["selection"] == "short_text":
+                minimum, maximum, pattern = (question.get(name) for name in
+                                             ("min_length", "max_length", "pattern"))
+                if (any(value is not None and (not isinstance(value, str) or
+                         not re.fullmatch(r"\d{1,5}", value)) for value in (minimum, maximum)) or
+                        minimum is not None and maximum is not None and int(minimum) > int(maximum) or
+                        pattern is not None and (not isinstance(pattern, str) or len(pattern) > 1000)):
+                    return None
             controls.add(control_id)
-            by_id[identity] = {"choices":set(), "selection":"number", "control_id":control_id}
+            by_id[identity] = {"choices":set(), "selection":question["selection"],
+                               "control_id":control_id,
+                               "min_length":question.get("min_length"),
+                               "max_length":question.get("max_length")}
             continue
         if not 2 <= len(options) <= 200:
             return None
@@ -99,7 +117,7 @@ def _selected(plan, questions):
     if (by_id is None or not isinstance(plan, dict) or plan.get("cannot_answer") is not False or
             not isinstance(plan.get("answers"), list) or len(plan["answers"]) != len(by_id)):
         return None
-    selected, numeric, seen = [], {}, set()
+    selected, numeric, text_answers, seen = [], {}, {}, set()
     for answer in plan["answers"]:
         if not isinstance(answer, dict):
             return None
@@ -111,19 +129,37 @@ def _selected(plan, questions):
         valid = by_id[identity]
         if valid["selection"] == "number":
             value = answer.get("numeric_answer")
-            if choices or not isinstance(value, str) or len(value) > 32 or not _NUMBER.fullmatch(value):
+            if (choices or not isinstance(value, str) or len(value) > 32 or
+                    not _NUMBER.fullmatch(value) or
+                    ("text_answer" in answer and answer["text_answer"] != "")):
                 return None
             numeric[valid["control_id"]] = value
             seen.add(identity)
             continue
-        if not choices or ("numeric_answer" in answer and answer["numeric_answer"] != ""):
+        if valid["selection"] == "short_text":
+            value = answer.get("text_answer")
+            if (choices or ("numeric_answer" in answer and answer["numeric_answer"] != "") or
+                    not isinstance(value, str) or not value.strip() or value != value.strip() or
+                    len(value) > MAX_TEXT_ANSWER_CHARS or
+                    any(ord(char) < 32 or ord(char) == 127 or
+                        0xD800 <= ord(char) <= 0xDFFF for char in value)):
+                return None
+            length = len(value.encode("utf-16-le")) // 2
+            if ((valid["min_length"] is not None and length < int(valid["min_length"])) or
+                    (valid["max_length"] is not None and length > int(valid["max_length"]))):
+                return None
+            text_answers[valid["control_id"]] = value
+            seen.add(identity)
+            continue
+        if (not choices or ("numeric_answer" in answer and answer["numeric_answer"] != "") or
+                ("text_answer" in answer and answer["text_answer"] != "")):
             return None
         if (len(set(choices)) != len(choices) or not set(choices) <= valid["choices"] or
                 (valid["selection"] == "one" and len(choices) != 1)):
             return None
         selected.extend(choices)
         seen.add(identity)
-    return {"selected":selected, "numeric":numeric}
+    return {"selected":selected, "numeric":numeric, "text":text_answers}
 
 
 def import_previous_history(project_root, previous_run_directory, target_history_dict):
@@ -175,7 +211,8 @@ def import_previous_history(project_root, previous_run_directory, target_history
             history = staged.get(key, [])
             try:
                 updated = record_attempt(history, attempt["questions"], attempt["selected"]["selected"],
-                                         feedback, numeric_answers=attempt["selected"]["numeric"])
+                                         feedback, numeric_answers=attempt["selected"]["numeric"],
+                                         text_answers=attempt["selected"]["text"])
             except (TypeError, ValueError, KeyError, IndexError):
                 continue
             if isinstance(updated, list) and updated and updated != history:

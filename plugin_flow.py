@@ -17,6 +17,9 @@ from urllib.parse import urlsplit
 PLUGIN_TYPES = frozenset({"ungradedPlugin", "ungradedWidget"})
 PROBES = 12
 PROBE_DELAY = 1.5
+ADVERSARIAL_AI_COURSE_PATH = (
+    "/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa"
+)
 
 
 PLUGIN_JS = r"""(request => {
@@ -139,9 +142,17 @@ async def complete_plugin(runner, item, *, probes=PROBES, probe_delay=PROBE_DELA
     heading = lesson_heading(item.get("title"))
     if not heading:
         raise StopRun("The plugin lesson has no roster heading.")
-    from scorm_flow import complete_static_scorm, is_static_scorm
+    from scorm_flow import AUDITED_SCORM, complete_static_scorm, is_static_scorm
     if is_static_scorm(path, heading):
         await complete_static_scorm(runner, item, path, heading)
+        return
+    if path in AUDITED_SCORM:
+        raise StopRun("An audited SCORM lesson changed its course-outline heading.")
+    if (path.startswith(ADVERSARIAL_AI_COURSE_PATH + "/ungradedWidget/") and
+            item["key"].startswith("ungradedWidget:")):
+        from rise_scorm_flow import complete_rise_scorm
+
+        await complete_rise_scorm(runner, item)
         return
     if await runner.verified_item(item):
         return

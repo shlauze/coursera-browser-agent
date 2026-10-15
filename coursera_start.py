@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.58"
+RUNNER_VERSION = "4.0-groq.80"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -49,6 +49,68 @@ MODULE_ITEM_COUNTS = {1: 9, 2: 7, 3: 8, 4: 2, 5: 10, 6: 8, 7: 2,
                       8: 10, 9: 10, 10: 2, 11: 8, 12: 9, 13: 2, 14: 2}
 # These requests are to local services, independently of system proxy settings.
 LOCAL_HTTP = build_opener(ProxyHandler({}))
+_MANAGED_CHROME_PROCESS = None
+_MANAGED_CHROME_CREATED_AT_UTC = None
+_BROWSER_START_ATTEMPTED = False
+
+
+def _chrome_created_at_utc(pid):
+    """Read the spawned process creation time without exposing its command line."""
+    observed = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    if type(pid) is not int:
+        return observed
+    try:
+        import psutil
+        created = psutil.Process(pid).create_time()
+        return datetime.fromtimestamp(created, timezone.utc).isoformat(timespec="milliseconds")
+    except Exception:
+        # Diagnostics must never prevent the browser from starting.
+        return observed
+
+
+def log_browser_lifecycle_exit():
+    """Emit a bounded, non-sensitive browser snapshot to the runner's existing log."""
+    if not _BROWSER_START_ATTEMPTED:
+        return
+    process = _MANAGED_CHROME_PROCESS
+    pid = process.pid if process is not None and type(process.pid) is int else None
+    try:
+        exit_code = process.poll() if process is not None else None
+    except OSError:
+        exit_code = None
+    try:
+        with socket.socket() as probe:
+            probe.settimeout(0.5)
+            port_listening = probe.connect_ex(("127.0.0.1", PORT)) == 0
+    except OSError:
+        port_listening = False
+    cdp_reachable = False
+    if port_listening:
+        try:
+            metadata = local_json(CDP_URL + "/json/version", timeout=1)
+            cdp_reachable = bool(metadata.get("webSocketDebuggerUrl"))
+        except (OSError, ValueError, AttributeError):
+            pass
+    try:
+        managed_process_running = profile_process_running()
+    except Exception:
+        managed_process_running = None
+    try:
+        managed_identity = _managed_chrome_identity()
+    except Exception:
+        managed_identity = None
+    print("CHROME_LIFECYCLE: " + json.dumps({
+        "event": "runner_exit",
+        "observed_at_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "spawned_pid": pid,
+        "spawned_created_at_utc": _MANAGED_CHROME_CREATED_AT_UTC,
+        "spawned_exit_code": exit_code,
+        "port_9223_listening": port_listening,
+        "cdp_reachable": cdp_reachable,
+        "managed_process_running": managed_process_running,
+        "managed_pid": managed_identity["pid"] if managed_identity else None,
+        "managed_created_at_utc": managed_identity["created_at_utc"] if managed_identity else None,
+    }, sort_keys=True), flush=True)
 
 
 def local_json(url, timeout=2):
@@ -107,13 +169,60 @@ def profile_process_running():
     return False
 
 
+def _managed_chrome_identity():
+    """Read the owned Chrome process identity for diagnostics only."""
+    import psutil
+
+    expected = os.path.normcase(os.path.abspath(PROFILE))
+    matches = []
+    for process in psutil.process_iter(["name", "cmdline", "pid", "ppid", "create_time"]):
+        try:
+            info = process.info
+            if (info["name"] or "").lower() != "chrome.exe":
+                continue
+            args = info["cmdline"] or []
+            if f"--remote-debugging-port={PORT}" not in args:
+                continue
+            if not any(arg.startswith("--user-data-dir=") and
+                       os.path.normcase(os.path.abspath(arg.split("=", 1)[1].strip('"'))) == expected
+                       for arg in args):
+                continue
+            pid = info.get("pid")
+            if type(pid) is not int or pid <= 0:
+                continue
+            try:
+                created_at = datetime.fromtimestamp(info.get("create_time"), timezone.utc).isoformat(timespec="milliseconds")
+            except (TypeError, ValueError, OverflowError, OSError):
+                created_at = None
+            matches.append({"pid": pid, "ppid": info.get("ppid"),
+                            "created_at": info.get("create_time"),
+                            "created_at_utc": created_at})
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    if not matches:
+        return None
+    # Chrome child processes inherit both startup flags. Prefer the exact
+    # profile's parent browser process; if parent data is unavailable, choose
+    # the oldest exact match deterministically rather than returning no PID.
+    matching_pids = {row["pid"] for row in matches}
+    parents = [row for row in matches if row["ppid"] not in matching_pids]
+    candidates = parents or matches
+    chosen = min(candidates, key=lambda row: (
+        row["created_at_utc"] is None,
+        row["created_at"] if row["created_at_utc"] is not None else float("inf"),
+        row["pid"]))
+    return {"pid": chosen["pid"], "created_at_utc": chosen["created_at_utc"]}
+
+
 def ensure_browser(*, start_url=None):
+    global _BROWSER_START_ATTEMPTED, _MANAGED_CHROME_PROCESS, _MANAGED_CHROME_CREATED_AT_UTC
     if start_url is not None:
         parsed = urlsplit(start_url)
         if (parsed.scheme != "https" or parsed.netloc != "www.coursera.org" or
                 parsed.path != "/my-learning" or
                 parsed.query != "myLearningTab=IN_PROGRESS" or parsed.fragment):
             raise ValueError("The queue startup page must be Coursera My Learning In Progress.")
+    _BROWSER_START_ATTEMPTED = True
     chrome = find_chrome()
     PROFILE.mkdir(parents=True, exist_ok=True)
     with socket.socket() as probe:
@@ -130,7 +239,7 @@ def ensure_browser(*, start_url=None):
         if start_url is not None or course_tabs():
             return
 
-    subprocess.Popen(
+    process = subprocess.Popen(
         [
             str(chrome),
             f"--user-data-dir={PROFILE}",
@@ -145,6 +254,13 @@ def ensure_browser(*, start_url=None):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    _MANAGED_CHROME_PROCESS = process
+    pid = process.pid if type(process.pid) is int else None
+    _MANAGED_CHROME_CREATED_AT_UTC = _chrome_created_at_utc(pid)
+    print("CHROME_LIFECYCLE: " + json.dumps({
+        "event": "spawned", "pid": pid,
+        "created_at_utc": _MANAGED_CHROME_CREATED_AT_UTC,
+    }, sort_keys=True), flush=True)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
@@ -459,6 +575,14 @@ QUIZ_UI_JS = r"""(async request => {
     }
     return '';
   };
+  // Coursera's short-answer widget has a distinctive answer-field id and
+  // placeholder. A text search or other widget inside the same numbered
+  // question must not be mistaken for an answer.
+  const textElements=Array.from(document.querySelectorAll('input[type="text"]'))
+    .filter(e=>shown(e) &&
+      /^text-input-autoGradableResponseId~questionBlockQuestion!~/.test(e.id || '') &&
+      clean(e.getAttribute('placeholder'))==='Enter answer here' &&
+      !!singleQuestionText(e));
   const nativeOptions=e=>{
     const all=Array.from(e.options || []);
     // An enabled empty value may be a real answer. Do not silently discard it
@@ -488,7 +612,7 @@ QUIZ_UI_JS = r"""(async request => {
   // backing input. The backing input is not an editable text response.
   const selectElements = Array.from(document.querySelectorAll(
     'span.rc-FillableBlank [role="button"][aria-haspopup="listbox"]')).filter(shown);
-  const candidates = [...choiceElements,...numericElements,...selectElements,...nativeSelectElements]
+  const candidates = [...choiceElements,...numericElements,...textElements,...selectElements,...nativeSelectElements]
     .sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
   const offscreenModal=e=>{
     const modal=e.closest('.cds-Modal-container');
@@ -500,7 +624,7 @@ QUIZ_UI_JS = r"""(async request => {
   const elements=candidates.filter(e=>!offscreenModal(e));
   const offscreenDraft=offscreenElements.some(e=>selectElements.includes(e)?
     clean(e.innerText)!=='Select answer':nativeSelectElements.includes(e)?
-    !!e.value:e.matches('input[type="number"]')?
+    !!e.value:e.matches('input[type="number"],input[type="text"]')?
     !!e.value:e.matches('input')?!!e.checked:e.getAttribute('aria-checked')==='true');
   const isNotice = text => /\bhonor code\b|\bI\s*,[^,]{1,100},\s*(understand|confirm|certify|agree)\b|\bI (understand that submitting|certify that|declare that)\b/i.test(text);
   const questionText = e => {
@@ -517,6 +641,7 @@ QUIZ_UI_JS = r"""(async request => {
       return '';
     }
     if (e.matches('input[type="number"]')) return singleQuestionText(e) || questionOnly(label(e));
+    if (textElements.includes(e)) return singleQuestionText(e);
     let best=label(e), p=e.parentElement;
     for (let depth=0;p && depth<9 && !p.matches('body,main,form');depth++,p=p.parentElement) {
       const allInside=choiceElements.filter(c=>p.contains(c));
@@ -545,17 +670,20 @@ QUIZ_UI_JS = r"""(async request => {
     min:e.matches('input[type="number"]')?(e.getAttribute('min') || null):null,
     max:e.matches('input[type="number"]')?(e.getAttribute('max') || null):null,
     step:e.matches('input[type="number"]')?(e.getAttribute('step') || null):null,
+    min_length:textElements.includes(e)?(e.getAttribute('minlength') || null):null,
+    max_length:textElements.includes(e)?(e.getAttribute('maxlength') || null):null,
+    pattern:textElements.includes(e)?(e.getAttribute('pattern') || null):null,
     kind:isNotice(label(e))?'notice':'answer',
-    selected:selectElements.includes(e) || nativeSelectElements.includes(e) || e.matches('input[type="number"]')?false:
+    selected:selectElements.includes(e) || nativeSelectElements.includes(e) || e.matches('input[type="number"],input[type="text"]')?false:
       e.matches('input')?!!e.checked:e.getAttribute('aria-checked')==='true',
     disabled:!!e.disabled || (nativeSelectElements.includes(e) && !nativeOptions(e)) ||
-      (e.matches('input[type="number"]') && !!e.readOnly) ||
+      (e.matches('input[type="number"],input[type="text"]') && !!e.readOnly) ||
       e.getAttribute('aria-disabled')==='true' || !!e.closest('fieldset[disabled]')
   }));
   let controls=readControls();
   const formId=rows=>{
-    const basis=JSON.stringify([location.pathname,rows.map(c=>['number','select','native_select'].includes(c.type)?
-      [c.id,c.type,c.name,'',c.label,c.question,c.min,c.max,c.step,c.options]:
+    const basis=JSON.stringify([location.pathname,rows.map(c=>['number','text','select','native_select'].includes(c.type)?
+      [c.id,c.type,c.name,'',c.label,c.question,c.min,c.max,c.step,c.min_length,c.max_length,c.pattern,c.options]:
       [c.id,c.type,c.name,c.value,c.label,c.question])]);
     let hash=2166136261;
     for (let i=0;i<basis.length;i++) {hash^=basis.charCodeAt(i);hash=Math.imul(hash,16777619);}
@@ -660,7 +788,8 @@ QUIZ_UI_JS = r"""(async request => {
   // separate overlay without answer fields blocks editing the attempt.
   const unsupportedSelector='textarea,select,input:not([type="radio"]):not([type="checkbox"]):not([type="number"]):not([type="hidden"]):not([type="submit"]):not([type="button"])';
   const scopedUnsupported=Array.from(scope.querySelectorAll(unsupportedSelector))
-    .filter(e=>visibleAction(e) && !e.disabled && !e.readOnly && !nativeSelectElements.includes(e));
+    .filter(e=>visibleAction(e) && !e.disabled && !e.readOnly &&
+      !nativeSelectElements.includes(e) && !textElements.includes(e));
   const scopedAnswers=controls.filter(c=>c.kind==='answer' && !c.disabled &&
     (!dialog || dialog.contains(elements[Number(c.id.slice(1))])));
   const dialogIsForm=!!dialog && !parts.includes('view-feedback') &&
@@ -935,7 +1064,8 @@ QUIZ_UI_JS = r"""(async request => {
     return {clicked:'Close',dialog_kind:'course_sidebar_drawer',url:location.href};
   }
   if (request.action==='set_answers') {
-    if (blockingDialog || resultPage || !scopedAnswers.length) return {error:'No editable quiz form: a separate dialog or result page is open.',...output()};
+    if (blockingDialog || resultPage || !scopedAnswers.length || scopedUnsupported.length)
+      return {error:'No fully supported editable quiz form is open.',...output()};
     if (!request.snapshot_id) return {error:'A current snapshot_id is required.',...output()};
     const selected=new Set(request.selected || []);
     if (selected.size!== (request.selected || []).length) return {error:'Duplicate answer ids.',...output()};
@@ -959,6 +1089,26 @@ QUIZ_UI_JS = r"""(async request => {
       if (step!==null && (!Number.isFinite(step) || step<=0 ||
           Math.abs((n-(min===null?0:min))/step-Math.round((n-(min===null?0:min))/step))>1e-7))
         return {error:'Numeric answer does not match the field step; no controls were changed.',control_id:c.id,...output()};
+    }
+    const textControls=scopedAnswers.filter(c=>c.type==='text');
+    const text=request.text || {};
+    if (!text || typeof text!=='object' || Array.isArray(text) ||
+        Object.keys(text).length!==textControls.length ||
+        Object.keys(text).some(id=>!textControls.some(c=>c.id===id)))
+      return {error:'Provide one text value for every short-answer question.',...output()};
+    for (const c of textControls) {
+      const e=elements[Number(c.id.slice(1))],value=text[c.id];
+      if (!e || !e.isConnected || !visibleAction(e) ||
+          !e.matches('input[type="text"]') || !singleQuestionText(e) ||
+          typeof value!=='string' || !value.trim() || value!==value.trim() ||
+          /[\u0000-\u001f\u007f]/.test(value) ||
+          (e.maxLength>=0 && value.length>e.maxLength) ||
+          (e.minLength>=0 && value.length<e.minLength))
+        return {error:'Invalid short-answer value or field; no controls were changed.',control_id:c.id,...output()};
+      const probe=e.cloneNode(false);
+      probe.value=value;
+      if (!probe.checkValidity())
+        return {error:'A short answer does not match its observed field constraints; no controls were changed.',control_id:c.id,...output()};
     }
     const selectControls=scopedAnswers.filter(c=>['select','native_select'].includes(c.type));
     const select=request.select || {};
@@ -991,7 +1141,7 @@ QUIZ_UI_JS = r"""(async request => {
     // Set states, never blindly toggle. Repeating the same plan performs no clicks.
     const changed=[];
     for (const c of scopedAnswers) {
-      if (c.type==='number') continue;
+      if (['number','text','select','native_select'].includes(c.type)) continue;
       const want=selected.has(c.id);
       if (c.type==='radio' && !want) continue;
       const e=elements[Number(c.id.slice(1))];
@@ -1017,6 +1167,20 @@ QUIZ_UI_JS = r"""(async request => {
         if (elements.some(e=>!e.isConnected)) return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
       }
     }
+    for (const c of textControls) {
+      const e=elements[Number(c.id.slice(1))],want=text[c.id];
+      if (e.value!==want) {
+        e.scrollIntoView({block:'center'});
+        const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+        if (setter) setter.call(e,want); else e.value=want;
+        e.dispatchEvent(new Event('input',{bubbles:true}));
+        e.dispatchEvent(new Event('change',{bubbles:true}));
+        changed.push({id:c.id,value:want});
+        await new Promise(resolve=>setTimeout(resolve,120));
+        if (elements.some(e=>!e.isConnected))
+          return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
+      }
+    }
     for (const c of selectControls.filter(c=>c.type==='native_select')) {
       const e=elements[Number(c.id.slice(1))],plan=select[c.id];
       const option=nativeOptions(e)?.[Number(plan.id.split(':o')[1])];
@@ -1039,7 +1203,7 @@ QUIZ_UI_JS = r"""(async request => {
     const scopedIds=new Set(scopedAnswers.map(c=>c.id));
     const mismatch=controls.filter(c=>scopedIds.has(c.id) &&
       (c.type==='number'?c.value!==numeric[c.id]:c.type==='select'?
-        false:c.type==='native_select'?c.value!==select[c.id].text:
+        false:c.type==='text'?c.value!==text[c.id]:c.type==='native_select'?c.value!==select[c.id].text:
         c.selected!==selected.has(c.id)));
     return {...output(),changed,verified:mismatch.length===0,mismatched_controls:mismatch};
   }
@@ -1075,9 +1239,14 @@ QUIZ_UI_JS = r"""(async request => {
       !e.disabled && e.getAttribute('aria-disabled')!=='true');
     if (matches.length!==1) return {error:'Expected one enabled matching button.',
       error_code:matches.length===0?'button_not_ready':'ambiguous_button',matches:matches.length,...output()};
+    if (/^submit$/i.test(requested) && scopedUnsupported.length)
+      return {error:'The quiz contains an unsupported answer field; nothing was submitted.',...output()};
     if (/^submit$/i.test(requested) && manualSubmission)
       return {error:'Manual submission required: the page includes a personal statement or an authorship attestation.',...output()};
     if (/^submit$/i.test(requested)) {
+      if (controls.some(c=>c.kind==='answer' && c.type==='text' && !c.disabled) &&
+          !request.expected_text)
+        return {error:'Short answers need a verified expected_text map before Submit.',...output()};
       if (request.expected_selected) {
         const allAnswers=request.action==='confirm_submit';
         const selected=controls.filter(c=>c.kind==='answer' && (allAnswers || !c.disabled) && c.selected &&
@@ -1093,6 +1262,16 @@ QUIZ_UI_JS = r"""(async request => {
           (allAnswers || !dialog || dialog.contains(elements[Number(c.id.slice(1))])));
         if (Object.keys(expected).length!==current.length || current.some(c=>expected[c.id]!==c.value))
           return {error:'Numeric answers changed before the Submit click; nothing was submitted.',...output()};
+      }
+      if (request.expected_text) {
+        const expected=request.expected_text;
+        const allAnswers=request.action==='confirm_submit';
+        const current=controls.filter(c=>c.kind==='answer' && c.type==='text' &&
+          (allAnswers || !c.disabled) &&
+          (allAnswers || !dialog || dialog.contains(elements[Number(c.id.slice(1))])));
+        if (!expected || typeof expected!=='object' || Array.isArray(expected) ||
+            Object.keys(expected).length!==current.length || current.some(c=>expected[c.id]!==c.value))
+          return {error:'Short answers changed before the Submit click; nothing was submitted.',...output()};
       }
       if (request.expected_select) {
         const expected=request.expected_select;
@@ -1287,7 +1466,7 @@ def build_quiz_questions(ui):
     for control in ui.get("controls", []):
         if control.get("kind") != "answer" or control.get("disabled") or not control.get("in_scope", True):
             continue
-        if control.get("type") not in {"radio", "checkbox", "number", "select", "native_select"}:
+        if control.get("type") not in {"radio", "checkbox", "number", "text", "select", "native_select"}:
             raise StopRun("Unsupported quiz answer control.")
         stem = question_text(control.get("question", ""))
         label = question_text(control.get("label", ""))
@@ -1304,6 +1483,22 @@ def build_quiz_questions(ui):
                 "control_id":identity, "options":[],
                 "min":control.get("min") or None, "max":control.get("max") or None,
                 "step":control.get("step") or None}
+            continue
+        if control["type"] == "text":
+            minimum = control.get("min_length")
+            maximum = control.get("max_length")
+            pattern = control.get("pattern")
+            if (group_key in groups or not re.search(r"\bQuestion\s+\d+\b", stem, re.I) or
+                    any(group["text"] == stem for group in groups.values()) or
+                    any(value is not None and (not isinstance(value, str) or
+                         not re.fullmatch(r"\d{1,5}", value)) for value in (minimum, maximum)) or
+                    (minimum is not None and maximum is not None and int(minimum) > int(maximum)) or
+                    (pattern is not None and (not isinstance(pattern, str) or len(pattern) > 1000))):
+                raise StopRun("A short-answer field cannot be identified uniquely; no answers were changed.")
+            groups[group_key] = {
+                "id":f"q{len(groups)+1}", "text":stem, "selection":"short_text",
+                "control_id":identity, "options":[],
+                "min_length":minimum, "max_length":maximum, "pattern":pattern}
             continue
         if control["type"] in {"select", "native_select"}:
             options = ui.get("select_options", {}).get(identity)
@@ -1326,7 +1521,10 @@ def build_quiz_questions(ui):
             raise StopRun("Ambiguous quiz question grouping; no answers were changed.")
         group["options"].append({"id":identity, "text":label})
     questions = list(groups.values())
-    if not questions or any(q["selection"] != "number" and len(q["options"]) < 2 for q in questions):
+    if (not questions or any(q["selection"] not in {"number", "short_text"} and
+                             len(q["options"]) < 2 for q in questions) or
+            (any(q["selection"] == "short_text" for q in questions) and
+             len({question_text(q["text"]).casefold() for q in questions}) != len(questions))):
         raise StopRun("The complete quiz form could not be read.")
     visible_numbers = set(re.findall(r"\bQuestion\s+(\d+)\b", ui.get("page_text", ""), re.I))
     if len(visible_numbers) > len(questions):
@@ -1336,12 +1534,15 @@ def build_quiz_questions(ui):
 
 def answer_schema(questions):
     has_numeric = any(q["selection"] == "number" for q in questions)
+    has_text = any(q["selection"] == "short_text" for q in questions)
     answer_properties = {
         "question_id":{"type":"string", "enum":[q["id"] for q in questions]},
         "selected_controls":{"type":"array", "items":{"type":"string", "enum":[o["id"] for q in questions for o in q["options"]]}},
         "reason":{"type":"string"}}
     if has_numeric:
         answer_properties["numeric_answer"] = {"type":"string"}
+    if has_text:
+        answer_properties["text_answer"] = {"type":"string"}
     return {"type":"object", "additionalProperties":False,
             "properties":{
                 "cannot_answer":{"type":"boolean"},
@@ -1395,14 +1596,18 @@ def validate_answer_plan(plan, questions):
         raise ValueError("One answer record is required for every question.")
     by_id = {q["id"]:q for q in questions}
     has_numeric = any(q["selection"] == "number" for q in questions)
+    has_text = any(q["selection"] == "short_text" for q in questions)
     seen = set()
     selected = []
     numeric = {}
+    text_answers = {}
     selects = {}
     for answer in answers:
         required = {"question_id", "selected_controls", "reason"}
         if has_numeric:
             required.add("numeric_answer")
+        if has_text:
+            required.add("text_answer")
         if not isinstance(answer, dict) or set(answer) != required:
             raise ValueError("Invalid answer record.")
         identity = answer["question_id"]
@@ -1414,12 +1619,31 @@ def validate_answer_plan(plan, questions):
         if not isinstance(choices, list) or not all(isinstance(c, str) for c in choices):
             raise ValueError("Invalid selected controls.")
         if question["selection"] == "number":
-            if choices or not isinstance(answer["reason"], str):
+            if (choices or not isinstance(answer["reason"], str) or
+                    (has_text and answer["text_answer"] != "")):
                 raise ValueError("Numeric questions cannot select choice controls.")
             numeric[question["control_id"]] = validate_numeric_answer(answer["numeric_answer"], question)
             continue
+        if question["selection"] == "short_text":
+            value = answer["text_answer"]
+            if (choices or not isinstance(answer["reason"], str) or
+                    (has_numeric and answer["numeric_answer"] != "") or
+                    not isinstance(value, str) or not value.strip() or value != value.strip() or
+                    any(ord(char) < 32 or ord(char) == 127 or
+                        0xD800 <= ord(char) <= 0xDFFF for char in value)):
+                raise ValueError("A short-answer question needs one nonempty, single-line text value.")
+            length = len(value.encode("utf-16-le")) // 2
+            minimum = question.get("min_length")
+            maximum = question.get("max_length")
+            if ((minimum is not None and length < int(minimum)) or
+                    (maximum is not None and length > int(maximum))):
+                raise ValueError("A short-answer value violates its observed field length.")
+            text_answers[question["control_id"]] = value
+            continue
         if has_numeric and answer["numeric_answer"] != "":
             raise ValueError("Choice questions must have an empty numeric_answer.")
+        if has_text and answer["text_answer"] != "":
+            raise ValueError("Choice questions must have an empty text_answer.")
         allowed = {o["id"] for o in question["options"]}
         if (not choices or len(choices) != len(set(choices)) or not set(choices) <= allowed or
             (question["selection"] == "one" and len(choices) != 1) or not isinstance(answer["reason"], str)):
@@ -1431,8 +1655,10 @@ def validate_answer_plan(plan, questions):
                 "options":[candidate["text"] for candidate in question["options"]]}
         else:
             selected.extend(choices)
-    if has_numeric or selects:
+    if has_numeric or has_text or selects:
         result = {"selected":selected, "numeric":numeric}
+        if has_text:
+            result["text"] = text_answers
         if selects:
             result["select"] = selects
         return result
@@ -1445,6 +1671,10 @@ def groq_answer_request(questions, feedback="", correction="", quiz_key="", atte
                             "leave selected_controls empty. Respect min, max and step. For choice questions, "
                             "set numeric_answer to an empty string. "
                             if any(q["selection"] == "number" for q in questions) else "")
+    text_instructions = ("For selection=short_text, put the requested short, single-line answer in text_answer "
+                         "and leave selected_controls empty. Respect the question wording and observed field "
+                         "length constraints. For other question types, set text_answer to an empty string. "
+                         if any(q["selection"] == "short_text" for q in questions) else "")
     note = ""
     if COURSE_SLUG == "philosophy" and quiz_key == "assignment:oVRfd":
         note = ("Previously verified feedback for the statement 'If a question or issue is philosophical, "
@@ -1459,7 +1689,7 @@ def groq_answer_request(questions, feedback="", correction="", quiz_key="", atte
                 {"role":"system", "content":
                   "Answer the supplied quiz questions and return only JSON matching the schema. "
                   "Select exactly one option for selection=one, and all applicable options for selection=many. "
-                  + numeric_instructions +
+                  + numeric_instructions + text_instructions +
                   "Use only the actual option ids for each question. Give a short reason. "
                  "Use previous_attempts and previous_feedback to correct mistakes. Match questions and "
                  "answers by their exact text; their order and control ids can change. Preserve the selected "
@@ -1656,6 +1886,11 @@ async def press_quiz_button_when_ready(quiz_ui, label, validate, timeout=45, all
                 parameters["expected_numeric"] = {c["id"]:c.get("value", "") for c in current.get("controls", [])
                     if c.get("kind") == "answer" and c.get("type") == "number" and
                        not c.get("disabled") and c.get("in_scope", True)}
+                expected_text = {c["id"]:c.get("value", "") for c in current.get("controls", [])
+                    if c.get("kind") == "answer" and c.get("type") == "text" and
+                       not c.get("disabled") and c.get("in_scope", True)}
+                if expected_text:
+                    parameters["expected_text"] = expected_text
                 expected_select = {c["id"]:c.get("value", "") for c in current.get("controls", [])
                     if c.get("kind") == "answer" and c.get("type") in {"select", "native_select"} and
                        not c.get("disabled") and c.get("in_scope", True)}
@@ -1664,6 +1899,8 @@ async def press_quiz_button_when_ready(quiz_ui, label, validate, timeout=45, all
             elif label.casefold() == "submit" and expected_answers is not None:
                 parameters["expected_selected"] = list(expected_answers["selected"])
                 parameters["expected_numeric"] = dict(expected_answers["numeric"])
+                if expected_answers.get("text"):
+                    parameters["expected_text"] = dict(expected_answers["text"])
                 if expected_answers.get("select"):
                     parameters["expected_select"] = {identity:plan["text"]
                         for identity,plan in expected_answers["select"].items()}
@@ -1710,13 +1947,17 @@ class CourseRunner:
                                      for choice in answer.get("selected_controls", [])],
                 "numeric_answers":{question["control_id"]:answer_records[question["id"]]["numeric_answer"]
                     for question in self._quiz_questions[key] if question.get("selection") == "number" and
-                    question.get("id") in answer_records and answer_records[question["id"]].get("numeric_answer")}}
+                    question.get("id") in answer_records and answer_records[question["id"]].get("numeric_answer")},
+                "text_answers":{question["control_id"]:answer_records[question["id"]]["text_answer"]
+                    for question in self._quiz_questions[key] if question.get("selection") == "short_text" and
+                    question.get("id") in answer_records and answer_records[question["id"]].get("text_answer")}}
         elif kind == "quiz_submitted_result" and key in self._quiz_answer_plans:
             from quiz_memory import record_attempt
             previous = self._quiz_answer_plans[key]
             self.answer_history[key] = record_attempt(self.answer_history.get(key, []),
                 previous["questions"], previous["selected_controls"], fields.get("question_feedback", []),
-                numeric_answers=previous.get("numeric_answers", {}))
+                numeric_answers=previous.get("numeric_answers", {}),
+                text_answers=previous.get("text_answers", {}))
         record = {"time":datetime.now().isoformat(timespec="seconds"),"event":kind,**fields}
         self.data["events"].append(record)
         self.data["events"] = self.data["events"][-100:]
@@ -2098,6 +2339,8 @@ class CourseRunner:
             for question in questions:
                 if question["selection"] == "number":
                     print("ANSWER:", question["id"], answer_values["numeric"][question["control_id"]], flush=True)
+                elif question["selection"] == "short_text":
+                    print("ANSWER:", question["id"], "[short text entered]", flush=True)
                 else:
                     selected = answer_values["selected"] if isinstance(answer_values, dict) else answer_values
                     if question.get("control_type") in {"select", "native_select"}:
@@ -2259,9 +2502,11 @@ class CourseRunner:
             actual_numeric = {c["id"]:c.get("value", "") for c in answers if c.get("type") == "number"}
             actual_select = {c["id"]:c.get("value", "") for c in answers
                              if c.get("type") in {"select", "native_select"}}
+            actual_text = {c["id"]:c.get("value", "") for c in answers if c.get("type") == "text"}
             return (bool(answers) and
                     {c["id"] for c in answers if c.get("selected")} == set(selected) and
                     actual_numeric == numeric and
+                    actual_text == text_answers and
                     actual_select == {identity:plan["text"] for identity,plan in selects.items()})
 
         # There is no browser agent here: the Groq model returns answer JSON;
@@ -2298,6 +2543,7 @@ class CourseRunner:
                 answer_values = await self.solve_quiz_questions(item, current, feedback)
                 selected = answer_values["selected"] if isinstance(answer_values, dict) else answer_values
                 numeric = answer_values["numeric"] if isinstance(answer_values, dict) else {}
+                text_answers = answer_values.get("text", {}) if isinstance(answer_values, dict) else {}
                 selects = answer_values.get("select", {}) if isinstance(answer_values, dict) else {}
                 replan = False
                 for _ in range(3):
@@ -2309,7 +2555,8 @@ class CourseRunner:
                         replan = True
                         break
                     result = await quiz_ui("set_answers", snapshot_id=current["snapshot_id"],
-                                           selected=selected, numeric=numeric, select=selects)
+                                           selected=selected, numeric=numeric,
+                                           text=text_answers, select=selects)
                     if result.get("error_code") == "stale_quiz_snapshot":
                         # No click occurred; inspect again before using IDs.
                         continue
@@ -2330,7 +2577,8 @@ class CourseRunner:
             else:
                 raise StopRun("The quiz changed repeatedly while the model was answering. No stale answer ids were clicked.")
             print("QUIZ_ANSWERS_VERIFIED:", len(selected), "selected controls,",
-                  len(numeric), "numeric fields,", len(selects), "listbox fields", flush=True)
+                  len(numeric), "numeric fields,", len(text_answers), "short-text fields,",
+                  len(selects), "listbox fields", flush=True)
 
             await acknowledge_notices(await quiz_ui())
 
@@ -2382,7 +2630,7 @@ class CourseRunner:
                     confirmation = await press_quiz_button_when_ready(
                         quiz_ui, "Submit", validate_confirmation, allow_result=True,
                         action="confirm_submit", expected_answers={"selected":selected, "numeric":numeric,
-                                                                    "select":selects})
+                                                                    "text":text_answers, "select":selects})
                     if confirmation.get("result_observed"):
                         current = confirmation["current"]
                         attempts += 1
@@ -2579,3 +2827,8 @@ if __name__=="__main__":
         (ROOT/"coursera_error.txt").write_text(error,encoding="utf-8")
         print(error)
         raise SystemExit(1)
+    finally:
+        try:
+            log_browser_lifecycle_exit()
+        except Exception:
+            pass
