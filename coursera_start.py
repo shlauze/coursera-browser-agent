@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.46"
+RUNNER_VERSION = "4.0-groq.47"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -1696,7 +1696,7 @@ class CourseRunner:
 
     async def open_item(self, item):
         await self.tab.navigate(item["url"])
-        loaded = False
+        saw_lesson = False
         next_outline_probe = 0
         module_number = item.get("module_number")
         if type(module_number) is not int:
@@ -1706,16 +1706,18 @@ class CourseRunner:
             module_number = course.get("current_module") if isinstance(course, dict) else None
         if type(module_number) is not int or module_number < 1:
             module_number = None
-        for probe in range(15):
+        for probe in range(30):
             value = await self.snapshot()
             row = rows_by_key(value).get(item["key"])
             heading = " ".join(value.get("heading", "").split())
             title = " ".join(item["title"].split())
             # Media can delay the window load event after the lesson's own DOM
-            # is ready. Require both the matching heading and outline row.
-            rendered = (value.get("ready") == "interactive" and row and heading and
-                        re.match(re.escape(heading) + r"(?:$|\s+(?:Video|Reading|Lab|Dialogue|Practice Assignment|Graded Assignment|Assignment)\b)", title))
+            # is ready. A matching heading proves the lesson rendered; the
+            # outline row may still be collapsed or waiting for hydration.
+            rendered = bool(value.get("ready") == "interactive" and heading and
+                            re.match(re.escape(heading) + r"(?:$|\s+(?:Video|Reading|Lab|Dialogue|Practice Assignment|Graded Assignment|Assignment)\b)", title))
             loaded = item_key(value.get("url", "")) == item["key"] and (value.get("ready") == "complete" or rendered)
+            saw_lesson = saw_lesson or loaded
             if loaded:
                 # A narrow window can hide every outline link while the lesson
                 # itself is fully loaded. The current row is needed for later
@@ -1729,7 +1731,7 @@ class CourseRunner:
                     if result.get("clicked") or result.get("scrolled"):
                         self.event("lesson_outline_opened", key=item["key"], result=result)
             await asyncio.sleep(1)
-        if loaded:
+        if saw_lesson:
             raise StopRun("The lesson loaded, but its course outline did not show the item needed to check completion: " + item["title"])
         raise StopRun("The lesson did not load: " + item["title"])
 

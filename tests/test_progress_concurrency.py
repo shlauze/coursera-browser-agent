@@ -171,7 +171,7 @@ class ProgressConcurrencyTests(unittest.TestCase):
             with ConcurrentReader(root) as watcher, redirect_stdout(io.StringIO()):
                 asyncio.run(runner.process_module(1, roster))
             self.assertGreaterEqual(len(watcher.samples), 2)
-            self.assertEqual(len(tab.navigations), 1)
+            self.assertEqual(len(tab.navigations), 0)
             self.assertGreaterEqual(tab.inspections, 10)
             for method in ("reading", "video", "quiz", "solve_quiz_questions"):
                 getattr(runner, method).assert_not_awaited()

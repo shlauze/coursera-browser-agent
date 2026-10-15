@@ -459,13 +459,28 @@ class QueueRunner(engine.CourseRunner):
         manual = [item["title"] for item in roster
                   if record["items"][item["key"]].get("manual_required")]
         if anchor is not None:
-            await self.open_item(anchor)
-            rows = engine.rows_by_key(await self.snapshot())
+            # The item loop may already have a fully rendered, green outline.
+            # Reopening its first video can temporarily unmount all sidebar
+            # links while media loads, so inspect the current page first.
+            try:
+                rows = engine.rows_by_key(await self.snapshot())
+            except engine.StopRun as exc:
+                if not str(exc).startswith("The selected tab left the course: "):
+                    raise
+                # A completion overlay may have replaced the lesson. The
+                # previous workflow reopened its anchor in this situation.
+                rows = {}
             pending = [item["title"] for item in roster if supported(item) and
                        not (rows.get(item["key"], {}).get("status") == "completed" and
                             rows.get(item["key"], {}).get("checked") is True)]
             if pending:
-                raise engine.StopRun("Persisted completion is missing: " + "; ".join(pending))
+                await self.open_item(anchor)
+                rows = engine.rows_by_key(await self.snapshot())
+                pending = [item["title"] for item in roster if supported(item) and
+                           not (rows.get(item["key"], {}).get("status") == "completed" and
+                                rows.get(item["key"], {}).get("checked") is True)]
+                if pending:
+                    raise engine.StopRun("Persisted completion is missing: " + "; ".join(pending))
         elif not manual:
             rows = engine.rows_by_key(await self.snapshot())
         else:

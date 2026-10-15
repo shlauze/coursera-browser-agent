@@ -127,9 +127,36 @@ class OutlineRegressionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(runner.tab.index, 1)
                 self.assertEqual(runner.tab.outline_calls, 0)
 
-    async def test_interactive_document_still_requires_target_heading_and_outline(self):
+    async def test_interactive_matching_lesson_recovers_missing_outline_row(self):
+        missing = with_row()
+        missing["ready"] = "interactive"
+        missing["items"] = []
+        recovered = with_row()
+        recovered["ready"] = "interactive"
+        runner = self.runner(missing, recovered)
+
+        value = await runner.open_item(ITEM)
+
+        self.assertIn(ITEM["key"], course.rows_by_key(value))
+        self.assertEqual(runner.tab.outline_calls, 1)
+        self.assertEqual(runner.tab.index, 2)
+        self.assertEqual([e["event"] for e in runner.data["events"]], ["lesson_outline_opened"])
+
+    async def test_interactive_matching_lesson_without_outline_reports_outline_error(self):
+        missing = with_row()
+        missing["ready"] = "interactive"
+        missing["items"] = []
+        runner = self.runner(missing)
+
+        with self.assertRaisesRegex(course.StopRun, "lesson loaded, but its course outline"):
+            await runner.open_item(ITEM)
+
+        self.assertGreater(runner.tab.outline_calls, 0)
+        self.assertNotIn("item_verified", [e["event"] for e in runner.data["events"]])
+
+    async def test_interactive_document_still_requires_target_heading_and_url(self):
         for mutation in ({"heading":"Another lesson"}, {"heading":"About"},
-                         {"items":[]}, {"ready":"loading"}):
+                         {"ready":"loading"}):
             with self.subTest(mutation=mutation):
                 snapshot = with_row()
                 snapshot["ready"] = "interactive"

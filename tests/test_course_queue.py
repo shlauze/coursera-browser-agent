@@ -133,10 +133,50 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
                  patch.object(runner, 'snapshot', AsyncMock(return_value={'url':first['url'], 'items':rows})):
                 await runner.process_module(1, [first, second])
             self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
-                             [second['key'], first['key']])
+                             [second['key']])
             self.assertGreaterEqual(inspected.count(second['key']), 3)
             self.assertEqual(store.course('philosophy')['items_completed'], 2)
             self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
+
+    async def test_final_module_check_reopens_anchor_when_current_outline_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            first = {'key':'supplement:anchor', 'title':'Anchor reading',
+                     'url':URL + '/supplement/anchor/reading'}
+            second = {'key':'supplement:later', 'title':'Later reading',
+                      'url':URL + '/supplement/later/reading'}
+            green = lambda item: {'url':item['url'], 'aria_label':'Completed', 'checked':True}
+            incomplete = {'url':second['url'], 'aria_label':'Completed', 'checked':False}
+            snapshots = [
+                {'url':second['url'], 'items':[green(first), incomplete]},
+                {'url':first['url'], 'items':[green(first), green(second)]},
+            ]
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'verified_item', AsyncMock(return_value=True)), \
+                 patch.object(runner, 'snapshot', AsyncMock(side_effect=snapshots)) as inspected:
+                await runner.process_module(1, [first, second])
+            opened.assert_awaited_once_with(first)
+            self.assertEqual(inspected.await_count, 2)
+            self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
+            self.assertEqual(store.course('philosophy')['modules_completed'], 1)
+
+    async def test_final_module_check_reopens_anchor_after_completion_navigation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            item = {'key':'supplement:anchor', 'title':'Anchor reading',
+                    'url':URL + '/supplement/anchor/reading'}
+            snapshots = [
+                engine.StopRun('The selected tab left the course: https://www.coursera.org/account/accomplishments'),
+                {'url':item['url'], 'items':[{'url':item['url'],
+                  'aria_label':'Completed', 'checked':True}]},
+            ]
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'verified_item', AsyncMock(return_value=True)), \
+                 patch.object(runner, 'snapshot', AsyncMock(side_effect=snapshots)):
+                await runner.process_module(1, [item])
+            opened.assert_awaited_once_with(item)
+            self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
+            self.assertEqual(store.course('philosophy')['modules_completed'], 1)
 
     async def test_action_without_green_mark_does_not_complete_or_advance_item(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1024,7 +1064,7 @@ class InterleavedModuleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(roster.await_args.args[2], 3)
             diagnosed.assert_awaited_once()
             self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
-                             [programming['key'], reading['key']])
+                             [programming['key']])
             course = store.course(identity)
             self.assertEqual(course['status'], 'attention')
             self.assertEqual((course['modules_completed'], course['items_completed']), (2, 3))
