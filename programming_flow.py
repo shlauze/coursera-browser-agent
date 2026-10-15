@@ -295,6 +295,7 @@ class FrameConnection:
         await self.call('Page.enable')
         await self.call('Runtime.enable')
         attached = set()
+        matched_lab_page = False
         for _ in range(FRAME_PROBES):
             tree = await self.call('Page.getFrameTree')
             top_url = urlsplit(tree.get('frameTree', {}).get('frame', {}).get('url', ''))
@@ -302,7 +303,12 @@ class FrameConnection:
                 paths = parse_qs(top_url.query).get('path', [])
                 if (top_url.scheme != 'https' or top_url.hostname not in {'coursera.org', 'www.coursera.org'}
                         or top_url.path.rstrip('/') != expected_lab_path or len(paths) != 1):
-                    raise engine.StopRun('The launched lab page does not match the selected assignment and notebook path.')
+                    # Chrome may expose about:blank or an intermediate /lab
+                    # URL before Coursera adds the notebook path. Do not read
+                    # any iframe until the final assignment URL is verified.
+                    await asyncio.sleep(POLL_SECONDS)
+                    continue
+                matched_lab_page = True
             frames = [frame for frame in _flatten_frames(tree.get('frameTree', {}))
                       if _notebook_frame_url(frame.get('url'))]
             if len(frames) > 1:
@@ -339,6 +345,8 @@ class FrameConnection:
                             return
             await self._next_context_event(timeout=0.25)
             await asyncio.sleep(POLL_SECONDS)
+        if expected_lab_path is not None and not matched_lab_page:
+            raise engine.StopRun('The launched lab page does not match the selected assignment and notebook path.')
         raise engine.StopRun('The classic Jupyter iframe did not load with a unique Runtime context.')
 
     async def evaluate(self, script, request):

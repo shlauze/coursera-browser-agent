@@ -271,6 +271,91 @@ class DiagnosticWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await connection.evaluate('(request => ({ok:true}))', {}), {'ok': True})
         self.assertEqual(connection.socket.requests[-1]['sessionId'], 'iframe-session')
 
+    async def test_new_lab_tab_waits_for_exact_url_and_notebook_frame(self):
+        lab_path = ITEM['url'] + '/lab'
+        notebook_path = '/notebooks/release/FinalProject/ImageTextClassificationPyTorch.ipynb'
+        notebook_url = 'https://sbogzlberdio.labs.coursera.org' + notebook_path
+        final_url = 'https://www.coursera.org' + lab_path.replace(
+            'https://www.coursera.org', '') + '?path=%2Fnotebooks%2Frelease%2FFinalProject%2FImageTextClassificationPyTorch.ipynb'
+
+        class Socket:
+            def __init__(self):
+                self.messages = asyncio.Queue()
+                self.frame_probes = 0
+
+            async def send(self, raw):
+                request = json.loads(raw)
+                method = request['method']
+                if method == 'Runtime.enable':
+                    await self.messages.put(json.dumps({'method': 'Runtime.executionContextCreated',
+                        'params': {'context': {'id': 17,
+                        'origin': 'https://sbogzlberdio.labs.coursera.org',
+                        'auxData': {'isDefault': True, 'frameId': 'notebook-frame'}}}}))
+                result = {}
+                if method == 'Page.getFrameTree':
+                    self.frame_probes += 1
+                    if self.frame_probes == 1:
+                        result = {'frameTree': {'frame': {'id': 'main', 'url': 'about:blank'}}}
+                    elif self.frame_probes == 2:
+                        result = {'frameTree': {'frame': {'id': 'main', 'url': ITEM['url'] + '/lab'}}}
+                    else:
+                        result = {'frameTree': {'frame': {'id': 'main', 'url': final_url},
+                            'childFrames': [{'frame': {'id': 'notebook-frame', 'url': notebook_url}}]}}
+                await self.messages.put(json.dumps({'id': request['id'], 'result': result}))
+
+            async def recv(self):
+                return await self.messages.get()
+
+        connection = flow.FrameConnection('ws://127.0.0.1:9223/devtools/page/lab')
+        connection.socket = Socket()
+        with patch.object(flow, 'FRAME_PROBES', 4), \
+             patch.object(flow.asyncio, 'sleep', new=AsyncMock()):
+            await connection.find_notebook(ITEM['url'].replace(COURSE, '/learn/deep-learning-with-pytorch') + '/lab')
+        self.assertEqual(connection.socket.frame_probes, 3)
+        self.assertEqual(connection.frame_url, notebook_url)
+        self.assertEqual(connection.context_id, 17)
+
+    async def test_wrong_lab_assignment_or_notebook_path_never_binds_frame(self):
+        path = ITEM['url'].replace(COURSE, '/learn/deep-learning-with-pytorch') + '/lab'
+        notebook = '/notebooks/release/FinalProject/ImageTextClassificationPyTorch.ipynb'
+        iframe = 'https://sbogzlberdio.labs.coursera.org' + notebook
+        cases = [
+            ('wrong assignment', 'https://www.coursera.org/learn/deep-learning-with-pytorch/programming/OTHER/lab?path=' + notebook, iframe),
+            ('wrong notebook', 'https://www.coursera.org' + path + '?path=/notebooks/release/Other.ipynb', iframe),
+        ]
+        for label, top_url, frame_url in cases:
+            with self.subTest(label=label):
+                class Socket:
+                    def __init__(self):
+                        self.messages = asyncio.Queue()
+                        self.frame_probes = 0
+
+                    async def send(self, raw):
+                        request = json.loads(raw)
+                        if request['method'] == 'Runtime.enable':
+                            await self.messages.put(json.dumps({'method': 'Runtime.executionContextCreated',
+                                'params': {'context': {'id': 17,
+                                'origin': 'https://sbogzlberdio.labs.coursera.org',
+                                'auxData': {'isDefault': True, 'frameId': 'notebook-frame'}}}}))
+                        result = {}
+                        if request['method'] == 'Page.getFrameTree':
+                            self.frame_probes += 1
+                            result = {'frameTree': {'frame': {'id': 'main', 'url': top_url},
+                                'childFrames': [{'frame': {'id': 'notebook-frame', 'url': frame_url}}]}}
+                        await self.messages.put(json.dumps({'id': request['id'], 'result': result}))
+
+                    async def recv(self):
+                        return await self.messages.get()
+
+                connection = flow.FrameConnection('ws://127.0.0.1:9223/devtools/page/lab')
+                connection.socket = Socket()
+                with patch.object(flow, 'FRAME_PROBES', 3), \
+                     patch.object(flow.asyncio, 'sleep', new=AsyncMock()):
+                    with self.assertRaises(engine.StopRun):
+                        await connection.find_notebook(path)
+                self.assertLessEqual(connection.socket.frame_probes, 3)
+                self.assertIsNone(connection.context_id)
+
     async def test_inspection_records_local_report_and_stays_manual(self):
         runner = FakeRunner()
         snapshot = notebook_snapshot()
