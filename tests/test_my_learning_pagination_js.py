@@ -88,6 +88,7 @@ const context = {document, location:{href:'https://www.coursera.org/my-learning?
   URL, getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'})};
 const fn = vm.runInNewContext(input.script, context);
 const inspected = fn({action:'inspect'});
+if (input.changedStatus) row.textContent = 'Chosen course Course · '+input.changedStatus+'% complete Get started Resume';
 const clicked = fn({action:'click_course',signature:inspected.signature,id:'chosen-course'});
 process.stdout.write(JSON.stringify({inspected,clicked,clicks}));
 """
@@ -114,6 +115,16 @@ class PaginationScriptTests(unittest.TestCase):
         self.assertEqual(result['inspected']['cards'][0]['action'], 'resume')
         self.assertTrue(result['clicked']['clicked'])
         self.assertEqual(result['clicks'], ['Resume'])
+
+    def test_course_click_rechecks_progress_after_inspection(self):
+        process = subprocess.run(['node', '-e', NODE_COURSE_ACTION],
+                                 input=json.dumps({'script':learning.PAGE_JS,
+                                                   'changedStatus':41}),
+                                 text=True, capture_output=True, check=True)
+        result = json.loads(process.stdout)
+        self.assertEqual(result['inspected']['cards'][0]['source'], 'Course · 40% complete')
+        self.assertEqual(result['clicked']['error'], 'My Learning changed before course selection.')
+        self.assertEqual(result['clicks'], [])
 
     def test_compact_pagination_recognized_and_next_clicked(self):
         for completed in (False, True):

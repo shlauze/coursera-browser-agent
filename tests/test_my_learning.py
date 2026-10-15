@@ -288,7 +288,7 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
                 await learning.scan_in_progress(tab, set())
         self.assertEqual([name for name, _ in tab.commands], ["Page.navigate", "click_next"])
 
-    async def test_open_scanned_course_rejects_changed_card_before_click(self):
+    async def test_open_scanned_course_accepts_updated_started_progress(self):
         started = card("unfinished", "Unfinished", action="resume")
         started["source"] = "Course · 43% complete"
         tab = FakeTab([[started]])
@@ -296,7 +296,60 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             selected = await learning.scan_in_progress(tab, set())
         started["source"] = "Course · 44% complete"
         with patch.object(learning, "POLL_SECONDS", 0):
-            with self.assertRaisesRegex(RuntimeError, "changed before the selected course"):
+            opened = await learning.open_scanned_course(tab, selected)
+        self.assertEqual(opened["id"], "unfinished")
+        self.assertEqual(opened["action"], "resume")
+        self.assertEqual(opened["source"], "Course · 44% complete")
+        self.assertEqual([value for name, value in tab.commands if name == "click_course"],
+                         ["unfinished"])
+
+    async def test_open_scanned_course_rechecks_when_action_changes(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = FakeTab([[started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        started["action"] = "get_started"
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaises(learning.MyLearningSelectionChanged):
+                await learning.open_scanned_course(tab, selected)
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
+
+    async def test_open_scanned_course_rechecks_when_card_moves_to_another_page(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        other = card("other", "Other")
+        tab = FakeTab([[other], [started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        self.assertEqual(selected["selected_page"], 2)
+        tab.pages = [[started], [other]]
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaises(learning.MyLearningSelectionChanged):
+                await learning.open_scanned_course(tab, selected)
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
+
+    async def test_open_scanned_course_rechecks_when_course_completes(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = FakeTab([[started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        started["source"] = "Course · 100% complete"
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaises(learning.MyLearningSelectionChanged):
+                await learning.open_scanned_course(tab, selected)
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
+
+    async def test_open_scanned_course_rejects_current_link_for_another_course(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = FakeTab([[started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        started["title_url"] = "https://www.coursera.org/learn/another-course/home/welcome"
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaises(RuntimeError):
                 await learning.open_scanned_course(tab, selected)
         self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
 

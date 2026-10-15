@@ -146,6 +146,67 @@ class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(order, ["scan", "open"])
             learning.assert_not_awaited()
 
+    async def test_changed_my_learning_selection_rescans_and_opens_latest_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text(
+                "https://www.coursera.org/learn/old-course\n"
+                "https://www.coursera.org/learn/current-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            old = {"id": "old-course", "url": "https://www.coursera.org/learn/old-course",
+                   "title": "Old Course", "action": "resume"}
+            current = {"id": "current-course", "url": "https://www.coursera.org/learn/current-course",
+                       "title": "Current Course", "action": "resume"}
+            self.open_scanned.side_effect = [
+                queue.MyLearningSelectionChanged("The selected My Learning card changed."),
+                current,
+            ]
+            with patch.object(queue, "_scan_with_retry", AsyncMock(side_effect=[old, current])) as scan, \
+                 patch.object(queue.asyncio, "sleep", AsyncMock()):
+                selected = await queue._next_course_id(
+                    store, SimpleNamespace(courses=course_file), SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "current-course")
+            self.assertEqual(scan.await_count, 2)
+            self.assertEqual([call.args[1]["id"] for call in self.open_scanned.await_args_list],
+                             ["old-course", "current-course"])
+
+    async def test_repeated_my_learning_selection_changes_stop_after_bounded_rescans(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/active-course\n",
+                                   encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            selected = {"id": "active-course", "url": "https://www.coursera.org/learn/active-course",
+                        "title": "Active Course", "action": "resume"}
+            self.open_scanned.side_effect = queue.MyLearningSelectionChanged(
+                "The selected My Learning card changed.")
+            with patch.object(queue, "_scan_with_retry", AsyncMock(return_value=selected)) as scan, \
+                 patch.object(queue.asyncio, "sleep", AsyncMock()):
+                with self.assertRaisesRegex(RuntimeError, "My Learning.*changed"):
+                    await queue._next_course_id(
+                        store, SimpleNamespace(courses=course_file), SimpleNamespace(), set(), True)
+            self.assertEqual(scan.await_count, 3)
+            self.assertEqual(self.open_scanned.await_count, 3)
+
+    async def test_other_course_open_failure_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/active-course\n",
+                                   encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            selected = {"id": "active-course", "url": "https://www.coursera.org/learn/active-course",
+                        "title": "Active Course", "action": "resume"}
+            self.open_scanned.side_effect = RuntimeError("Course opening result is uncertain")
+            with patch.object(queue, "_scan_with_retry", AsyncMock(return_value=selected)) as scan:
+                with self.assertRaisesRegex(RuntimeError, "result is uncertain"):
+                    await queue._next_course_id(
+                        store, SimpleNamespace(courses=course_file), SimpleNamespace(), set(), True)
+            scan.assert_awaited_once()
+            self.open_scanned.assert_awaited_once()
+
     async def test_empty_in_progress_does_not_browse_saved_certificates(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

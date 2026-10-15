@@ -17,7 +17,8 @@ import coursera_start as engine
 from course_state import MAX_COURSES, QueueStore, RunLock, course_identity, load_courses, now, safe_limits
 from course_adapter import (discover_modules, discover_roster, inspect_sidebar_progress,
                             verified_sidebar_module, verify_course_completion)
-from my_learning import (MY_LEARNING_URL, scan_in_progress, open_scanned_course,
+from my_learning import (MY_LEARNING_URL, MyLearningSelectionChanged,
+                         scan_in_progress, open_scanned_course,
                          find_completed_certificate,
                          observed_certificate_url, open_certificate_page,
                          open_my_learning, valid_certificate_url, verify_saved_certificate)
@@ -729,10 +730,18 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
     active_ids = _configured_course_ids(store, args)
     remaining = [identity for identity in active_ids if identity not in processed]
     if auto_my_learning:
-        selected = await _scan_with_retry(store, tab, set(processed))
-        store.event("my_learning_scanned", "Все страницы In Progress прочитаны; " +
-                    ("выбран " + selected["id"] if selected else "незавершённых карточек не найдено"))
-        if selected is not None:
+        # Coursera can reorder or update a card between the complete inventory
+        # and the final click. In that case select again from all pages instead
+        # of trusting an old page number or accidentally opening another card.
+        for selection_attempt in range(3):
+            if selection_attempt:
+                active_ids = _configured_course_ids(store, args)
+                remaining = [identity for identity in active_ids if identity not in processed]
+            selected = await _scan_with_retry(store, tab, set(processed))
+            store.event("my_learning_scanned", "Все страницы In Progress прочитаны; " +
+                        ("выбран " + selected["id"] if selected else "незавершённых карточек не найдено"))
+            if selected is None:
+                break
             identity, url = course_identity(selected.get("url", ""))
             if identity != selected.get("id"):
                 raise engine.StopRun("My Learning returned an inconsistent course link.")
@@ -745,7 +754,16 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
                 await recover_pending_quizzes(tab, store, root=ROOT)
             elif store.course(identity)["url"] != url:
                 raise engine.StopRun("My Learning returned a different link for a configured course.")
-            discovered = await open_scanned_course(tab, selected)
+            try:
+                discovered = await open_scanned_course(tab, selected)
+            except MyLearningSelectionChanged as exc:
+                if selection_attempt == 2:
+                    raise RuntimeError("My Learning changed during three course selections: " + str(exc)) from exc
+                store.event("my_learning_retry",
+                            f"Карточка курса обновилась; повторное чтение всех страниц ({selection_attempt + 1}/2): {exc}",
+                            identity)
+                await asyncio.sleep(selection_attempt + 1)
+                continue
             opened_id, opened_url = course_identity(discovered.get("url", ""))
             if opened_id != identity or opened_url != url or discovered.get("id") != identity:
                 raise engine.StopRun("My Learning returned an inconsistent course link.")

@@ -22,6 +22,10 @@ PAGE_PROBES = 120
 ACTION_PRIORITY = {"resume": 0, "continue_learning": 1, "get_started": 2}
 
 
+class MyLearningSelectionChanged(RuntimeError):
+    """The course list changed before a click; a fresh full scan is safe."""
+
+
 def _site_url(url):
     try:
         parsed = urlsplit(url)
@@ -163,7 +167,8 @@ PAGE_JS = r"""(request=>{
   }
   const page=numberedPage && statusPage && numberedPage!==statusPage?null:
     numberedPage || statusPage || (!hasNext && (courseLinkCount>0 || explicitEmpty)?1:null);
-  const signature=JSON.stringify({url:location.href,page,cards:unique.map(c=>[c.id,c.action,c.title]),hasNext});
+  const signature=JSON.stringify({url:location.href,page,
+    cards:unique.map(c=>[c.id,c.action,c.title,c.source,c.title_url]),hasNext});
   if(request.action==='click_course'){
     if(request.signature!==signature) return {error:'My Learning changed before course selection.',url:location.href};
     const selected=unique.find(c=>c.id===request.id);
@@ -750,8 +755,10 @@ async def _open_selected_course(tab, snapshot, card):
     before_targets = await _page_targets(tab)
     clicked = await _evaluate(tab, PAGE_JS,
                               {"action": "click_course", "signature": snapshot["signature"], "id": expected["id"]})
-    if not clicked.get("clicked") or clicked.get("id") != expected["id"]:
-        raise RuntimeError("Get started changed before the course could be opened.")
+    if not clicked.get("clicked"):
+        raise MyLearningSelectionChanged("The course action changed before its click was dispatched.")
+    if clicked.get("id") != expected["id"]:
+        raise RuntimeError("The course action opened a different card.")
     for _ in range(20):
         location = await _evaluate(tab, MY_LEARNING_LINK_JS, {"action": "inspect"})
         actual = course_from_lesson_url(location.get("url"))
@@ -892,23 +899,33 @@ async def open_scanned_course(tab, selected):
             or selected.get("kind") not in {"started", "new"}):
         raise ValueError("The selected My Learning course has no valid scan evidence.")
     # The scan may have ended many pages after the selected card. Reopen page
-    # one, then require the same page, course, action, and progress before click.
+    # one and check the selected course again. A percentage update is safe when
+    # the card still represents the same started course and action. Changes to
+    # its page, action, or progress class require a fresh full queue scan.
     snapshot = await open_my_learning(tab)
     for expected_page in range(1, selected_page):
         clicked = await _evaluate(tab, PAGE_JS,
                                   {"action": "next_page", "signature": snapshot["signature"]})
         if not clicked.get("clicked") or clicked.get("previous_page") != expected_page:
-            raise RuntimeError("My Learning pagination changed before course selection.")
-        snapshot = await _wait_for_page(tab, expected_page=expected_page + 1,
-                                        previous_snapshot=snapshot)
+            raise MyLearningSelectionChanged("My Learning pagination changed before course selection.")
+        try:
+            snapshot = await _wait_for_page(tab, expected_page=expected_page + 1,
+                                            previous_snapshot=snapshot)
+        except RuntimeError as exc:
+            raise MyLearningSelectionChanged("My Learning page changed while revisiting the selected course.") from exc
     current = next((card for card in snapshot.get("cards", [])
                     if isinstance(card, dict) and card.get("id") == expected["id"]), None)
-    if (current is None or current.get("title_url") != selected.get("title_url")
-            or current.get("url") != expected["url"]
-            or current.get("action") != selected.get("action")
-            or current.get("source") != selected.get("source")
-            or _progress_kind(current.get("source"), current.get("action")) != selected["kind"]):
-        raise RuntimeError("My Learning changed before the selected course could be opened.")
+    if current is None:
+        raise MyLearningSelectionChanged("The selected course moved or disappeared from its scanned page.")
+    current_link = course_from_lesson_url(current.get("title_url"))
+    if not current_link or current_link != expected or current.get("url") != expected["url"]:
+        raise RuntimeError("The selected My Learning course has an inconsistent link.")
+    if current.get("title_url") != selected.get("title_url"):
+        raise MyLearningSelectionChanged("The selected course title link changed.")
+    if current.get("action") != selected.get("action"):
+        raise MyLearningSelectionChanged("The selected course action changed.")
+    if _progress_kind(current.get("source"), current.get("action")) != selected["kind"]:
+        raise MyLearningSelectionChanged("The selected course progress class changed.")
     return await _open_selected_course(tab, snapshot, current)
 
 
