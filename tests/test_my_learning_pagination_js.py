@@ -101,7 +101,7 @@ def inspect(*, status=None, numbered=None, completed=False, click=False):
         'numbered': numbered, 'completed': completed, 'click': click,
     }
     process = subprocess.run(['node', '-e', NODE], input=json.dumps(payload),
-                             text=True, capture_output=True, check=True)
+                             text=True, encoding='utf-8', capture_output=True, check=True)
     return json.loads(process.stdout)
 
 
@@ -109,7 +109,7 @@ class PaginationScriptTests(unittest.TestCase):
     def test_same_course_prefers_resume_even_when_get_started_appears_first(self):
         process = subprocess.run(['node', '-e', NODE_COURSE_ACTION],
                                  input=json.dumps({'script':learning.PAGE_JS}),
-                                 text=True, capture_output=True, check=True)
+                                 text=True, encoding='utf-8', capture_output=True, check=True)
         result = json.loads(process.stdout)
         self.assertEqual(len(result['inspected']['cards']), 1)
         self.assertEqual(result['inspected']['cards'][0]['action'], 'resume')
@@ -120,7 +120,7 @@ class PaginationScriptTests(unittest.TestCase):
         process = subprocess.run(['node', '-e', NODE_COURSE_ACTION],
                                  input=json.dumps({'script':learning.PAGE_JS,
                                                    'changedStatus':41}),
-                                 text=True, capture_output=True, check=True)
+                                 text=True, encoding='utf-8', capture_output=True, check=True)
         result = json.loads(process.stdout)
         self.assertEqual(result['inspected']['cards'][0]['source'], 'Course · 40% complete')
         self.assertEqual(result['clicked']['error'], 'My Learning changed before course selection.')

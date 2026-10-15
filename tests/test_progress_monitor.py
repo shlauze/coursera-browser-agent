@@ -251,6 +251,20 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(data["status"], "attention")
         self.assertEqual(data["events"][0]["message"], "My Learning pagination is unreadable")
 
+    def test_dashboard_shows_control_lifecycle_without_secret_events(self):
+        raw = queue(status="paused", events=[
+            {"kind": "course_skipped", "message": "Course skipped", "course_id": "philosophy"},
+            {"kind": "queue_resumed", "message": "Runner resumed"},
+            {"kind": "quiz_answer_plan", "message": "SECRET_ANSWER"},
+        ])
+        raw["courses"][0]["status"] = "skipped"
+        self.put("state/queue.json", raw)
+        data = monitor.ProgressReader(self.root).snapshot()
+        self.assertEqual(data["courses"][0]["status"], "skipped")
+        self.assertEqual([event["kind"] for event in data["events"]],
+                         ["course_skipped", "queue_resumed"])
+        self.assertNotIn("SECRET_ANSWER", json.dumps(data))
+
     def test_overlarge_state_is_not_read(self):
         path = self.put("state/queue.json", {})
         with path.open("wb") as stream:
@@ -458,6 +472,116 @@ class MonitorTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=3)
         self.assertFalse(thread.is_alive())
+
+    def test_http_control_requires_local_origin_and_revision(self):
+        self.put("state/queue.json", queue())
+        server = monitor.create_server(self.root, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def post(action, revision, course_id=None, headers=None):
+            payload = json.dumps({"action": action, "course_id": course_id,
+                                  "revision": revision}).encode("utf-8")
+            defaults = {"Content-Type": "application/json", "X-Monitor-Action": "control",
+                        "Origin": base}
+            if headers is not None:
+                defaults = headers
+            return urlopen(Request(base + "/api/control", data=payload, method="POST",
+                                   headers=defaults), timeout=3)
+
+        try:
+            with urlopen(base + "/api/progress", timeout=3) as response:
+                initial = json.load(response)
+            self.assertEqual(initial["control"]["revision"], 0)
+            self.assertFalse(initial["runner_active"])
+            for headers in (
+                {"Content-Type": "application/json", "X-Monitor-Action": "control"},
+                {"Content-Type": "application/json", "X-Monitor-Action": "control",
+                 "Origin": "https://evil.invalid"},
+                {"Content-Type": "text/plain", "X-Monitor-Action": "control", "Origin": base},
+                {"Content-Type": "application/json", "X-Monitor-Action": "courses", "Origin": base},
+            ):
+                with self.assertRaises(HTTPError) as caught:
+                    post("pause", 0, headers=headers)
+                self.assertEqual(caught.exception.code, 403)
+                caught.exception.close()
+            with self.assertRaises(HTTPError) as caught:
+                post("not-an-action", 0)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
+            with post("pause", 0) as response:
+                paused = json.load(response)
+            self.assertEqual(paused["control"]["desired"], "paused")
+            self.assertEqual(paused["control"]["revision"], 1)
+            with self.assertRaises(HTTPError) as caught:
+                post("stop", 0)
+            self.assertEqual(caught.exception.code, 409)
+            caught.exception.close()
+            with self.assertRaises(HTTPError) as caught:
+                post("skip", 1, "unknown-course")
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
+            with post("skip", 1, "philosophy") as response:
+                skipped = json.load(response)
+            self.assertEqual(skipped["control"]["skipped_courses"], ["philosophy"])
+            with urlopen(base + "/api/progress", timeout=3) as response:
+                self.assertEqual(json.load(response)["control"]["skipped_courses"], ["philosophy"])
+            with post("unskip", skipped["control"]["revision"], "philosophy") as response:
+                self.assertEqual(json.load(response)["control"]["skipped_courses"], [])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+
+    def test_http_start_and_resume_launch_only_when_inactive(self):
+        server = monitor.create_server(self.root, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def post(action, revision):
+            payload = json.dumps({"action": action, "course_id": None,
+                                  "revision": revision}).encode("utf-8")
+            request = Request(base + "/api/control", data=payload, method="POST",
+                              headers={"Content-Type": "application/json", "X-Monitor-Action": "control",
+                                       "Origin": base})
+            with urlopen(request, timeout=3) as response:
+                return json.load(response)
+
+        try:
+            with patch.object(monitor, "runner_active", return_value=False), \
+                 patch.object(monitor, "launch_managed_runner", return_value="started") as launch:
+                started = post("start", 0)
+                self.assertEqual(started["launch"], "started")
+                self.assertEqual(started["control"]["desired"], "running")
+                self.assertEqual(launch.call_count, 1)
+                paused = post("pause", started["control"]["revision"])
+                resumed = post("resume", paused["control"]["revision"])
+                self.assertEqual(resumed["control"]["desired"], "running")
+                self.assertEqual(launch.call_count, 2)
+            with patch.object(monitor, "runner_active", return_value=True), \
+                 patch.object(monitor, "launch_managed_runner") as launch:
+                active = post("start", resumed["control"]["revision"])
+                self.assertTrue(active["runner_active"])
+                self.assertIsNone(active["launch"])
+                launch.assert_not_called()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_launch_marker_prevents_duplicate_startup(self):
+        fake = type("StartedProcess", (), {"pid": os.getpid()})()
+        with patch.object(monitor, "runner_active", return_value=False), \
+             patch.object(monitor.subprocess, "Popen", return_value=fake) as spawn:
+            self.assertEqual(monitor.launch_managed_runner(self.root), "started")
+            self.assertEqual(monitor.launch_managed_runner(self.root), "starting")
+            spawn.assert_called_once()
+            args = spawn.call_args.args[0]
+            self.assertIn("--control-managed", args)
+            self.assertIn("--yes", args)
 
 
 if __name__ == "__main__":

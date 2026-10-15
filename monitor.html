@@ -7,10 +7,36 @@
 :root{color-scheme:light;--bg:#f3f5f9;--ink:#18243a;--muted:#5c6b80;--line:#e0e6ef;--blue:#2453dc;--green:#13755b;--amber:#986000}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1180px;margin:auto;padding:38px 24px 60px}header{display:flex;gap:20px;align-items:center;justify-content:space-between;margin-bottom:26px}h1{font-size:30px;line-height:1.2;margin:4px 0 8px;letter-spacing:-.6px}h2{font-size:19px;margin:0 0 16px}h3{font-size:16px;margin:0;overflow-wrap:anywhere}p{margin:6px 0}.eyebrow{font-size:12px;font-weight:700;letter-spacing:1.8px;color:var(--blue)}.muted{color:var(--muted)}.small{font-size:12px}.status{display:inline-flex;align-items:center;gap:7px;border-radius:24px;padding:6px 12px;font-size:12px;font-weight:650;background:#e7edf9;color:#365077;white-space:nowrap}.status:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.status.running{background:#e7edff;color:var(--blue)}.status.completed{background:#e5f4ed;color:var(--green)}.status.attention,.status.failed{background:#fff0d7;color:var(--amber)}.card{background:white;border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 2px 5px #24385403}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px}.number{font-size:32px;font-weight:700;letter-spacing:-1px;margin:8px 0 3px}.number span{color:var(--muted);font-weight:400;font-size:20px}.bar{height:6px;border-radius:9px;background:#e9eef7;overflow:hidden;margin-top:14px}.bar i{display:block;width:0;height:100%;background:var(--blue);transition:width .3s}.grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:20px}.current{margin-bottom:20px;border-left:4px solid var(--blue)}.current h3{font-size:21px;margin-bottom:10px}.current-line{display:flex;gap:15px;align-items:center;justify-content:space-between}.reason{margin-top:12px;border-top:1px solid var(--line);padding-top:12px;overflow-wrap:anywhere}.course{padding:17px 0;border-top:1px solid var(--line)}.course:first-child{border:0;padding-top:0}.course-head{display:flex;align-items:start;gap:12px;justify-content:space-between}.course .counts{font-size:13px;color:var(--muted);margin-top:7px}.course .message{font-size:13px;margin-top:9px;overflow-wrap:anywhere}.timeline{list-style:none;margin:0;padding:0}.timeline li{position:relative;padding:0 0 19px 18px;border-left:1px solid var(--line);margin-left:4px}.timeline li:before{content:"";position:absolute;left:-4px;top:7px;width:7px;height:7px;background:#a8b8d5;border-radius:50%}.timeline li:last-child{border-left-color:transparent;padding-bottom:0}.timeline time{display:block;font-size:11px;color:var(--muted);margin-top:4px}.banner{border:1px solid #e8c888;background:#fff7e8;border-radius:12px;padding:13px 17px;margin-bottom:18px;color:#6d490c}.empty{padding:25px 0;color:var(--muted)}footer{margin-top:24px;display:flex;gap:20px;justify-content:space-between;color:var(--muted);font-size:12px}[hidden]{display:none!important}@media(max-width:780px){.grid{grid-template-columns:1fr}.stats{gap:10px}.card{padding:18px}.number{font-size:26px}.number span{font-size:16px}main{padding:24px 16px}.current-line{align-items:start}.course-head{flex-wrap:wrap}}@media(max-width:480px){header{display:block}header>.status{margin-top:8px}.stats{grid-template-columns:1fr}.stats .card{display:grid;grid-template-columns:1fr auto;align-items:center}.stats .number{margin:0}.stats .small,.stats .bar{grid-column:1/-1}.course-head{display:block}.course-head .status{margin-top:8px}footer{display:block}}
 .limits{margin-bottom:20px}.limit-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.limit-grid>div{border-left:3px solid var(--line);padding-left:14px}.limit-value{font-size:21px;font-weight:700;margin:3px 0}.editor{display:flex;gap:8px;margin:10px 0}.editor input{min-width:0;flex:1;padding:10px 12px;border:1px solid #bcc9de;border-radius:8px;font:inherit}.editor button,.remove{padding:9px 13px;border:1px solid #b8c8e7;border-radius:8px;background:#edf2ff;color:#1d47b4;font:inherit;font-weight:600;cursor:pointer}.editor button:disabled,.remove:disabled{cursor:default;opacity:.55}.course-head a{color:#1d47b4;text-decoration:none}.course-head a:hover{text-decoration:underline}.course-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px}.course-actions a{color:#2453dc;font-weight:600}.remove{padding:5px 10px;font-size:12px}.edit-note{min-height:1.5em}.edit-note.error{color:#a1372d}@media(max-width:780px){.limit-grid{grid-template-columns:1fr}}@media(max-width:480px){.editor{display:block}.editor input,.editor button{width:100%;margin-bottom:8px}}
 </style>
+<style>
+.controls{margin-bottom:20px;background:linear-gradient(125deg,#ffffff,#f0f5ff);border-color:#cbd8f4}
+.controls-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+.controls h2{margin-bottom:5px}.control-buttons{display:flex;gap:9px;flex-wrap:wrap;margin:18px 0 10px}
+.control-buttons button,.skip{border:1px solid #a9bce7;border-radius:9px;padding:9px 14px;background:white;color:#244592;font:inherit;font-weight:650;cursor:pointer}
+.control-buttons .primary{background:#2453dc;border-color:#2453dc;color:white}
+.control-buttons .danger{border-color:#e5a69f;color:#9e3125}
+.control-buttons button:hover:not(:disabled),.skip:hover:not(:disabled){filter:brightness(.94)}
+.control-buttons button:focus-visible,.skip:focus-visible{outline:3px solid #ffbf4d;outline-offset:2px}
+.control-buttons button:disabled,.skip:disabled{opacity:.5;cursor:default}
+.controls .control-note{min-height:1.5em}.controls .control-note.error{color:#a1372d}
+.control-links{display:flex;gap:14px;flex-wrap:wrap}.control-links a{color:#2453dc;font-weight:600}
+.skip{font-size:12px;padding:5px 10px}.status.skipped{background:#eef1f7;color:#5c6b80}
+@media(max-width:640px){.controls-head{display:block}.control-buttons button{flex:1 1 130px}}
+</style>
 </head>
 <body><main>
 <header><div><div class="eyebrow">ОБУЧЕНИЕ · ЛОКАЛЬНЫЙ МОНИТОР</div><h1>Прогресс курсов</h1><div class="muted">Проверенные результаты и текущее состояние очереди</div></div><span id="status" class="status">Подключение…</span></header>
 <div id="banner" class="banner" role="status" hidden></div>
+<section class="card controls" aria-label="Управление скриптом">
+ <div class="controls-head"><div><h2>Управление</h2><p class="muted">Команды применяются с сохранением прогресса; текущая операция может завершиться перед паузой или пропуском.</p></div><span id="runner-state" class="status">Проверка…</span></div>
+ <div class="control-buttons" id="control-buttons">
+  <button type="button" class="primary" data-control-action="start">▶ Запустить</button>
+  <button type="button" data-control-action="pause">⏸ Пауза</button>
+  <button type="button" data-control-action="resume">↻ Продолжить</button>
+  <button type="button" class="danger" data-control-action="stop">■ Остановить</button>
+ </div>
+ <p id="control-note" class="small muted control-note" role="status" aria-live="polite">Подключение к исполнителю…</p>
+ <div class="control-links"><a href="https://www.coursera.org/my-learning?myLearningTab=IN_PROGRESS" target="_blank" rel="noopener noreferrer">Открыть My Learning ↗</a><a href="/" id="refresh-view">Обновить панель</a></div>
+</section>
 <section class="stats" aria-label="Общий прогресс">
  <div class="card"><div class="muted">Курсы завершены</div><div id="course-count" class="number">—</div><div id="course-note" class="small muted">Ожидание данных</div><div class="bar"><i id="course-bar"></i></div></div>
  <div class="card"><div class="muted">Модули проверены</div><div id="module-count" class="number">—</div><div id="module-note" class="small muted">Общее число пока неизвестно</div><div class="bar"><i id="module-bar"></i></div></div>
@@ -27,8 +53,9 @@
 </main>
 <script>
 "use strict";
-const labels={idle:"Ожидание",pending:"В очереди",running:"Выполняется",paused:"Приостановлено",attention:"Нужно внимание",failed:"Ошибка",completed:"Завершено"};
+const labels={idle:"Ожидание",pending:"В очереди",running:"Выполняется",paused:"Приостановлено",attention:"Нужно внимание",failed:"Ошибка",completed:"Завершено",skipped:"Пропущен"};
 let courseRevision=null,editBusy=false,editMessage="",editError=false;
+let controlRevision=null,controlBusy=false,controlMessage="",controlError=false;
 const byId=id=>document.getElementById(id);
 const write=(id,text)=>{byId(id).textContent=text||"";};
 const date=value=>{if(!value)return "Время не указано";const d=new Date(value);return Number.isNaN(d.getTime())?"Время не указано":d.toLocaleString("ru-RU");};
@@ -39,7 +66,27 @@ function element(tag,css,text){const node=document.createElement(tag);if(css)nod
 function quota(remaining,limit){return remaining==null?"Неизвестно":remaining.toLocaleString("ru-RU")+(limit==null?"":" / "+limit.toLocaleString("ru-RU"));}
 function retryLabel(limits){const value=limits.groq_retry_after_seconds;if(value===null||value===undefined)return "Нет данных";const stamp=Date.parse(limits.groq_updated_at||"");const left=Number.isNaN(stamp)?value:Math.max(0,value-(Date.now()-stamp)/1000);return left<=0?"Ожидание истекло":left>=60?"≈ "+Math.ceil(left/60)+" мин":"≈ "+Math.ceil(left)+" с";}
 function render(data){
- const t=data.totals;badge(byId("status"),data.status);
+ const t=data.totals;badge(byId("status"),data.status==="running"&&data.runner_active!==true?"attention":data.status);
+ if(data.status==="running"&&data.runner_active!==true)byId("status").textContent="Исполнитель не работает";
+ const control=data.control, active=data.runner_active===true;
+ controlRevision=control&&Number.isInteger(control.revision)?control.revision:null;
+ const desired=control&&control.desired;
+ badge(byId("runner-state"),active?(desired==="paused"?"paused":"running"):(desired==="running"?"attention":"idle"));
+ byId("runner-state").textContent=active?(desired==="paused"?"Пауза запрошена":"Скрипт работает"):(desired==="running"?"Скрипт не запущен":"Скрипт остановлен");
+ for(const button of byId("control-buttons").querySelectorAll("button[data-control-action]")){
+  const action=button.dataset.controlAction;
+  button.disabled=controlBusy||controlRevision===null||(
+   action==="start"?(active||desired==="paused"):
+   action==="pause"?(!active||desired!=="running"):
+   action==="resume"?(desired!=="paused"):
+   (!active&&desired==="stopped"));
+ }
+ const controlNote=byId("control-note");controlNote.className="small control-note "+(controlError?"error":"muted");
+ controlNote.textContent=controlMessage||(controlRevision===null?"Команды временно недоступны.":
+  desired==="paused"?"Пауза сохраняет текущий прогресс. Нажмите «Продолжить», чтобы возобновить.":
+  desired==="stopped"?"Исполнитель остановлен. Нажмите «Запустить» для нового запуска.":
+  active?"Исполнитель выполняет курс. Команды применятся на безопасной границе действия.":
+  "Нажмите «Запустить», чтобы продолжить обучение.");
  count("course-count",t.completed_courses,t.courses);count("module-count",t.completed_modules,t.modules);count("item-count",t.completed_items,t.items);
  bar("course-bar",t.completed_courses,t.courses);bar("module-bar",t.completed_modules,t.modules);bar("item-bar",t.completed_items,t.items);
  write("course-note",!data.has_data?"Добавьте курсы и запустите очередь":t.attention_courses?"Требуют внимания: "+t.attention_courses:data.status==="completed"?"Вся очередь завершена":"Курсов в очереди: "+t.courses);
@@ -50,20 +97,55 @@ function render(data){
  const config=data.configuration||{courses:[],revision:null,issue:null};courseRevision=config.revision;byId("add-course").disabled=editBusy||!courseRevision;
  const note=byId("edit-note");note.className="small edit-note "+(editError||config.issue?"error":"muted");note.textContent=config.issue||editMessage||(config.courses.length===1?"Чтобы убрать единственный курс, сначала добавьте новый. Изменения подхватятся после текущего курса.":"Новые курсы запускаются после текущего; удаление не прерывает начатый курс.");
  const configuredIds=new Set(config.courses.map(c=>c.id));
- const notices=[];if(data.issue)notices.push(data.issue);if(data.stale)notices.push("Данные могут быть устаревшими; монитор не подтверждает, что скрипт сейчас работает.");if(data.source==="legacy")notices.push("Показан последний одиночный запуск. Его материалы могут быть лишь частью курса.");
+ const notices=[];if(data.issue)notices.push(data.issue);if(data.status==="running"&&!active)notices.push("Очередь сохранила статус запуска, но исполнитель сейчас не работает. Используйте кнопку «Запустить» для продолжения.");else if(data.stale)notices.push("Данные могут быть устаревшими; монитор не подтверждает, что скрипт сейчас работает.");if(data.source==="legacy")notices.push("Показан последний одиночный запуск. Его материалы могут быть лишь частью курса.");
  byId("banner").hidden=!notices.length;write("banner",notices.join(" "));
  const current=data.courses.find(c=>c.id===data.current_course)||data.courses.find(c=>c.status==="running");byId("current").hidden=!current;
- if(current){badge(byId("current-status"),current.status);write("current-title",current.title);write("current-module",current.current_module?"Модуль "+current.current_module:"Модуль пока не выбран");write("current-item",current.current_item||"Материал пока не выбран");write("current-message",current.message);byId("current-message").hidden=!current.message;}
+ if(current){badge(byId("current-status"),current.status==="running"&&!active?"attention":current.status);if(current.status==="running"&&!active)byId("current-status").textContent="Ожидает запуска";write("current-title",current.title);write("current-module",current.current_module?"Модуль "+current.current_module:"Модуль пока не выбран");write("current-item",current.current_item||"Материал пока не выбран");write("current-message",current.message);byId("current-message").hidden=!current.message;}
  const courses=byId("courses");courses.replaceChildren();
  if(!data.courses.length)courses.append(element("p","empty","Данных пока нет. Запустите очередь курсов или одиночный курс; прогресс появится автоматически."));
- for(const c of data.courses){const row=element("article","course");const heading=element("div","course-head");heading.append(element("h3","",c.title));const status=element("span");badge(status,c.status);heading.append(status);row.append(heading);row.append(element("div","counts","Модули: "+c.modules_completed+" / "+(c.modules_total===null?"?":c.modules_total)+" · Материалы: "+c.items_completed+" / "+c.items_total));if(!c.inventory_complete)row.append(element("div","small muted","Из обнаруженных материалов · Состав курса ещё уточняется"));if(c.message)row.append(element("p","message",c.message));const actions=element("div","course-actions");if(c.url){const link=element("a","","Открыть курс ↗");link.href=c.url;link.target="_blank";link.rel="noopener noreferrer";actions.append(link);}if(configuredIds.has(c.id)){const remove=element("button","remove","Убрать из списка");remove.type="button";remove.dataset.courseId=c.id;remove.disabled=editBusy||config.courses.length<=1;remove.title=config.courses.length<=1?"Сначала добавьте новый курс":"";actions.append(remove);}else actions.append(element("span","small muted","Удалён из списка; сохранена история запуска"));row.append(actions);courses.append(row);}
+ const skipped=new Set(control&&Array.isArray(control.skipped_courses)?control.skipped_courses:[]);
+ for(const c of data.courses){
+  const row=element("article","course"),heading=element("div","course-head");
+  heading.append(element("h3","",c.title));const status=element("span");badge(status,skipped.has(c.id)?"skipped":c.status==="running"&&!active?"attention":c.status);if(c.status==="running"&&!active&&!skipped.has(c.id))status.textContent="Ожидает запуска";heading.append(status);row.append(heading);
+  row.append(element("div","counts","Модули: "+c.modules_completed+" / "+(c.modules_total===null?"?":c.modules_total)+" · Материалы: "+c.items_completed+" / "+c.items_total));
+  if(!c.inventory_complete)row.append(element("div","small muted","Из обнаруженных материалов · Состав курса ещё уточняется"));
+  if(c.message)row.append(element("p","message",c.message));
+  const actions=element("div","course-actions");
+  if(c.url){const link=element("a","","Открыть курс ↗");link.href=c.url;link.target="_blank";link.rel="noopener noreferrer";actions.append(link);}
+  if(c.status!=="completed"||skipped.has(c.id)){
+   const skip=element("button","skip",skipped.has(c.id)?"Вернуть в очередь":"Пропустить курс");
+   skip.type="button";skip.dataset.controlAction=skipped.has(c.id)?"unskip":"skip";skip.dataset.courseId=c.id;
+   skip.disabled=controlBusy||controlRevision===null;actions.append(skip);
+  }
+  if(configuredIds.has(c.id)){const remove=element("button","remove","Убрать из списка");remove.type="button";remove.dataset.courseId=c.id;remove.disabled=editBusy||config.courses.length<=1;remove.title=config.courses.length<=1?"Сначала добавьте новый курс":"";actions.append(remove);}
+  else actions.append(element("span","small muted","Удалён из списка; сохранена история запуска"));
+  row.append(actions);courses.append(row);
+ }
  const events=byId("events");events.replaceChildren();byId("events-empty").hidden=!!data.events.length;
  for(const event of [...data.events].reverse()){const li=element("li","",event.message||event.kind);li.append(element("time","",date(event.time)));events.append(li);}
  write("updated",data.updated_at?"Изменено: "+date(data.updated_at):"Данные ещё не получены");
 }
 async function mutate(action,value){if(editBusy||!courseRevision)return;editBusy=true;byId("add-course").disabled=true;try{const response=await fetch("/api/courses",{method:"POST",headers:{"Content-Type":"application/json","X-Monitor-Action":"courses"},body:JSON.stringify({action,value,revision:courseRevision})});const result=await response.json();if(!response.ok)throw Error(result.error||"Не удалось сохранить список.");courseRevision=result.revision;editMessage=action==="add"?"Курс добавлен в список.":"Курс убран из списка.";editError=false;if(action==="add")byId("course-url").value="";}catch(error){editMessage=error.message||"Не удалось сохранить список.";editError=true;}finally{editBusy=false;try{const response=await fetch("/api/progress",{cache:"no-store"});if(response.ok)render(await response.json());}catch(error){byId("edit-note").textContent=editMessage;}byId("add-course").disabled=!courseRevision;}}
+async function command(action,courseId=null){
+ if(controlBusy||controlRevision===null)return;
+ const revision=controlRevision;controlBusy=true;
+ for(const button of document.querySelectorAll("button[data-control-action]"))button.disabled=true;
+ try{
+  const response=await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json","X-Monitor-Action":"control"},body:JSON.stringify({action,course_id:courseId,revision})});
+  const result=await response.json();if(!response.ok)throw Error(result.error||"Команда не выполнена.");
+  controlRevision=result.control.revision;controlError=false;
+  const messages={start:"Запуск запрошен.",pause:"Пауза запрошена; текущая операция завершится безопасно.",resume:"Продолжение запрошено.",stop:"Остановка запрошена; прогресс сохранится.",skip:"Курс будет пропущен после текущей операции.",unskip:"Курс возвращён в очередь."};
+  controlMessage=messages[action]||"Команда принята.";
+  if(result.launch==="starting")controlMessage="Исполнитель уже запускается.";
+  if(result.launch==="started")controlMessage="Исполнитель запускается. Ожидайте обновления состояния.";
+ }catch(error){controlError=true;controlMessage=error.message||"Команда не выполнена.";}
+ finally{controlBusy=false;try{await refreshNow();}catch(error){write("control-note",controlMessage);}}
+}
 byId("course-form").addEventListener("submit",event=>{event.preventDefault();mutate("add",byId("course-url").value.trim());});
-byId("courses").addEventListener("click",event=>{const button=event.target.closest("button[data-course-id]");if(button)mutate("remove",button.dataset.courseId);});
-async function poll(){const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),5000);try{const response=await fetch("/api/progress",{cache:"no-store",signal:controller.signal});if(!response.ok)throw Error("HTTP "+response.status);render(await response.json());}catch(error){badge(byId("status"),"attention");byId("banner").hidden=false;write("banner","Нет связи с локальным монитором. Проверьте, что окно run_monitor.cmd открыто. Показаны последние полученные данные.");}finally{clearTimeout(timeout);setTimeout(poll,3000);}}
+byId("control-buttons").addEventListener("click",event=>{const button=event.target.closest("button[data-control-action]");if(button)command(button.dataset.controlAction);});
+byId("courses").addEventListener("click",event=>{const button=event.target.closest("button[data-course-id]");if(!button)return;if(button.dataset.controlAction)command(button.dataset.controlAction,button.dataset.courseId);else mutate("remove",button.dataset.courseId);});
+byId("refresh-view").addEventListener("click",event=>{event.preventDefault();refreshNow().catch(()=>{});});
+async function refreshNow(){const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),5000);try{const response=await fetch("/api/progress",{cache:"no-store",signal:controller.signal});if(!response.ok)throw Error("HTTP "+response.status);render(await response.json());}catch(error){badge(byId("status"),"attention");byId("banner").hidden=false;write("banner","Нет связи с локальным монитором. Проверьте, что окно run_monitor.cmd открыто. Показаны последние полученные данные.");throw error;}finally{clearTimeout(timeout);}}
+async function poll(){try{await refreshNow();}catch(error){}finally{setTimeout(poll,3000);}}
 poll();
 </script></body></html>

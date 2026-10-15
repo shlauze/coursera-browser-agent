@@ -29,11 +29,69 @@ from reflection_flow import maybe_complete_reflection, recover_pending_reflectio
 from pending_preflight import recover_pending_quizzes, _unresolved, explicit_platform_attempt
 from recovery_policy import classify_transient, retry_read
 from incident_report import write_incident
+from runner_control import ControlStore
 
 ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
 CERTIFICATE_RETRY_DELAY = 20
 PROGRAMMING_MARK_RECHECK_SECONDS = 8
+
+
+class ControlStopped(Exception):
+    """A requested stop reached a safe queue boundary."""
+
+
+class CourseSkipped(Exception):
+    """The current course was explicitly skipped without completion proof."""
+
+
+def _control_store(store):
+    # Tests and alternate installations can place queue.json outside ROOT.
+    return ControlStore(store.path.parent.parent)
+
+
+def _prepare_control(root, control_managed):
+    if not control_managed:
+        # Manual run_course.cmd remains usable after dashboard Stop. A dashboard
+        # launch instead preserves its pause/stop command until the user acts.
+        ControlStore(root).change("start")
+
+
+async def _control_point(store, course_id=None, runner=None):
+    """Apply dashboard requests between site actions, never during Submit.
+
+    A pause suspends the current course's no-progress watchdog. Stop and skip
+    do not erase checkpoints or attempt reservations; the next start still
+    reconciles pending site results before selecting another course.
+    """
+    control = _control_store(store)
+    paused_at = None
+    original_deadline = None
+    while True:
+        command = control.snapshot()
+        if command["desired"] == "stopped":
+            raise ControlStopped()
+        if command["desired"] == "paused":
+            if paused_at is None:
+                paused_at = asyncio.get_running_loop().time()
+                timeout = getattr(runner, "_course_timeout", None)
+                if timeout is not None:
+                    original_deadline = timeout.when()
+                    timeout.reschedule(None)
+                if store.data.get("status") != "paused":
+                    store.data["status"] = "paused"
+                    store.event("queue_paused", "Пауза запрошена в панели управления.", course_id)
+            await asyncio.sleep(1)
+            continue
+        if paused_at is not None:
+            timeout = getattr(runner, "_course_timeout", None)
+            if timeout is not None and original_deadline is not None:
+                timeout.reschedule(original_deadline + asyncio.get_running_loop().time() - paused_at)
+            store.data["status"] = "running"
+            store.event("queue_resumed", "Работа возобновлена из панели управления.", course_id)
+        if course_id and course_id in command["skipped_courses"]:
+            raise CourseSkipped(course_id)
+        return command
 
 
 def _known_module_floor(course, logs_root):
@@ -455,6 +513,7 @@ class QueueRunner(engine.CourseRunner):
         if anchor is None and any(supported(item) for item in roster):
             raise engine.StopRun("A supported item has no validated lesson URL for the final completion check.")
         for item_index, item in enumerate(roster, 1):
+            await _control_point(self.store, self.course["id"], self)
             print(f"МАТЕРИАЛ {item_index}/{len(roster)}: {item['title']}", flush=True)
             self.active_item_key = item["key"]
             self.store.update(self.course["id"], current_item=item["title"], message="Проверка материала")
@@ -841,17 +900,18 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
     Automatic startup does not browse saved certificates. The current course's
     certificate is verified only after its outline has been processed.
     """
+    skipped = set(_control_store(store).snapshot()["skipped_courses"])
     active_ids = _configured_course_ids(store, args)
-    remaining = [identity for identity in active_ids if identity not in processed]
+    remaining = [identity for identity in active_ids if identity not in processed and identity not in skipped]
     if auto_my_learning:
         # Coursera can reorder or update a card between the complete inventory
         # and the final click. In that case select again from all pages instead
         # of trusting an old page number or accidentally opening another card.
         for selection_attempt in range(3):
-            if selection_attempt:
-                active_ids = _configured_course_ids(store, args)
-                remaining = [identity for identity in active_ids if identity not in processed]
-            selected = await _scan_with_retry(store, tab, set(processed))
+            skipped = set(_control_store(store).snapshot()["skipped_courses"])
+            active_ids = _configured_course_ids(store, args)
+            remaining = [identity for identity in active_ids if identity not in processed and identity not in skipped]
+            selected = await _scan_with_retry(store, tab, set(processed) | skipped)
             store.event("my_learning_scanned", "Все страницы In Progress прочитаны; " +
                         ("выбран " + selected["id"] if selected else "незавершённых карточек не найдено"))
             if selected is None:
@@ -859,6 +919,9 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
             identity, url = course_identity(selected.get("url", ""))
             if identity != selected.get("id"):
                 raise engine.StopRun("My Learning returned an inconsistent course link.")
+            if identity in _control_store(store).snapshot()["skipped_courses"]:
+                store.event("course_skipped", "Карточка пропущена после изменения команды панели.", identity)
+                continue
             if identity not in active_ids:
                 _append_my_learning_course(store, args, selected)
                 # A course removed from courses.txt may still be In Progress on
@@ -884,6 +947,9 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
             return identity
         # The site has no actionable course. Start only a genuinely new local
         # entry; an old checkpoint or saved certificate is not a startup task.
+        skipped = set(_control_store(store).snapshot()["skipped_courses"])
+        remaining = [identity for identity in _configured_course_ids(store, args)
+                     if identity not in processed and identity not in skipped]
         for identity in remaining:
             course = store.course(identity)
             checkpoint = course.get("checkpoint")
@@ -1057,8 +1123,12 @@ async def run_queue(store, args, tab):
             store.event("queue_attention", "Восстановление отправки: " + message)
             print("QUEUE_ATTENTION:", message, flush=True)
             return 2
+        # A saved Submit is reconciled above before any dashboard command can
+        # defer this run or skip the course containing that attempt.
+        await _control_point(store)
         processed = set()
         while True:
+            await _control_point(store)
             try:
                 next_id = await _next_course_id(store, args, tab, processed, auto_my_learning)
             except (asyncio.CancelledError, KeyboardInterrupt):
@@ -1087,6 +1157,7 @@ async def run_queue(store, args, tab):
             runner = QueueRunner(tab, args, directory, store, course)
             course_completed = False
             try:
+                await _control_point(store, course["id"], runner)
                 if not auto_my_learning:
                     runner.current_operation = "certificate"
                     certificate_url = await _remember_visible_certificate(store, tab, course)
@@ -1151,6 +1222,7 @@ async def run_queue(store, args, tab):
                     discovered_items = 0
                     proof = None
                     for module_index, number in enumerate(modules, 1):
+                        await _control_point(store, course["id"], runner)
                         expected_count = engine.MODULE_ITEM_COUNTS.get(number)
                         verified = verified_sidebar_module(sidebar, number, expected_count,
                                                            previous_rosters.get(number))
@@ -1209,6 +1281,7 @@ async def run_queue(store, args, tab):
                                 lambda: inspect_sidebar_progress(tab, course["url"]))
                             if sidebar and sidebar["modules"] != modules:
                                 sidebar = None
+                    await _control_point(store, course["id"], runner)
                     verified_rosters = {int(n):record["roster"] for n,record in runner.checkpoint["modules"].items()
                                         if record.get("verified_complete") and isinstance(record.get("roster"), list)}
                     if proof is None:
@@ -1238,6 +1311,18 @@ async def run_queue(store, args, tab):
                     certificate_proof = await _verify_course_certificate(store, tab, course)
                     _mark_course_completed(store, runner, course, certificate_proof)
                     course_completed = True
+            except CourseSkipped:
+                runner.data.update(status="skipped", stop_reason="Курс пропущен командой панели управления.")
+                store.data["current_course"] = None
+                store.update(course["id"], status="skipped", current_item=None,
+                             message="Курс пропущен по вашему запросу; сертификат не подтверждён.")
+                store.event("course_skipped", "Курс пропущен без отметки завершения и сертификата.", course["id"])
+                print("COURSE_SKIPPED:", course["id"], flush=True)
+                continue
+            except ControlStopped:
+                runner.data.update(status="interrupted", stop_reason="Остановлено из панели управления.")
+                store.update(course["id"], status="pending", message="Остановлено из панели управления; прогресс сохранён.")
+                raise
             except (asyncio.CancelledError, KeyboardInterrupt):
                 runner.data.update(status="interrupted", stop_reason="Interrupted by user")
                 store.update(course["id"], status="attention", message="Запуск прерван. Прогресс сохранён.")
@@ -1289,10 +1374,21 @@ async def run_queue(store, args, tab):
                     break
         active_ids = _configured_course_ids(store, args)
         complete = discovery_complete and all(store.course(identity)["status"] == "completed" for identity in active_ids)
-        store.data.update(status="completed" if complete else "attention", current_course=None)
-        store.event("queue_completed" if complete else "course_attention",
-                    "Все курсы завершены и проверены." if complete else "Есть незавершённые курсы; см. причину в мониторе.")
-        return 0 if complete else 3 if retryable_attention else 2
+        skipped = set(_control_store(store).snapshot()["skipped_courses"])
+        only_skipped_remain = (discovery_complete and not complete and
+                               all(store.course(identity)["status"] == "completed" or identity in skipped
+                                   for identity in active_ids))
+        store.data.update(status="completed" if complete else "paused" if only_skipped_remain else "attention",
+                          current_course=None)
+        store.event("queue_completed" if complete else "queue_paused" if only_skipped_remain else "course_attention",
+                    "Все курсы завершены и проверены." if complete else
+                    "Доступные курсы закончились; пропущенные курсы не считаются завершёнными."
+                    if only_skipped_remain else "Есть незавершённые курсы; см. причину в мониторе.")
+        return 0 if complete or only_skipped_remain else 3 if retryable_attention else 2
+    except ControlStopped:
+        store.data.update(status="paused", current_course=None)
+        store.event("queue_paused", "Остановлено из панели управления; состояние сохранено.")
+        return 130
     except (asyncio.CancelledError, KeyboardInterrupt):
         store.data["status"] = "paused"
         store.event("queue_paused", "Остановлено пользователем; состояние сохранено.")
@@ -1490,6 +1586,8 @@ def main():
     parser.add_argument("--validate", action="store_true", help="Только проверить список, без браузера и API")
     parser.add_argument("--monitor", action="store_true")
     parser.add_argument("--yes", action="store_true", help="Начать без ожидания Enter после проверки браузера")
+    parser.add_argument("--control-managed", action="store_true",
+                        help="Сохранять команды панели управления при запуске из панели")
     parser.add_argument("--manual-queue", action="store_false", dest="auto_my_learning",
                         help="Выполнять только courses.txt, без поиска курсов во вкладке In Progress")
     parser.set_defaults(auto_my_learning=True)
@@ -1504,6 +1602,7 @@ def main():
     if sys.platform != "win32":
         raise RuntimeError("Запускайте очередь на этом Windows-компьютере.")
     with RunLock(ROOT / "state" / "runner.lock"), reported_store(ROOT / "state" / "queue.json", courses) as store:
+        _prepare_control(ROOT, args.control_managed)
         from configure_new_pc import load_notice
         engine.configure_course(courses[0]["url"], notice=load_notice())
         engine.groq_key()

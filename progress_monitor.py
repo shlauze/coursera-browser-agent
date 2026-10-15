@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import re
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +23,7 @@ from urllib.parse import urlsplit
 import webbrowser
 from course_state import MAX_COURSES, RunLock, course_identity
 from my_learning import valid_certificate_url
+from runner_control import ControlConflict, ControlStore, runner_active
 from shared_io import open_read_shared
 
 ROOT = Path(__file__).resolve().parent
@@ -29,12 +32,12 @@ MAX_EVENTS = 60
 MAX_CONFIG_BYTES = 512 * 1024
 MAX_ACTION_BYTES = 2048
 QUEUE_STATUSES = {"idle", "running", "paused", "attention", "completed"}
-COURSE_STATUSES = {"pending", "running", "completed", "attention", "failed"}
+COURSE_STATUSES = {"pending", "running", "completed", "attention", "failed", "skipped"}
 QUEUE_EVENTS = {"queue_started", "course_started", "module_started", "item_started", "item_completed",
                 "module_completed", "item_manual_required", "module_manual_required",
                 "course_completed", "course_discovered", "certificate_opened",
                 "certificate_attention", "course_transition_attention", "my_learning_retry", "course_attention",
-                "queue_paused", "queue_completed", "queue_attention",
+                "queue_paused", "queue_resumed", "queue_completed", "queue_attention", "course_skipped",
                 "my_learning_scanned", "quiz_preflight_reconciled", "read_recovery"}
 
 
@@ -440,6 +443,13 @@ class ProgressReader:
             result["issue"] = issue
             result["configuration"] = {"courses": configured, "revision": revision, "issue": config_issue}
             result["limits"] = limits
+            try:
+                result["control"] = ControlStore(self.root).snapshot()
+                result["runner_active"] = runner_active(self.root)
+            except (OSError, ValueError, RuntimeError):
+                result["control"] = None
+                result["runner_active"] = False
+                result["issue"] = (result["issue"] or "") + " Команды управления временно недоступны."
             rate_events = [e["message"] for e in result["events"] if e["kind"] == "course_attention"
                            and "Groq" in e["message"] and "429" in e["message"]]
             result["limits"]["last_rate_limit"] = rate_events[-1] if rate_events else None
@@ -449,10 +459,75 @@ class ProgressReader:
             return result
 
 
+def _process_alive(pid):
+    if type(pid) is not int or pid <= 0:
+        return False
+    if os.name == "nt":
+        # On Windows os.kill(pid, 0) means CTRL_C_EVENT and would interrupt
+        # our own console process. Query the process handle instead.
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def launch_managed_runner(root):
+    """Launch once across monitor instances; the runner owns runner.lock itself."""
+    root = Path(root).resolve()
+    state = root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    marker = state / "monitor_launch.json"
+    try:
+        with RunLock(state / "monitor_launch.lock"):
+            if runner_active(root):
+                return "already_running"
+            try:
+                pending = read_json(marker, root)
+            except (OSError, ValueError, UnicodeDecodeError):
+                pending = {}
+            age = time.time() - pending.get("started_at", 0) if type(pending.get("started_at")) in {int, float} else 1e9
+            if 0 <= age < 45 and _process_alive(pending.get("pid")):
+                return "starting"
+            logs = root / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            with (logs / "monitor_runner.log").open("ab") as output:
+                process = subprocess.Popen(
+                    [sys.executable, "-X", "utf8", "-X", "faulthandler", str(root / "course_queue.py"),
+                     "--monitor", "--yes", "--control-managed"],
+                    cwd=root, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            atomic_text(marker, json.dumps({"pid": process.pid, "started_at": time.time()}))
+            return "started"
+    except RuntimeError as error:
+        if "Скрипт уже запущен" in str(error):
+            return "starting"
+        raise
+
+
 def create_server(root=ROOT, port=8765):
     root = Path(root).resolve()
     reader = ProgressReader(root)
     editor = CoursesEditor(root)
+    controller = ControlStore(root)
     html_path = Path(__file__).with_name("monitor.html")
     html = html_path.read_bytes()
     scripts = re.findall(rb"<script>(.*?)</script>", html, re.DOTALL)
@@ -504,13 +579,14 @@ def create_server(root=ROOT, port=8765):
             if not self._local_request():
                 self._send(403, b"Local requests only", "text/plain; charset=utf-8")
                 return
-            if self.path != "/api/courses":
+            if self.path not in {"/api/courses", "/api/control"}:
                 self._send(405, b"Method not allowed", "text/plain; charset=utf-8")
                 return
+            action_type = "courses" if self.path == "/api/courses" else "control"
             origin = self.headers.get("Origin")
             port = self.server.server_address[1]
             if (origin not in {f"http://{host}:{port}" for host in ("127.0.0.1", "localhost")}
-                    or self.headers.get("X-Monitor-Action") != "courses"
+                    or self.headers.get("X-Monitor-Action") != action_type
                     or self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json"):
                 self._send(403, b"Same-origin JSON action required", "text/plain; charset=utf-8")
                 return
@@ -520,10 +596,31 @@ def create_server(root=ROOT, port=8765):
                 return
             try:
                 payload = json.loads(self.rfile.read(int(size)).decode("utf-8"))
-                if not isinstance(payload, dict) or set(payload) != {"action", "value", "revision"}:
-                    raise ValueError("Некорректное изменение списка курсов.")
-                result = editor.change(payload["action"], payload["value"], payload["revision"])
-            except CourseListConflict as error:
+                if action_type == "courses":
+                    if not isinstance(payload, dict) or set(payload) != {"action", "value", "revision"}:
+                        raise ValueError("Некорректное изменение списка курсов.")
+                    result = editor.change(payload["action"], payload["value"], payload["revision"])
+                else:
+                    if (not isinstance(payload, dict) or set(payload) != {"action", "course_id", "revision"}
+                            or payload["action"] not in {"start", "pause", "resume", "stop", "skip", "unskip"}
+                            or type(payload["revision"]) is not int or payload["revision"] < 0):
+                        raise ValueError("Некорректная команда управления.")
+                    action, course_id = payload["action"], payload["course_id"]
+                    if action in {"skip", "unskip"}:
+                        if not slug(course_id):
+                            raise ValueError("Укажите курс из очереди.")
+                        if (action == "skip" and course_id not in
+                                {course["id"] for course in reader.snapshot()["courses"]}):
+                            raise ValueError("Такого курса нет в очереди.")
+                    elif course_id is not None:
+                        raise ValueError("Для этой команды курс не требуется.")
+                    controller.change(action, course_id=course_id, revision=payload["revision"])
+                    launch = None
+                    if action in {"start", "resume"} and not runner_active(root):
+                        launch = launch_managed_runner(root)
+                    result = {"control": controller.snapshot(), "runner_active": runner_active(root),
+                              "launch": launch}
+            except (CourseListConflict, ControlConflict) as error:
                 code, result = 409, {"error": str(error)}
             except (ValueError, TypeError, UnicodeDecodeError) as error:
                 code, result = 400, {"error": clean_text(str(error), 250)}
