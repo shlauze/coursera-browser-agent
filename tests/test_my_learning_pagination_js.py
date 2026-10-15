@@ -45,6 +45,53 @@ const clicked = input.click ? fn({action:'next_page', signature:inspected.signat
 process.stdout.write(JSON.stringify({inspected, clicked, clicks}));
 """
 
+NODE_COURSE_ACTION = r"""
+const vm = require('vm');
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const clicks = [];
+function element(text='', attrs={}) {
+  return {
+    innerText:text, textContent:text, parentElement:null, disabled:false,
+    getAttribute:key=>attrs[key] ?? null,
+    getClientRects:()=>[{}],
+    getBoundingClientRect:()=>({width:100,height:20}),
+    querySelectorAll:()=>[],
+    matches:selector=>selector==='a' && attrs.tag==='a',
+    click:()=>clicks.push(text),
+  };
+}
+const title = element('Chosen course', {tag:'a'});
+title.href = 'https://www.coursera.org/learn/chosen-course/home/welcome';
+const start = element('Get started');
+const resume = element('Resume');
+const row = element('Chosen course Course · 40% complete Get started Resume');
+start.parentElement = row;
+resume.parentElement = row;
+title.parentElement = row;
+row.querySelectorAll = selector=>selector==='a[href]' ? [title] : [];
+const page = element('', {'aria-label':'Page number 1'});
+const tab = element('In Progress');
+const body = element('Chosen course Course · 40% complete');
+const document = {
+  readyState:'complete', body, documentElement:body,
+  querySelector:selector=>selector==='main' ? body : null,
+  querySelectorAll:selector=>{
+    if(selector==='a,button') return [start,resume,title];
+    if(selector==='a[href]') return [title];
+    if(selector==='button[aria-label],a[aria-label]') return [page];
+    if(selector==='[role="tab"][aria-selected="true"]') return [tab];
+    return [];
+  },
+};
+const context = {document, location:{href:'https://www.coursera.org/my-learning?myLearningTab=IN_PROGRESS'},
+  URL, getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'})};
+const fn = vm.runInNewContext(input.script, context);
+const inspected = fn({action:'inspect'});
+const clicked = fn({action:'click_course',signature:inspected.signature,id:'chosen-course'});
+process.stdout.write(JSON.stringify({inspected,clicked,clicks}));
+"""
+
 
 def inspect(*, status=None, numbered=None, completed=False, click=False):
     payload = {
@@ -58,6 +105,16 @@ def inspect(*, status=None, numbered=None, completed=False, click=False):
 
 
 class PaginationScriptTests(unittest.TestCase):
+    def test_same_course_prefers_resume_even_when_get_started_appears_first(self):
+        process = subprocess.run(['node', '-e', NODE_COURSE_ACTION],
+                                 input=json.dumps({'script':learning.PAGE_JS}),
+                                 text=True, capture_output=True, check=True)
+        result = json.loads(process.stdout)
+        self.assertEqual(len(result['inspected']['cards']), 1)
+        self.assertEqual(result['inspected']['cards'][0]['action'], 'resume')
+        self.assertTrue(result['clicked']['clicked'])
+        self.assertEqual(result['clicks'], ['Resume'])
+
     def test_compact_pagination_recognized_and_next_clicked(self):
         for completed in (False, True):
             with self.subTest(completed=completed):

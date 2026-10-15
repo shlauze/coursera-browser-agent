@@ -721,11 +721,10 @@ async def _open_my_learning_with_retry(store, tab, course_id):
 
 
 async def _next_course_id(store, args, tab, processed, auto_my_learning):
-    """Scan In Progress before certificate checks or any course-card click.
+    """Open the selected In Progress card before considering local fallbacks.
 
-    A saved certificate is pending work. The caller verifies it before opening
-    another course. Live started courses take priority over new cards, and
-    locally configured courses are used only after the site list is exhausted.
+    Automatic startup does not browse saved certificates. The current course's
+    certificate is verified only after its outline has been processed.
     """
     active_ids = _configured_course_ids(store, args)
     remaining = [identity for identity in active_ids if identity not in processed]
@@ -733,12 +732,6 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
         selected = await _scan_with_retry(store, tab, set(processed))
         store.event("my_learning_scanned", "Все страницы In Progress прочитаны; " +
                     ("выбран " + selected["id"] if selected else "незавершённых карточек не найдено"))
-        # A crash can leave a certificate link saved before its matching page
-        # was verified. No scanned course card is opened before that check.
-        pending_certificate = next((identity for identity in remaining
-                                    if valid_certificate_url(store.course(identity).get("certificate_page_url"))), None)
-        if pending_certificate is not None:
-            return pending_certificate
         if selected is not None:
             identity, url = course_identity(selected.get("url", ""))
             if identity != selected.get("id"):
@@ -757,6 +750,20 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
             if opened_id != identity or opened_url != url or discovered.get("id") != identity:
                 raise engine.StopRun("My Learning returned an inconsistent course link.")
             return identity
+        # The site has no actionable course. Start only a genuinely new local
+        # entry; an old checkpoint or saved certificate is not a startup task.
+        for identity in remaining:
+            course = store.course(identity)
+            checkpoint = course.get("checkpoint")
+            if (course.get("status") == "pending" and course.get("previous_status", "pending") == "pending" and
+                    not valid_certificate_url(course.get("certificate_page_url")) and
+                    not course.get("run_directory") and course.get("current_module") is None and
+                    not any(type(course.get(field)) is int and course[field] > 0
+                            for field in ("modules_discovered", "items_completed")) and
+                    (not isinstance(checkpoint, dict) or not any(checkpoint.get(field)
+                        for field in ("modules", "attempts", "feedback", "answer_history")))):
+                return identity
+        return None
     for identity in remaining:
         course = store.course(identity)
         if course.get("previous_status") == "completed":
@@ -774,21 +781,6 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
     for identity in remaining:
         if valid_certificate_url(store.course(identity).get("certificate_page_url")):
             return identity
-    if auto_my_learning:
-        # A verified empty In Progress list gives new configured courses
-        # priority over old checkpoints. If none are new, revisit the old
-        # course to reconcile a delayed certificate or incomplete site state.
-        for identity in remaining:
-            course = store.course(identity)
-            checkpoint = course.get("checkpoint")
-            if (course.get("previous_status") == "pending" and
-                    not course.get("run_directory") and course.get("current_module") is None and
-                    not any(type(course.get(field)) is int and course[field] > 0
-                            for field in ("modules_discovered", "items_completed")) and
-                    (not isinstance(checkpoint, dict) or not any(checkpoint.get(field)
-                        for field in ("modules", "attempts", "feedback", "answer_history")))):
-                return identity
-        return remaining[0] if remaining else None
     return remaining[0] if remaining else None
 
 
@@ -962,51 +954,16 @@ async def run_queue(store, args, tab):
             runner = QueueRunner(tab, args, directory, store, course)
             course_completed = False
             try:
-                saved_certificate = course.get("certificate_page_url")
-                if auto_my_learning and valid_certificate_url(saved_certificate):
-                    proof = await _verify_course_certificate(store, tab, course, saved_certificate)
-                    _mark_course_completed(store, runner, course, proof)
-                    course_completed = True
-                    runner.data["finished"] = now()
-                    engine.save_json(directory / "progress.json", runner.data)
-                    try:
-                        await _open_my_learning_with_retry(store, tab, course["id"])
-                    except Exception as exc:
-                        store.event("certificate_attention", str(exc)[:500], course["id"])
-                        discovery_complete = False
-                        break
-                    continue
-                certificate_url = await _remember_visible_certificate(store, tab, course)
-                if (certificate_url and course.get("inventory_complete") is True and
-                        type(course.get("modules_total")) is int and course["modules_total"] > 0 and
-                        course.get("modules_discovered") == course["modules_total"]):
-                    proof = await _verify_course_certificate(store, tab, course, certificate_url)
-                    _mark_course_completed(store, runner, course, proof)
-                    course_completed = True
-                    runner.data["finished"] = now()
-                    engine.save_json(directory / "progress.json", runner.data)
-                    try:
-                        await _open_my_learning_with_retry(store, tab, course["id"])
-                    except Exception as exc:
-                        store.event("certificate_attention", str(exc)[:500], course["id"])
-                        discovery_complete = False
-                        break
-                    continue
-                if (auto_my_learning and not valid_certificate_url(course.get("certificate_page_url")) and
-                        _all_discovered_items_confirmed(course)):
-                    recovered = await _remember_completed_certificate(store, tab, course)
-                    if recovered:
-                        proof = await _verify_course_certificate(store, tab, course, recovered)
+                if not auto_my_learning:
+                    certificate_url = await _remember_visible_certificate(store, tab, course)
+                    if (certificate_url and course.get("inventory_complete") is True and
+                            type(course.get("modules_total")) is int and course["modules_total"] > 0 and
+                            course.get("modules_discovered") == course["modules_total"]):
+                        proof = await _verify_course_certificate(store, tab, course, certificate_url)
                         _mark_course_completed(store, runner, course, proof)
                         course_completed = True
                         runner.data["finished"] = now()
                         engine.save_json(directory / "progress.json", runner.data)
-                        try:
-                            await _open_my_learning_with_retry(store, tab, course["id"])
-                        except Exception as exc:
-                            store.event("certificate_attention", str(exc)[:500], course["id"])
-                            discovery_complete = False
-                            break
                         continue
                 async with asyncio.timeout(args.minutes * 60) as course_timeout:
                     runner._course_timeout = course_timeout

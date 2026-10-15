@@ -222,6 +222,17 @@ class DurableStateTests(unittest.TestCase):
             self.assertEqual(loaded.course('philosophy')['status'], 'pending')
             self.assertEqual(loaded.course('philosophy')['previous_status'], 'completed')
 
+    def test_verified_certificate_completion_survives_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'queue.json'
+            queue = state.QueueStore(path, copy.deepcopy(COURSES))
+            queue.update('philosophy', status='completed', completion_method='certificate',
+                         certificate_verified_at='2026-10-15T12:00:00+05:00',
+                         certificate_page_url='https://www.coursera.org/account/accomplishments/verify/ABC12345')
+            loaded = state.QueueStore(path, copy.deepcopy(COURSES))
+            self.assertEqual(loaded.course('philosophy')['status'], 'completed')
+            self.assertEqual(loaded.course('philosophy')['previous_status'], 'completed')
+
     def test_removed_completed_course_and_sanitized_limits_survive_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'queue.json'

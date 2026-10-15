@@ -329,6 +329,30 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
             selected = await learning.discover_next_course(tab, set())
         self.assertEqual(selected["id"], "unfinished")
 
+    async def test_resume_action_precedes_started_row_with_get_started(self):
+        started_with_start_button = card("older", "Older", action="get_started")
+        started_with_start_button["source"] = "Course · 40% complete"
+        resumed = card("resume-course", "Resume course", action="resume")
+        tab = FakeTab([[started_with_start_button], [resumed]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.discover_next_course(tab, set())
+        self.assertEqual(selected["id"], "resume-course")
+        self.assertEqual([value for name, value in tab.commands if name == "click_course"],
+                         ["resume-course"])
+
+    async def test_later_duplicate_resume_replaces_earlier_get_started(self):
+        earlier = card("same-course", "Same course", action="get_started")
+        earlier["source"] = "Course · 40% complete"
+        later = card("same-course", "Same course", action="resume")
+        later["source"] = "Course · 40% complete"
+        tab = FakeTab([[earlier, card("other-course", "Other course")], [later]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+            opened = await learning.open_scanned_course(tab, selected)
+        self.assertEqual(selected["action"], "resume")
+        self.assertEqual(selected["selected_page"], 2)
+        self.assertEqual(opened["action"], "resume")
+
     async def test_later_unhandled_course_blocks_earlier_new_course(self):
         unsupported = card("unfinished", "Unfinished", action="unsupported")
         unsupported["source"] = "Course · 40% complete"

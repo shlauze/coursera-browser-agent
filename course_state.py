@@ -162,8 +162,9 @@ class QueueStore:
         for config in courses:
             row = known.get(config["id"], {})
             prior = row.get("status", "pending")
-            # Revalidate completion on each invocation; never trust a local flag
-            # as proof of a site's current completion state.
+            # A previously verified certificate is durable completion evidence.
+            # The live In Progress list can still reopen this course if the
+            # site presents an actionable card on a later run.
             row = {"status":"pending", "modules_total":None, "modules_completed":0,
                    "modules_discovered":0, "inventory_complete":False,
                    "items_total":0, "items_completed":0, "current_module":None,
@@ -176,7 +177,12 @@ class QueueStore:
             elif row.get("checkpoint_saved"):
                 raise ValueError("Отсутствует сохранённый журнал попыток курса " + config["id"] + "; автоматический сброс запрещён.")
             validate_checkpoint(row["checkpoint"])
-            row["status"] = "pending"
+            row["status"] = ("completed" if prior == "completed" and
+                             row.get("completion_method") == "certificate" and
+                             isinstance(row.get("certificate_verified_at"), str) and
+                             bool(row["certificate_verified_at"]) and
+                             isinstance(row.get("certificate_page_url"), str) and
+                             bool(row["certificate_page_url"]) else "pending")
             row["previous_status"] = prior
             if prior == "running":
                 row["message"] = "Предыдущий запуск прерван; состояние сайта будет проверено заново."

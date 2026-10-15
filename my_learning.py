@@ -19,6 +19,7 @@ COMPLETED_LEARNING_URL = "https://www.coursera.org/my-learning?myLearningTab=COM
 MAX_PAGES = 100
 POLL_SECONDS = 0.5
 PAGE_PROBES = 120
+ACTION_PRIORITY = {"resume": 0, "continue_learning": 1, "get_started": 2}
 
 
 def _site_url(url):
@@ -81,9 +82,10 @@ PAGE_JS = r"""(request=>{
     if(/^Continue learning(?:\b|$)/i.test(name)) return 'continue_learning';
     return null;
   };
-  const actions=[...document.querySelectorAll('[data-track-component="enrolled_course_card_link"],a[aria-label^="Get started"],button[aria-label^="Get started"],a[aria-label^="Resume"],button[aria-label^="Resume"],a[aria-label^="Continue learning"],button[aria-label^="Continue learning"]')]
+  const actions=[...document.querySelectorAll('a,button')]
     .filter(e=>visible(e) && actionKind(e) && e.getAttribute('aria-disabled')!=='true' && !e.disabled);
-  const cards=[], elementBySlug=new Map();
+  const actionRank={resume:0,continue_learning:1,get_started:2};
+  const cardsBySlug=new Map(), elementBySlug=new Map();
   for(const action of actions){
     let node=action, titleLink=null;
     for(let depth=0;node && depth<12;node=node.parentElement,depth++){
@@ -102,14 +104,16 @@ PAGE_JS = r"""(request=>{
     if(!slug) continue;
     const title=clean(titleLink.innerText||titleLink.getAttribute('aria-label'));
     const status=clean(node.textContent).match(/Course(?:\s+\d+\s+of\s+\d+)?\s*[·•-]\s*(?:Not started|\d+(?:\.\d+)?% complete|In progress|Started|Complete(?:d)?)\b/i)?.[0]||'';
-    cards.push({id:slug,url:'https://www.coursera.org/learn/'+slug,title:title.slice(0,300),
+    const card={id:slug,url:'https://www.coursera.org/learn/'+slug,title:title.slice(0,300),
       source:status,action:actionKind(action),action_name:actionName(action).slice(0,200),
-      title_url:u.origin+u.pathname});
-    if(!elementBySlug.has(slug)) elementBySlug.set(slug,action);
+      title_url:u.origin+u.pathname};
+    const previous=cardsBySlug.get(slug);
+    if(!previous || actionRank[card.action]<actionRank[previous.action]){
+      cardsBySlug.set(slug,card);elementBySlug.set(slug,action);
+    }
   }
-  // Responsive copies must not cause the same course to be clicked twice.
-  const unique=[], seen=new Set();
-  for(const card of cards){if(!seen.has(card.id)){seen.add(card.id);unique.push(card);}}
+  // Responsive copies must not hide Resume behind an earlier Get started.
+  const unique=[...cardsBySlug.values()];
   const current=[...document.querySelectorAll('button[aria-label],a[aria-label]')]
     .filter(visible).find(e=>/^Page number\s+\d+(?:\s*,.*)?$/i.test(e.getAttribute('aria-label')||''));
   const numberedPage=Number((current?.getAttribute('aria-label')||'').match(/^Page number\s+(\d+)/i)?.[1])||null;
@@ -165,7 +169,7 @@ PAGE_JS = r"""(request=>{
     const selected=unique.find(c=>c.id===request.id);
     if(!selected) return {error:'The selected course is no longer on this page.',url:location.href};
     const action=elementBySlug.get(request.id);
-    if(!action || !visible(action)) return {error:'Get started for the selected course is no longer visible.',url:location.href};
+    if(!action || !visible(action)) return {error:'The selected course action is no longer visible.',url:location.href};
     if(action.matches('a')) action.target='_self';
     action.click();
     return {clicked:true,id:request.id,title_url:selected.title_url,url:location.href};
@@ -771,10 +775,9 @@ async def _open_selected_course(tab, snapshot, card):
 async def scan_in_progress(tab, excluded_ids: set[str]):
     """Read all In Progress pages and select a course without opening it.
 
-    Pagination is allowed, but a course card is only returned as evidence. A
-    pending certificate can therefore be checked after this full scan and
-    before an unfinished course is opened. An unreadable card stops discovery
-    instead of silently skipping an unfinished course.
+    Pagination is allowed, but a course card is only returned as evidence.
+    Resume takes priority over Continue learning and Get started across every
+    page. An unreadable card stops discovery instead of silently skipping it.
     """
     if not isinstance(excluded_ids, set) or any(not isinstance(x, str) for x in excluded_ids):
         raise ValueError("excluded_ids must be a set of course slugs")
@@ -828,7 +831,9 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
                 continue
             if identity in found and found[identity][0] != kind:
                 raise RuntimeError("My Learning showed conflicting progress for " + identity)
-            found.setdefault(identity, (kind, page, card))
+            previous = found.get(identity)
+            if previous is None or ACTION_PRIORITY[action] < ACTION_PRIORITY[previous[2]["action"]]:
+                found[identity] = (kind, page, card)
         for identity, card in cards.items():
             if identity in excluded_ids or identity in row_ids:
                 continue
@@ -843,7 +848,10 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
                 continue
             if identity in found and found[identity][0] != kind:
                 raise RuntimeError("My Learning showed conflicting progress for " + identity)
-            found.setdefault(identity, (kind, page, card))
+            previous = found.get(identity)
+            if (previous is None or
+                    ACTION_PRIORITY[card["action"]] < ACTION_PRIORITY[previous[2]["action"]]):
+                found[identity] = (kind, page, card)
         if not snapshot.get("has_next"):
             break
         clicked = await _evaluate(tab, PAGE_JS,
@@ -857,8 +865,9 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
     if unhandled:
         raise RuntimeError("My Learning contains unfinished courses without a supported action or known status: " +
                            ", ".join(sorted(unhandled)[:5]))
-    selected = next((entry for kind in ("started", "new") for entry in found.values()
-                     if entry[0] == kind), None)
+    selected = next((entry for action in ACTION_PRIORITY
+                     for entry in found.values()
+                     if entry[2] is not None and entry[2].get("action") == action), None)
     if selected is None:
         if deferred:
             raise RuntimeError("My Learning still lists later specialization courses without a start action: " +
