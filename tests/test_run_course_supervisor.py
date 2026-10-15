@@ -26,8 +26,10 @@ class RunCourseSupervisorTests(unittest.TestCase):
         shutil.copy2(ROOT / ".venv" / "pyvenv.cfg", self.fixture / ".venv" / "pyvenv.cfg")
         batch = (ROOT / "run_course.cmd").read_text(encoding="utf-8")
         self.assertIn("set /a restartDelay=restartCount*10", batch)
+        self.assertIn("set /a transientDelay=transientCount*30", batch)
         self.assertIn("if not defined unattended pause", batch)
         batch = batch.replace("set /a restartDelay=restartCount*10", "set /a restartDelay=0")
+        batch = batch.replace("set /a transientDelay=transientCount*30", "set /a transientDelay=0")
         batch = batch.replace("if not defined unattended pause", "if not defined unattended echo TEST_PAUSE")
         (self.fixture / "run_course.cmd").write_text(batch, encoding="utf-8")
         (self.fixture / "course_queue.py").write_text(
@@ -42,12 +44,29 @@ if count > 1 and '--yes' not in sys.argv:
 scenario = os.environ['FAKE_SCENARIO']
 if scenario == 'attention':
     status, code = 'attention', 2
+elif scenario == 'recoverable_once':
+    status, code = ('attention', 3) if count == 1 else ('completed', 0)
+elif scenario == 'always_recoverable':
+    status, code = 'attention', 3
+elif scenario in {'progress_then_stall', 'progress_then_regression'}:
+    status, code = 'attention', 3
+elif scenario == 'certificate_then_stall':
+    status, code = 'attention', 3
 elif scenario == 'crash_once' and count > 1:
     status, code = 'completed', 0
 else:
     status, code = 'running', 1
 (root / 'state').mkdir(exist_ok=True)
-(root / 'state' / 'queue.json').write_text(json.dumps({'status': status}))
+items = (1 if count >= 2 else 0) if scenario == 'progress_then_stall' else 0
+if scenario == 'progress_then_regression':
+    items = 1 if count == 2 or count >= 4 else 0
+course = {'id':'course', 'status':'attention', 'items_completed':items,
+          'modules_completed':0}
+if scenario == 'certificate_then_stall' and count >= 2:
+    course.update(status='completed', completion_method='certificate',
+                  certificate_verified_at='2026-10-15T00:00:00+05:00',
+                  certificate_page_url='https://www.coursera.org/account/accomplishments/verify/TEST')
+(root / 'state' / 'queue.json').write_text(json.dumps({'status': status, 'courses':[course]}))
 raise SystemExit(code)
 """, encoding="utf-8")
 
@@ -90,6 +109,42 @@ raise SystemExit(code)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertEqual((self.fixture / "counter.txt").read_text(), "1")
         self.assertNotIn("TEST_PAUSE", result.stdout)
+
+    def test_recoverable_attention_restarts_and_preserves_noninteractive_resume(self):
+        result = self.run_fixture("recoverable_once")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((self.fixture / "counter.txt").read_text(), "2")
+        self.assertIn("--yes", json.loads((self.fixture / "args-2.json").read_text()))
+        self.assertIn("Recoverable read failure, retry 1/3",
+                      (self.fixture / "logs" / "runner_supervisor.log").read_text())
+
+    def test_recoverable_attention_stops_after_three_restarts(self):
+        result = self.run_fixture("always_recoverable", "--yes")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertEqual((self.fixture / "counter.txt").read_text(), "4")
+        self.assertIn("after three automatic restarts", result.stdout)
+
+    def test_verified_item_progress_resets_only_the_consecutive_failure_streak(self):
+        result = self.run_fixture("progress_then_stall", "--yes")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertEqual((self.fixture / "counter.txt").read_text(), "5")
+        log = (self.fixture / "logs" / "runner_supervisor.log").read_text()
+        self.assertEqual(log.count("transient retry streak reset"), 1)
+        self.assertEqual(log.count("Recoverable read failure, retry 1/3"), 2)
+
+    def test_replaying_old_progress_does_not_reset_the_retry_streak(self):
+        result = self.run_fixture("progress_then_regression", "--yes")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertEqual((self.fixture / "counter.txt").read_text(), "5")
+        log = (self.fixture / "logs" / "runner_supervisor.log").read_text()
+        self.assertEqual(log.count("transient retry streak reset"), 1)
+
+    def test_verified_certificate_can_reset_the_retry_streak(self):
+        result = self.run_fixture("certificate_then_stall", "--yes")
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertEqual((self.fixture / "counter.txt").read_text(), "5")
+        log = (self.fixture / "logs" / "runner_supervisor.log").read_text()
+        self.assertEqual(log.count("transient retry streak reset"), 1)
 
     def test_persistent_crash_stops_after_three_restarts(self):
         result = self.run_fixture("always_crash")

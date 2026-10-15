@@ -27,6 +27,8 @@ from programming_flow import diagnose_programming
 from dialogue_flow import run_dialogue
 from reflection_flow import maybe_complete_reflection, recover_pending_reflection, pending_reflections
 from pending_preflight import recover_pending_quizzes, _unresolved, explicit_platform_attempt
+from recovery_policy import classify_transient, retry_read
+from incident_report import write_incident
 
 ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
@@ -98,8 +100,45 @@ class QueueRunner(engine.CourseRunner):
         self.answer_history = self.checkpoint["answer_history"]
         self._course_timeout = None
         self._resuming_quiz_draft_key = None
+        self.current_operation = "course_start"
+        self.active_item_key = None
         self._quiz_answer_plans.update({key:ledger["last_plan"] for key, ledger in self.checkpoint["attempts"].items()
                                        if isinstance(ledger.get("last_plan"), dict)})
+
+    async def recovering_read(self, operation, action):
+        """Retry a safe page read and remember successful recovery across runs."""
+        self.current_operation = operation
+        memory = self.checkpoint.setdefault("read_recovery", {})
+        if not isinstance(memory, dict):
+            memory = self.checkpoint["read_recovery"] = {}
+        counts = memory.setdefault(operation, {"retries":0, "recoveries":0})
+        if not isinstance(counts, dict):
+            counts = memory[operation] = {"retries":0, "recoveries":0}
+        # A strategy that succeeded before gets one extra bounded opportunity.
+        attempts = 4 if counts.get("recoveries", 0) else 3
+
+        def observed(**fields):
+            field = "recoveries" if fields["code"] == "recovered" else "retries"
+            counts[field] = counts.get(field, 0) + 1
+            self.event("read_recovery", key=self.active_item_key, **fields)
+            self.store.event("read_recovery",
+                f"{fields['operation']}: {fields['code']} ({fields['attempt']}/{attempts})",
+                self.course["id"])
+
+        try:
+            return await retry_read(action, operation=operation, tab=self.tab,
+                                    event=observed, attempts=attempts)
+        except Exception:
+            self.current_operation = operation
+            raise
+
+    async def snapshot(self):
+        return await self.recovering_read(
+            "verify_mark", lambda: engine.CourseRunner.snapshot(self))
+
+    async def open_item(self, item):
+        return await self.recovering_read(
+            "open_item", lambda: engine.CourseRunner.open_item(self, item))
 
     def previous_quiz_feedback(self, key):
         return self.checkpoint["feedback"].get(key, "")
@@ -416,6 +455,7 @@ class QueueRunner(engine.CourseRunner):
             raise engine.StopRun("A supported item has no validated lesson URL for the final completion check.")
         for item_index, item in enumerate(roster, 1):
             print(f"МАТЕРИАЛ {item_index}/{len(roster)}: {item['title']}", flush=True)
+            self.active_item_key = item["key"]
             self.store.update(self.course["id"], current_item=item["title"], message="Проверка материала")
             self.store.event("item_started", item["title"], self.course["id"])
             record["items"][item["key"]] = {"title":item["title"], "verified_complete":False}
@@ -446,10 +486,36 @@ class QueueRunner(engine.CourseRunner):
                     operation, timeout = {"supplement":(self.reading, 120), "lecture":(self.video, 180),
                                           "assignment":(self.quiz, None), "ungradedLab":(self.lab, 240),
                                           "coach":(self.dialogue, 1300)}[kind]
-                    await asyncio.wait_for(operation(item), timeout=timeout)
+                    self.current_operation = kind
+                    try:
+                        await asyncio.wait_for(operation(item), timeout=timeout)
+                    except TimeoutError:
+                        # A timed-out browser action may still have completed
+                        # on Coursera. Observe the site's mark before failing.
+                        try:
+                            confirmed_after_timeout = await self.verified_item(item, wait=20)
+                        finally:
+                            # A failed action is not a read-only failure even
+                            # though checking its mark used snapshot().
+                            self.current_operation = kind
+                        if not confirmed_after_timeout:
+                            raise
+                        self.event("action_timeout_recovered", key=item["key"], lesson_kind=kind)
+                    except Exception:
+                        # An action may perform page reads internally. Keep its
+                        # mutating context if it fails after the last read.
+                        self.current_operation = kind
+                        raise
+                self.current_operation = "verify_mark"
                 if not await self.verified_item(item, wait=10):
-                    raise engine.StopRun("Coursera did not show a green completion mark after this lesson: "
-                                         + item["title"])
+                    # The completion icon can appear after the action result.
+                    # Re-read the exact lesson, but never replay a Submit.
+                    self.event("mark_recheck", key=item["key"], lesson_kind=kind)
+                    if kind != "assignment":
+                        await self.open_item(item)
+                    if not await self.verified_item(item, wait=20):
+                        raise engine.StopRun("Coursera did not show a green completion mark after this lesson: "
+                                             + item["title"])
             record["items"][item["key"]]["verified_complete"] = True
             self.update_counts()
             self.store.event("item_completed", item["title"], self.course["id"])
@@ -513,10 +579,18 @@ class QueueRunner(engine.CourseRunner):
 
     def update_counts(self):
         modules = self.checkpoint["modules"].values()
-        self.store.update(self.course["id"],
-            modules_completed=sum(bool(m.get("verified_complete")) for m in modules),
-            items_completed=sum(bool(i.get("verified_complete"))
-                                for m in modules for i in m.get("items", {}).values()))
+        module_count = sum(bool(m.get("verified_complete")) for m in modules)
+        item_count = sum(bool(i.get("verified_complete"))
+                         for m in modules for i in m.get("items", {}).values())
+        progressed = (module_count > (self.course.get("modules_completed") or 0) or
+                      item_count > (self.course.get("items_completed") or 0))
+        self.store.update(self.course["id"], modules_completed=module_count,
+                          items_completed=item_count)
+        if progressed and self._course_timeout is not None:
+            # The course budget is a no-progress watchdog. Long courses should
+            # not stop merely because many confirmed lessons took three hours.
+            self._course_timeout.reschedule(
+                asyncio.get_running_loop().time() + self.args.minutes * 60)
 
 
 async def heartbeat(store):
@@ -940,6 +1014,7 @@ async def _recover_visible_optional_reflection(store, args, tab):
 async def run_queue(store, args, tab):
     auto_my_learning = bool(getattr(args, "auto_my_learning", False))
     discovery_complete = True
+    retryable_attention = False
     store.data.update(status="running", current_course=None)
     store.event("queue_started", "Очередь запущена; завершение будет сверено с сайтом.")
     pulse = asyncio.create_task(heartbeat(store))
@@ -968,7 +1043,7 @@ async def run_queue(store, args, tab):
                 store.data.update(status="attention", current_course=None)
                 store.event("queue_attention", "Не удалось однозначно прочитать очередь: " + message)
                 print("QUEUE_ATTENTION:", message, flush=True)
-                return 2
+                return 3 if classify_transient(exc, "my_learning") else 2
             if next_id is None:
                 break
             processed.add(next_id)
@@ -988,6 +1063,7 @@ async def run_queue(store, args, tab):
             course_completed = False
             try:
                 if not auto_my_learning:
+                    runner.current_operation = "certificate"
                     certificate_url = await _remember_visible_certificate(store, tab, course)
                     if (certificate_url and course.get("inventory_complete") is True and
                             type(course.get("modules_total")) is int and course["modules_total"] > 0 and
@@ -1008,16 +1084,22 @@ async def run_queue(store, args, tab):
                         store.update(course["id"], modules_max_seen=module_floor)
                     previous_rosters = {int(n):record.get("roster") for n,record in runner.checkpoint["modules"].items()
                                         if str(n).isdigit() and isinstance(record.get("roster"), list)}
-                    sidebar = await inspect_sidebar_progress(tab, course["url"]) if hasattr(tab, "evaluate") else None
+                    sidebar = (await runner.recovering_read("inspect_sidebar",
+                        lambda: inspect_sidebar_progress(tab, course["url"]))
+                        if hasattr(tab, "evaluate") else None)
                     if sidebar and expectation is not None and sidebar["modules"] == expectation:
                         modules = sidebar["modules"]
                     else:
                         if module_floor > 1:
-                            modules = await discover_modules(tab, course["url"], expectation,
-                                                             minimum_modules=module_floor)
+                            modules = await runner.recovering_read("discover_modules",
+                                lambda: discover_modules(tab, course["url"], expectation,
+                                                         minimum_modules=module_floor))
                         else:
-                            modules = await discover_modules(tab, course["url"], expectation)
-                        sidebar = await inspect_sidebar_progress(tab, course["url"]) if hasattr(tab, "evaluate") else None
+                            modules = await runner.recovering_read("discover_modules",
+                                lambda: discover_modules(tab, course["url"], expectation))
+                        sidebar = (await runner.recovering_read("inspect_sidebar",
+                            lambda: inspect_sidebar_progress(tab, course["url"]))
+                            if hasattr(tab, "evaluate") else None)
                         if sidebar and sidebar["modules"] != modules:
                             sidebar = None
                         if sidebar is None and hasattr(tab, "navigate"):
@@ -1026,7 +1108,8 @@ async def run_queue(store, args, tab):
                                 if engine.item_key(item.get("url", ""))), None)
                             if cached_anchor:
                                 await tab.navigate(cached_anchor)
-                                sidebar = await inspect_sidebar_progress(tab, course["url"])
+                                sidebar = await runner.recovering_read("inspect_sidebar",
+                                    lambda: inspect_sidebar_progress(tab, course["url"]))
                                 if sidebar and sidebar["modules"] != modules:
                                     sidebar = None
                     if len(modules) < module_floor:
@@ -1056,16 +1139,19 @@ async def run_queue(store, args, tab):
                         if not verified:
                             prior_roster = previous_rosters.get(number)
                             if prior_roster is None:
-                                roster = await discover_roster(tab, course["url"], number, expected_count)
+                                roster = await runner.recovering_read("discover_roster",
+                                    lambda: discover_roster(tab, course["url"], number, expected_count))
                             else:
-                                roster = await discover_roster(tab, course["url"], number, expected_count,
-                                                               prior_roster)
+                                roster = await runner.recovering_read("discover_roster",
+                                    lambda: discover_roster(tab, course["url"], number, expected_count,
+                                                            prior_roster))
                             if sidebar is None and hasattr(tab, "navigate") and hasattr(tab, "evaluate"):
                                 anchor = next((item.get("url") for item in roster
                                                if engine.item_key(item.get("url", ""))), None)
                                 if anchor:
                                     await tab.navigate(anchor)
-                                    sidebar = await inspect_sidebar_progress(tab, course["url"])
+                                    sidebar = await runner.recovering_read("inspect_sidebar",
+                                        lambda: inspect_sidebar_progress(tab, course["url"]))
                                     if sidebar and sidebar["modules"] != modules:
                                         sidebar = None
                         if not roster:
@@ -1085,20 +1171,25 @@ async def run_queue(store, args, tab):
                                 # graded test while an optional peer task remains.
                                 # The site statement may skip an optional item,
                                 # but a matching certificate is still required.
+                                runner.current_operation = "certificate"
                                 await _remember_visible_certificate(store, tab, course)
+                                runner.current_operation = "course_completion"
                                 early = await verify_course_completion(tab, course["url"], modules)
                                 if early.get("verified"):
                                     proof = early
                                     break
                             await runner.process_module(number, roster)
                         if sidebar is None and hasattr(tab, "evaluate") and module_index < len(modules):
-                            sidebar = await inspect_sidebar_progress(tab, course["url"])
+                            sidebar = await runner.recovering_read("inspect_sidebar",
+                                lambda: inspect_sidebar_progress(tab, course["url"]))
                             if sidebar and sidebar["modules"] != modules:
                                 sidebar = None
                     verified_rosters = {int(n):record["roster"] for n,record in runner.checkpoint["modules"].items()
                                         if record.get("verified_complete") and isinstance(record.get("roster"), list)}
                     if proof is None:
+                        runner.current_operation = "certificate"
                         await _remember_visible_certificate(store, tab, course)
+                        runner.current_operation = "course_completion"
                         proof = await verify_course_completion(tab, course["url"], modules, verified_rosters)
                     programming_reviews = [item.get("reason") for module in runner.checkpoint["modules"].values()
                         for key, item in module.get("items", {}).items()
@@ -1107,6 +1198,7 @@ async def run_queue(store, args, tab):
                             not valid_certificate_url(course.get("certificate_page_url"))):
                         raise engine.StopRun("Manual work still required: " + programming_reviews[0])
                     if auto_my_learning and not valid_certificate_url(course.get("certificate_page_url")):
+                        runner.current_operation = "certificate"
                         await _wait_for_completed_certificate(store, tab, course)
                     if not valid_certificate_url(course.get("certificate_page_url")):
                         manual = [title for module in runner.checkpoint["modules"].values()
@@ -1117,6 +1209,7 @@ async def run_queue(store, args, tab):
                         if manual:
                             reason += " Manual work still required: " + "; ".join(manual)
                         raise engine.StopRun("All discovered modules were checked, but course completion is unconfirmed: " + reason)
+                    runner.current_operation = "certificate"
                     certificate_proof = await _verify_course_certificate(store, tab, course)
                     _mark_course_completed(store, runner, course, certificate_proof)
                     course_completed = True
@@ -1127,14 +1220,31 @@ async def run_queue(store, args, tab):
             except Exception as exc:
                 if course_completed:
                     store.event("course_transition_attention", str(exc)[:500], course["id"])
+                    retryable_attention = classify_transient(exc, "my_learning") is not None
                     discovery_complete = False
                     break
+                operation = runner.current_operation
+                timed_out = bool(runner._course_timeout and runner._course_timeout.expired())
+                retry_code = None if timed_out else classify_transient(exc, operation)
+                retryable_attention = retry_code is not None
+                try:
+                    write_incident(directory, course_id=course["id"], operation=operation,
+                                   exc=exc, retry_code=retry_code,
+                                   item_key=runner.active_item_key)
+                except OSError:
+                    # Keep the original course failure as the visible reason.
+                    pass
                 diagnostic = getattr(exc, "diagnostic", None)
                 if isinstance(diagnostic, dict):
                     runner.event("discovery_error", diagnostic=diagnostic)
                 message = str(exc) or type(exc).__name__
-                if isinstance(exc, TimeoutError):
-                    message = "Достигнут лимит ожидания или времени курса. Прогресс сохранён."
+                if timed_out:
+                    message = "Достигнут лимит времени без подтверждённого прогресса. Состояние сохранено."
+                elif retry_code:
+                    message = ("Временный сбой чтения Coursera или Chrome (" + retry_code +
+                               "). Состояние сохранено; исполнитель повторит текущий курс.")
+                elif isinstance(exc, TimeoutError):
+                    message = "Действие не подтвердилось за отведённое время. Состояние сохранено."
                 runner.data.update(status="attention", stop_reason=message)
                 store.update(course["id"], status="attention", message=message[:900])
                 store.event("course_attention", message, course["id"])
@@ -1149,6 +1259,7 @@ async def run_queue(store, args, tab):
                     await _open_my_learning_with_retry(store, tab, course["id"])
                 except Exception as exc:
                     store.event("certificate_attention", str(exc)[:500], course["id"])
+                    retryable_attention = classify_transient(exc, "my_learning") is not None
                     discovery_complete = False
                     break
         active_ids = _configured_course_ids(store, args)
@@ -1156,7 +1267,7 @@ async def run_queue(store, args, tab):
         store.data.update(status="completed" if complete else "attention", current_course=None)
         store.event("queue_completed" if complete else "course_attention",
                     "Все курсы завершены и проверены." if complete else "Есть незавершённые курсы; см. причину в мониторе.")
-        return 0 if complete else 2
+        return 0 if complete else 3 if retryable_attention else 2
     except (asyncio.CancelledError, KeyboardInterrupt):
         store.data["status"] = "paused"
         store.event("queue_paused", "Остановлено пользователем; состояние сохранено.")
@@ -1346,7 +1457,7 @@ async def session(store, args):
 def main():
     parser = argparse.ArgumentParser(description="Очередь курсов Coursera с сохранением прогресса")
     parser.add_argument("--courses", type=Path, default=ROOT / "courses.txt")
-    parser.add_argument("--minutes", type=int, default=180, help="Лимит минут на один курс, включая загрузку структуры")
+    parser.add_argument("--minutes", type=int, default=180, help="Лимит минут без подтверждённого прогресса в одном курсе")
     parser.add_argument("--max-steps", type=int, default=60, help="Лимит действий в одной попытке теста")
     parser.add_argument("--quiz-attempts", type=int, default=0, help="0: повторять до прохода; 1..100: общий лимит попыток на тест, включая прошлые запуски")
     parser.add_argument("--continue-on-attention", action="store_true",

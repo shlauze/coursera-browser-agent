@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 import coursera_start as engine
 import course_queue as queue
 from course_state import QueueStore
+from recovery_policy import classify_transient
 
 URL = 'https://www.coursera.org/learn/philosophy'
 KEY = 'assignment:test'
@@ -194,10 +195,86 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(engine.StopRun, 'completion|mark|checked'):
                     await runner.process_module(1, [first, second])
             self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
-                             [first['key']])
+                             [first['key'], first['key']])
             self.assertFalse(runner.checkpoint['modules']['1']['items'][first['key']]['verified_complete'])
             self.assertEqual(store.course('philosophy')['items_completed'], 0)
             self.assertFalse(any(event['kind'] == 'item_completed' for event in store.data['events']))
+
+    async def test_late_quiz_mark_is_rechecked_without_resubmitting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            item = {'key':'assignment:quiz', 'title':'Graded quiz',
+                    'url':URL + '/assignment-submission/quiz/graded-quiz'}
+            green = {'url':item['url'], 'aria_label':'Completed', 'checked':True}
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'quiz', AsyncMock()) as quiz, \
+                 patch.object(runner, 'verified_item', AsyncMock(
+                     side_effect=[False, False, False, True])) as verified, \
+                 patch.object(runner, 'snapshot', AsyncMock(
+                     return_value={'url':item['url'], 'items':[green]})):
+                await runner.process_module(1, [item])
+            opened.assert_awaited_once_with(item)
+            quiz.assert_awaited_once_with(item)
+            self.assertEqual(verified.await_count, 4)
+            self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
+            self.assertEqual(store.course('philosophy')['items_completed'], 1)
+
+    async def test_action_timeout_uses_coursera_mark_before_reporting_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            item = {'key':'supplement:slow', 'title':'Slow reading',
+                    'url':URL + '/supplement/slow/reading'}
+            green = {'url':item['url'], 'aria_label':'Completed', 'checked':True}
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'reading', AsyncMock(
+                     side_effect=TimeoutError('Page action timed out'))) as reading, \
+                 patch.object(runner, 'verified_item', AsyncMock(
+                     side_effect=[False, False, True, True])) as verified, \
+                 patch.object(runner, 'snapshot', AsyncMock(
+                     return_value={'url':item['url'], 'items':[green]})):
+                await runner.process_module(1, [item])
+            opened.assert_awaited_once_with(item)
+            reading.assert_awaited_once_with(item)
+            self.assertEqual(verified.await_count, 4)
+            self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
+            self.assertEqual(store.course('philosophy')['items_completed'], 1)
+
+    async def test_unconfirmed_submit_timeout_remains_an_action_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            item = {'key':'assignment:quiz', 'title':'Graded quiz',
+                    'url':URL + '/assignment-submission/quiz/graded-quiz'}
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'quiz', AsyncMock(
+                     side_effect=TimeoutError('Submit timed out'))) as quiz, \
+                 patch.object(runner, 'verified_item', AsyncMock(
+                     return_value=False)) as verified:
+                with self.assertRaises(TimeoutError) as result:
+                    await runner.process_module(1, [item])
+            opened.assert_awaited_once_with(item)
+            quiz.assert_awaited_once_with(item)
+            self.assertEqual(verified.await_count, 3)
+            self.assertEqual(runner.current_operation, 'assignment')
+            self.assertIsNone(classify_transient(result.exception, runner.current_operation))
+            self.assertEqual(store.course('philosophy')['items_completed'], 0)
+
+    async def test_action_error_after_internal_read_keeps_action_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, _ = make_runner(directory)
+            item = {'key':'assignment:quiz', 'title':'Graded quiz',
+                    'url':URL + '/assignment-submission/quiz/graded-quiz'}
+
+            async def failed_submit(_item):
+                runner.current_operation = 'verify_mark'
+                raise OSError('websocket connection closed')
+
+            with patch.object(runner, 'open_item', AsyncMock()), \
+                 patch.object(runner, 'verified_item', AsyncMock(return_value=False)), \
+                 patch.object(runner, 'quiz', new=failed_submit):
+                with self.assertRaises(OSError) as result:
+                    await runner.process_module(1, [item])
+            self.assertEqual(runner.current_operation, 'assignment')
+            self.assertIsNone(classify_transient(result.exception, runner.current_operation))
 
     async def test_reserve_is_durable_and_confirmation_does_not_double_count(self):
         with tempfile.TemporaryDirectory() as directory:
