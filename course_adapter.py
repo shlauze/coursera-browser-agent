@@ -126,14 +126,14 @@ SIDEBAR_JS = "(request=>{" + _COMMON_JS + r"""
       let u;try{u=new URL(a.href,location.href);}catch{continue;}
       if(!sameCourse(u)) continue;
       const parts=u.pathname.slice(request.course_path.length).split('/').filter(Boolean);
-      if(parts.length<2 || !['supplement','lecture','assignment-submission','exam','quiz','team','peer','ungradedLab','coach'].includes(parts[0])) continue;
+      if(parts.length<2 || !['supplement','lecture','assignment-submission','exam','quiz','team','peer','ungradedLab','coach','programming'].includes(parts[0])) continue;
       const label=clean(a.getAttribute('aria-label'));
       const tokens=label.toLowerCase().split(',').map(x=>x.trim());
-      const negative=tokens.some(x=>['failed','not passed','not completed','incomplete','not submitted','in progress','not started'].includes(x));
+      const negative=tokens.some(x=>/\b(?:failed|not passed|not completed|incomplete|not submitted|in progress|not started)\b/.test(x));
       const checked=a.querySelectorAll('[data-testid="learn-item-success-icon"]').length===1;
       const key=(['assignment-submission','exam','quiz','team'].includes(parts[0])?'assignment':parts[0])+':'+parts[1];
       items.push({key,url:u.origin+u.pathname.replace(/\/$/,''),title:label.slice(0,600),
-        label,checked,completed:!negative && checked && tokens.some(x=>x==='completed'||x==='passed')});
+        label,checked,completed:!negative && checked && tokens.some(x=>/(?:^|•\s*)(?:completed|passed)\b/.test(x))});
     }
     modules.push({number,items});
   }

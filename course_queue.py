@@ -21,6 +21,7 @@ from my_learning import (discover_next_course, find_completed_certificate,
                          observed_certificate_url, open_certificate_page,
                          open_my_learning, valid_certificate_url, verify_saved_certificate)
 from lab_flow import complete_lab
+from programming_flow import diagnose_programming
 from dialogue_flow import run_dialogue
 from reflection_flow import maybe_complete_reflection, recover_pending_reflection
 
@@ -407,7 +408,17 @@ class QueueRunner(engine.CourseRunner):
             else:
                 if not supported(item):
                     record["items"][item["key"]]["manual_required"] = True
-                    record["items"][item["key"]]["reason"] = item.get("unsupported_reason", "No automatic handler for this lesson type")
+                    reason = item.get("unsupported_reason", "No automatic handler for this lesson type")
+                    if item["key"].startswith("programming:"):
+                        await self.open_item(item)
+                        try:
+                            reason = await asyncio.wait_for(diagnose_programming(self, item), timeout=600)
+                        except (engine.StopRun, TimeoutError) as error:
+                            reason = "Programming Assignment inspection needs manual review: " + str(error)
+                            self.store.event("programming_inspection_attention", reason, self.course["id"])
+                        self.course["message"] = reason
+                        self.store.event("programming_manual_review", reason, self.course["id"])
+                    record["items"][item["key"]]["reason"] = reason
                     self.store.event("item_manual_required", item["title"], self.course["id"])
                     print("МАТЕРИАЛ ТРЕБУЕТ РУЧНОГО ВЫПОЛНЕНИЯ:", item["title"], flush=True)
                     continue

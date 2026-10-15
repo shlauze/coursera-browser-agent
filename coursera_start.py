@@ -184,7 +184,7 @@ def item_key(url):
     kind, identity = parts[3:5]
     if kind in {"assignment-submission", "exam", "quiz", "team"}:
         kind = "assignment"
-    if kind not in {"supplement", "lecture", "assignment", "peer", "ungradedLab", "coach"}:
+    if kind not in {"supplement", "lecture", "assignment", "peer", "ungradedLab", "coach", "programming"}:
         return None
     return f"{kind}:{identity}"
 
@@ -193,9 +193,12 @@ def status_from_labels(labels):
     # These comma-delimited labels were observed in the user's real course DOM.
     # An action such as 'Mark as completed' is never status evidence.
     tokens = {t.strip().lower() for label in labels for t in label.split(",")}
-    if tokens & {"failed", "not passed", "not completed", "incomplete", "not submitted", "in progress", "not started"}:
+    # Some programming cards put "Grade: 31% • Failed Graded" in one token.
+    # Negative status always wins over a stale or contradictory positive label.
+    if any(re.search(r"\b(?:failed|not passed|not completed|incomplete|not submitted|in progress|not started)\b", t)
+           for t in tokens):
         return "not_completed"
-    if tokens & {"completed", "passed"}:
+    if any(re.search(r"(?:^|•\s*)(?:completed|passed)\b", t) for t in tokens):
         return "completed"
     return "unknown"
 
@@ -233,7 +236,7 @@ PAGE_JS = r"""(() => {
   const shown = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
   if (!['www.coursera.org','coursera.org'].includes(location.hostname) ||
       !location.pathname.startsWith('/learn/philosophy/')) return {blocked:true,url:location.href};
-  const allowed = new Set(['supplement','lecture','assignment-submission','exam','quiz','peer','ungradedLab','coach']);
+  const allowed = new Set(['supplement','lecture','assignment-submission','exam','quiz','peer','ungradedLab','coach','programming']);
   const items = [];
   for (const a of document.querySelectorAll('a[href]')) {
     if (!shown(a)) continue;
@@ -1652,7 +1655,7 @@ class CourseRunner:
         while True:
             value = await self.snapshot()
             row = rows_by_key(value).get(item["key"])
-            needs_green_icon = item["key"].split(":", 1)[0] in {"ungradedLab", "coach"}
+            needs_green_icon = item["key"].split(":", 1)[0] in {"ungradedLab", "coach", "programming"}
             if row and row["status"] == "completed" and (not needs_green_icon or row.get("checked") is True):
                 self.event("item_verified",key=item["key"],url=value["url"],evidence=row["evidence"])
                 print("ITEM_CONFIRMED:",item["title"],flush=True)
