@@ -216,6 +216,45 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([name for name, _ in tab.commands],
                          ["Page.navigate", "click_next", "Page.navigate", "click_next", "click_course"])
 
+    async def test_full_scan_selects_started_course_without_opening_any_course(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = FakeTab([[card("new-course", "New course")], [started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        self.assertEqual(selected["id"], "unfinished")
+        self.assertEqual(selected["selected_page"], 2)
+        self.assertEqual(selected["kind"], "started")
+        self.assertEqual(tab.url, learning.MY_LEARNING_URL)
+        self.assertEqual([name for name, _ in tab.commands], ["Page.navigate", "click_next"])
+
+        with patch.object(learning, "POLL_SECONDS", 0):
+            opened = await learning.open_scanned_course(tab, selected)
+        self.assertEqual(opened["id"], "unfinished")
+        self.assertEqual([name for name, _ in tab.commands],
+                         ["Page.navigate", "click_next", "Page.navigate", "click_next", "click_course"])
+
+    async def test_read_only_scan_rejects_unknown_later_page_before_course_open(self):
+        unknown = card("unknown-course", "Unknown", action="unsupported")
+        unknown["source"] = "Course · 40% complete"
+        tab = FakeTab([[card("new-course", "New course")], [unknown]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaisesRegex(RuntimeError, "unfinished courses without a supported action"):
+                await learning.scan_in_progress(tab, set())
+        self.assertEqual([name for name, _ in tab.commands], ["Page.navigate", "click_next"])
+
+    async def test_open_scanned_course_rejects_changed_card_before_click(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = FakeTab([[started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        started["source"] = "Course · 44% complete"
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaisesRegex(RuntimeError, "changed before the selected course"):
+                await learning.open_scanned_course(tab, selected)
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
+
     async def test_later_page_started_course_precedes_new_course(self):
         new_course = card("new-course", "New course")
         started = card("unfinished", "Unfinished", action="resume")

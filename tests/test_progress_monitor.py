@@ -243,6 +243,14 @@ class MonitorTests(unittest.TestCase):
             self.assertNotIn(word, text)
         self.assertLessEqual(len(data["events"]), 60)
 
+    def test_queue_scan_attention_reason_is_visible(self):
+        raw = queue(status="attention", events=[
+            {"kind": "queue_attention", "message": "My Learning pagination is unreadable"}])
+        self.put("state/queue.json", raw)
+        data = monitor.ProgressReader(self.root).snapshot()
+        self.assertEqual(data["status"], "attention")
+        self.assertEqual(data["events"][0]["message"], "My Learning pagination is unreadable")
+
     def test_overlarge_state_is_not_read(self):
         path = self.put("state/queue.json", {})
         with path.open("wb") as stream:

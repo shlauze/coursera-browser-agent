@@ -167,6 +167,7 @@ class SecondSubmitWorkflowTests(unittest.IsolatedAsyncioTestCase):
         grading = {'url': item['url'] + '/view-feedback', 'feedback': ['Your grade: 100%', 'To pass: 80%']}
         completion = {'url': item['url'], 'items': [{**item, 'type': 'assignment-submission',
             'aria_label': 'Graded Assignment, Completed, Grade: 100%',
+            'checked': True,
             'evidence': ['aria-label: Graded Assignment, Completed, Grade: 100%']}]}
         with tempfile.TemporaryDirectory() as directory:
             runner = course.CourseRunner(SimpleNamespace(evaluate=evaluate),

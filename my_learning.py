@@ -749,12 +749,13 @@ async def _open_selected_course(tab, snapshot, card):
             "opened_url": card["title_url"]}
 
 
-async def discover_next_course(tab, excluded_ids: set[str]):
-    """Scan all In Progress pages, then resume existing work before new work.
+async def scan_in_progress(tab, excluded_ids: set[str]):
+    """Read all In Progress pages and select a course without opening it.
 
-    Reopening page 1 after each certified completion avoids page shifts. A
-    changed or unreadable card stops discovery instead of silently skipping an
-    unfinished course.
+    Pagination is allowed, but a course card is only returned as evidence. A
+    pending certificate can therefore be checked after this full scan and
+    before an unfinished course is opened. An unreadable card stops discovery
+    instead of silently skipping an unfinished course.
     """
     if not isinstance(excluded_ids, set) or any(not isinstance(x, str) for x in excluded_ids):
         raise ValueError("excluded_ids must be a set of course slugs")
@@ -837,8 +838,25 @@ async def discover_next_course(tab, excluded_ids: set[str]):
     if selected is None:
         return None
     kind, selected_page, selected_card = selected
-    # Reopen My Learning before clicking: the scan may have ended many pages
-    # after the chosen course. Require the same page, card, and progress kind.
+    return {"id":selected_card["id"], "url":selected_card["url"],
+            "title":selected_card["title"], "source":selected_card["source"],
+            "action":selected_card["action"], "title_url":selected_card["title_url"],
+            "kind":kind, "selected_page":selected_page}
+
+
+async def open_scanned_course(tab, selected):
+    """Revalidate a prior full-scan selection, then open exactly that card."""
+    if not isinstance(selected, dict):
+        raise ValueError("The selected My Learning course is unreadable.")
+    expected = course_from_lesson_url(selected.get("title_url"))
+    selected_page = selected.get("selected_page")
+    if (not expected or expected["id"] != selected.get("id") or expected["url"] != selected.get("url")
+            or type(selected_page) is not int or not 1 <= selected_page <= MAX_PAGES
+            or selected.get("action") not in {"get_started", "resume", "continue_learning"}
+            or selected.get("kind") not in {"started", "new"}):
+        raise ValueError("The selected My Learning course has no valid scan evidence.")
+    # The scan may have ended many pages after the selected card. Reopen page
+    # one, then require the same page, course, action, and progress before click.
     snapshot = await open_my_learning(tab)
     for expected_page in range(1, selected_page):
         clicked = await _evaluate(tab, PAGE_JS,
@@ -847,8 +865,17 @@ async def discover_next_course(tab, excluded_ids: set[str]):
             raise RuntimeError("My Learning pagination changed before course selection.")
         snapshot = await _wait_for_page(tab, expected_page=expected_page + 1)
     current = next((card for card in snapshot.get("cards", [])
-                    if isinstance(card, dict) and card.get("id") == selected_card["id"]), None)
-    if (current is None or current.get("title_url") != selected_card.get("title_url")
-            or _progress_kind(current.get("source"), current.get("action")) != kind):
+                    if isinstance(card, dict) and card.get("id") == expected["id"]), None)
+    if (current is None or current.get("title_url") != selected.get("title_url")
+            or current.get("url") != expected["url"]
+            or current.get("action") != selected.get("action")
+            or current.get("source") != selected.get("source")
+            or _progress_kind(current.get("source"), current.get("action")) != selected["kind"]):
         raise RuntimeError("My Learning changed before the selected course could be opened.")
     return await _open_selected_course(tab, snapshot, current)
+
+
+async def discover_next_course(tab, excluded_ids: set[str]):
+    """Compatibility helper for callers that still scan and open in one step."""
+    selected = await scan_in_progress(tab, excluded_ids)
+    return await open_scanned_course(tab, selected) if selected else None

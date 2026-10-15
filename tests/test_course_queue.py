@@ -107,6 +107,58 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
                 row['checked'] = True
                 self.assertTrue(await runner.verified_item(item))
 
+    async def test_process_module_checks_first_unfinished_item_after_green_sibling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            first = {'key':'supplement:green', 'title':'Already green',
+                     'url':URL + '/supplement/green/reading'}
+            second = {'key':'supplement:next', 'title':'Next reading',
+                      'url':URL + '/supplement/next/reading'}
+            checked = {first['key']}
+            inspected = []
+
+            async def verify(item, wait=0):
+                inspected.append(item['key'])
+                return item['key'] in checked
+
+            async def read(item):
+                self.assertEqual(item['key'], second['key'])
+                checked.add(item['key'])
+
+            rows = [{'url':item['url'], 'aria_label':'Completed', 'checked':True}
+                    for item in (first, second)]
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'verified_item', new=verify), \
+                 patch.object(runner, 'reading', new=read), \
+                 patch.object(runner, 'snapshot', AsyncMock(return_value={'url':first['url'], 'items':rows})):
+                await runner.process_module(1, [first, second])
+            self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
+                             [second['key'], first['key']])
+            self.assertGreaterEqual(inspected.count(second['key']), 3)
+            self.assertEqual(store.course('philosophy')['items_completed'], 2)
+            self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
+
+    async def test_action_without_green_mark_does_not_complete_or_advance_item(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            first = {'key':'supplement:still-open', 'title':'Still open',
+                     'url':URL + '/supplement/still-open/reading'}
+            second = {'key':'supplement:later', 'title':'Later',
+                      'url':URL + '/supplement/later/reading'}
+            rows = [{'url':first['url'], 'aria_label':'Completed', 'checked':False},
+                    {'url':second['url'], 'aria_label':'', 'checked':False}]
+            with patch.object(runner, 'open_item', AsyncMock()) as opened, \
+                 patch.object(runner, 'verified_item', AsyncMock(return_value=False)), \
+                 patch.object(runner, 'reading', AsyncMock()), \
+                 patch.object(runner, 'snapshot', AsyncMock(return_value={'url':first['url'], 'items':rows})):
+                with self.assertRaisesRegex(engine.StopRun, 'completion|mark|checked'):
+                    await runner.process_module(1, [first, second])
+            self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
+                             [first['key']])
+            self.assertFalse(runner.checkpoint['modules']['1']['items'][first['key']]['verified_complete'])
+            self.assertEqual(store.course('philosophy')['items_completed'], 0)
+            self.assertFalse(any(event['kind'] == 'item_completed' for event in store.data['events']))
+
     async def test_reserve_is_durable_and_confirmation_does_not_double_count(self):
         with tempfile.TemporaryDirectory() as directory:
             runner, store = make_runner(directory)
@@ -162,6 +214,21 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(ledger['feedback_ready'])
             self.assertEqual(ledger['feedback_ready_count'], 1)
             self.assertEqual(runner.quiz_attempt_limit(KEY), 1)
+
+    async def test_submit_reserves_observed_coursera_attempt_not_local_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner, store = make_runner(directory)
+            observed = {'url':URL + '/assignment-submission/test/quiz/attempt',
+                        'editable_form':True, 'blocking_dialog':False,
+                        'page_text':'Attempt 3 of 3\nQuestion 1'}
+            await runner.before_quiz_action(KEY, 'button', {'label':'Submit'}, observed_ui=observed)
+            ledger = persisted_ledger(store)
+            self.assertEqual(ledger['count'], 1)
+            self.assertEqual(ledger['platform_attempt'], 3)
+            self.assertTrue(ledger['pending'])
+            await runner.after_quiz_action(KEY, 'button', {'label':'Submit'},
+                                           {'error':'Submit changed before the click'})
+            self.assertNotIn('platform_attempt', persisted_ledger(store))
 
     async def test_known_preclick_error_releases_but_uncertain_dispatch_keeps_reservation(self):
         for uncertain in [False, True]:
@@ -239,11 +306,18 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
             graded = {'key':'assignment:final', 'title':'Final Graded Assignment',
                       'url':URL + '/assignment-submission/final/quiz'}
             runner.open_item = AsyncMock()
-            runner.verified_item = AsyncMock(return_value=False)
-            runner.reading = AsyncMock()
-            runner.quiz = AsyncMock()
+            completed = set()
+            runner.verified_item = AsyncMock(side_effect=lambda item, wait=0:
+                                             item['key'] in completed)
+            async def finish_reading(item):
+                completed.add(item['key'])
+            async def finish_quiz(item):
+                completed.add(item['key'])
+            runner.reading = AsyncMock(side_effect=finish_reading)
+            runner.quiz = AsyncMock(side_effect=finish_quiz)
             runner.snapshot = AsyncMock(return_value={'url':URL + '/home/module/1'})
-            final_rows = {reading['key']:{'status':'completed'}, graded['key']:{'status':'completed'}}
+            final_rows = {reading['key']:{'status':'completed', 'checked':True},
+                          graded['key']:{'status':'completed', 'checked':True}}
             with patch.object(engine, 'rows_by_key', return_value=final_rows):
                 await runner.process_module(1, [reading, lab, graded])
             runner.reading.assert_awaited_once_with(reading)
@@ -267,10 +341,15 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
                 item = {'key':kind + ':sample', 'title':'Sample lesson',
                         'url':URL + '/' + kind + '/sample/lesson', 'unsupported':False}
                 runner.open_item = AsyncMock()
-                runner.verified_item = AsyncMock(return_value=False)
-                setattr(runner, method, AsyncMock())
+                completed = set()
+                runner.verified_item = AsyncMock(side_effect=lambda target, wait=0:
+                                                 target['key'] in completed)
+                async def finish(target):
+                    completed.add(target['key'])
+                setattr(runner, method, AsyncMock(side_effect=finish))
                 runner.snapshot = AsyncMock(return_value={'url':item['url']})
-                with patch.object(engine, 'rows_by_key', return_value={item['key']:{'status':'completed'}}):
+                with patch.object(engine, 'rows_by_key', return_value={
+                        item['key']:{'status':'completed', 'checked':True}}):
                     await runner.process_module(1, [item])
                 getattr(runner, method).assert_awaited_once_with(item)
                 self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
@@ -300,7 +379,8 @@ class AttemptLedgerTests(unittest.IsolatedAsyncioTestCase):
             runner.open_item = AsyncMock()
             runner.verified_item = AsyncMock(return_value=True)
             runner.snapshot = AsyncMock(return_value={'url':URL + '/home/module/1'})
-            with patch.object(engine, 'rows_by_key', return_value={peer['key']:{'status':'completed'}}):
+            with patch.object(engine, 'rows_by_key', return_value={
+                    peer['key']:{'status':'completed', 'checked':True}}):
                 await runner.process_module(1, [peer])
             self.assertTrue(runner.checkpoint['modules']['1']['verified_complete'])
             self.assertEqual(store.course('philosophy')['modules_completed'], 1)
@@ -563,7 +643,7 @@ class QueueLifecycleTests(unittest.IsolatedAsyncioTestCase):
                  patch.object(queue, 'open_certificate_page', new=opened_certificate), \
                  patch.object(queue, 'verify_saved_certificate', new=matching_certificate), \
                  patch.object(queue, 'open_my_learning', AsyncMock()), \
-                 patch.object(queue, '_discover_with_retry', AsyncMock(return_value=None)):
+                 patch.object(queue, '_scan_with_retry', AsyncMock(return_value=None)):
                 if cancelled:
                     with self.assertRaises(engine.asyncio.CancelledError):
                         await queue.run_queue(store, args, SimpleNamespace())
@@ -727,20 +807,30 @@ class QueueLifecycleTests(unittest.IsolatedAsyncioTestCase):
             graded = {'key':'assignment:final', 'title':'Final Graded Assignment',
                       'url':URL + '/assignment-submission/final/quiz'}
             certificate_url = 'https://www.coursera.org/account/accomplishments/verify/TEST1234'
+            completed = set()
+
+            async def verified_item(runner, item, wait=0):
+                return item['key'] in completed
+
+            async def finish_reading(item):
+                completed.add(item['key'])
+
             async def finish_quiz(runner, item):
                 self.assertEqual(item, graded)
+                completed.add(item['key'])
                 if certificate:
                     runner.course['certificate_page_url'] = certificate_url
                     runner.store.save()
             site_proof = AsyncMock(side_effect=[
                 {'verified':False, 'reason':'Not completed before final test'}, final_proof])
-            final_rows = {reading['key']:{'status':'completed'}, graded['key']:{'status':'completed'}}
+            final_rows = {reading['key']:{'status':'completed', 'checked':True},
+                          graded['key']:{'status':'completed', 'checked':True}}
             with patch.object(queue, 'ROOT', Path(directory)), \
                  patch.object(queue, 'discover_modules', AsyncMock(return_value=[1])), \
                  patch.object(queue, 'discover_roster', AsyncMock(return_value=[reading, lab, graded])), \
                  patch.object(queue.QueueRunner, 'open_item', new=AsyncMock()), \
-                 patch.object(queue.QueueRunner, 'verified_item', new=AsyncMock(return_value=False)), \
-                 patch.object(queue.QueueRunner, 'reading', new=AsyncMock()) as read, \
+                 patch.object(queue.QueueRunner, 'verified_item', new=verified_item), \
+                 patch.object(queue.QueueRunner, 'reading', new=AsyncMock(side_effect=finish_reading)) as read, \
                  patch.object(queue.QueueRunner, 'quiz', new=finish_quiz), \
                  patch.object(queue.QueueRunner, 'snapshot', new=AsyncMock(return_value={'url':URL + '/home/module/1'})), \
                  patch.object(engine, 'rows_by_key', return_value=final_rows), \
@@ -750,7 +840,7 @@ class QueueLifecycleTests(unittest.IsolatedAsyncioTestCase):
                      'verified':True, 'method':'certificate', 'course_id':'philosophy',
                      'evidence':['Verified certificate']})) as verify_certificate, \
                  patch.object(queue, 'open_my_learning', new=AsyncMock()) as learning, \
-                 patch.object(queue, 'discover_next_course', new=AsyncMock(return_value=None)):
+                 patch.object(queue, 'scan_in_progress', new=AsyncMock(return_value=None)):
                 args = copy.copy(ARGS)
                 args.auto_my_learning = auto
                 result = await queue.run_queue(store, args, SimpleNamespace())
@@ -934,7 +1024,7 @@ class InterleavedModuleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(roster.await_args.args[2], 3)
             diagnosed.assert_awaited_once()
             self.assertEqual([call.args[0]['key'] for call in opened.await_args_list],
-                             [reading['key'], programming['key'], reading['key']])
+                             [programming['key'], reading['key']])
             course = store.course(identity)
             self.assertEqual(course['status'], 'attention')
             self.assertEqual((course['modules_completed'], course['items_completed']), (2, 3))

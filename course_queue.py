@@ -17,13 +17,15 @@ import coursera_start as engine
 from course_state import MAX_COURSES, QueueStore, RunLock, course_identity, load_courses, now, safe_limits
 from course_adapter import (discover_modules, discover_roster, inspect_sidebar_progress,
                             verified_sidebar_module, verify_course_completion)
-from my_learning import (discover_next_course, find_completed_certificate,
+from my_learning import (scan_in_progress, open_scanned_course,
+                         find_completed_certificate,
                          observed_certificate_url, open_certificate_page,
                          open_my_learning, valid_certificate_url, verify_saved_certificate)
 from lab_flow import complete_lab
 from programming_flow import diagnose_programming
 from dialogue_flow import run_dialogue
-from reflection_flow import maybe_complete_reflection, recover_pending_reflection
+from reflection_flow import maybe_complete_reflection, recover_pending_reflection, pending_reflections
+from pending_preflight import recover_pending_quiz, explicit_platform_attempt
 
 ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
@@ -133,18 +135,30 @@ class QueueRunner(engine.CourseRunner):
             return max(0, ledger.get("count", 0) - 1)
         return ledger.get("count", 0)
 
-    async def before_quiz_action(self, key, action, parameters):
+    async def before_quiz_action(self, key, action, parameters, observed_ui=None):
         if action == "button" and parameters.get("label", "").casefold() == "submit":
             ledger = self.checkpoint["attempts"].setdefault(key, {"count":0})
+            platform_attempt = (explicit_platform_attempt(observed_ui.get("page_text", ""))
+                                if isinstance(observed_ui, dict) and
+                                engine.item_key(observed_ui.get("url", "")) == key and
+                                observed_ui.get("editable_form") and
+                                not observed_ui.get("blocking_dialog") else None)
             if (self._resuming_quiz_draft_key == key and ledger.get("pending") and
                     ledger.get("submit_phase") == "confirmation_observed"):
                 ledger.update(submit_phase="resumed_first_dispatch", resumed_at=now())
+                if platform_attempt is not None:
+                    ledger["platform_attempt"] = platform_attempt
                 self.store.save()
                 return
             if ledger.get("pending") or (self.args.quiz_attempts > 0 and ledger["count"] >= self.args.quiz_attempts):
                 raise engine.StopRun("The saved quiz attempt budget is exhausted or a prior Submit is unresolved.")
             ledger["pre_submit_feedback"] = {"ready":bool(ledger.get("feedback_ready")),
                                              "ready_count":ledger.get("feedback_ready_count")}
+            # A previous result link cannot identify the attempt reserved now.
+            ledger.pop("result_url", None)
+            ledger.pop("platform_attempt", None)
+            if platform_attempt is not None:
+                ledger["platform_attempt"] = platform_attempt
             ledger.update(count=ledger["count"] + 1, pending=True, feedback_ready=False,
                           reserved_at=now(), submit_phase="first_dispatch")
             # Commit before dispatch; a crash can never silently reset the limit.
@@ -187,6 +201,7 @@ class QueueRunner(engine.CourseRunner):
                 else:
                     ledger.update(count=max(0, ledger["count"] - 1), pending=False)
                     ledger.pop("submit_phase", None)
+                    ledger.pop("platform_attempt", None)
                     previous = ledger.pop("pre_submit_feedback", None)
                     if isinstance(previous, dict):
                         ledger["feedback_ready"] = bool(previous.get("ready"))
@@ -215,15 +230,18 @@ class QueueRunner(engine.CourseRunner):
         ledger = self.checkpoint["attempts"].get(key, {})
         required = bool(ledger.get("pending") or (ledger.get("count", 0) and
                         not ledger.get("passed") and not ledger.get("feedback_ready")))
+        observed_ui = None
 
         async def quiz_ui(action="inspect", **fields):
+            nonlocal observed_ui
             request = {"key":key, "action":action, "authorized_notice":engine.AUTHORIZED_QUIZ_NOTICE,
                        "authorized_notice_confirmed":False, **fields}
-            await self.before_quiz_action(key, action, fields)
+            await self.before_quiz_action(key, action, fields, observed_ui=observed_ui)
             current = await self.tab.evaluate(engine.QUIZ_UI_JS + "(" + json.dumps(request) + ")")
             await self.after_quiz_action(key, action, fields, current)
             if current.get("error") or engine.item_key(current.get("url", "")) != key:
                 raise engine.StopRun("Cannot reconcile this quiz's saved result: the current assignment is different or unreadable.")
+            observed_ui = current
             return current
 
         async def inspect():
@@ -395,8 +413,6 @@ class QueueRunner(engine.CourseRunner):
         anchor = next((item for item in roster if supported(item) and engine.item_key(item["url"])), None)
         if anchor is None and any(supported(item) for item in roster):
             raise engine.StopRun("A supported item has no validated lesson URL for the final completion check.")
-        if anchor is not None:
-            await self.open_item(anchor)
         for item_index, item in enumerate(roster, 1):
             print(f"МАТЕРИАЛ {item_index}/{len(roster)}: {item['title']}", flush=True)
             self.store.update(self.course["id"], current_item=item["title"], message="Проверка материала")
@@ -429,6 +445,9 @@ class QueueRunner(engine.CourseRunner):
                                           "assignment":(self.quiz, None), "ungradedLab":(self.lab, 240),
                                           "coach":(self.dialogue, 1300)}[kind]
                     await asyncio.wait_for(operation(item), timeout=timeout)
+                if not await self.verified_item(item, wait=10):
+                    raise engine.StopRun("Coursera did not show a green completion mark after this lesson: "
+                                         + item["title"])
             record["items"][item["key"]]["verified_complete"] = True
             self.update_counts()
             self.store.event("item_completed", item["title"], self.course["id"])
@@ -441,7 +460,8 @@ class QueueRunner(engine.CourseRunner):
             await self.open_item(anchor)
             rows = engine.rows_by_key(await self.snapshot())
             pending = [item["title"] for item in roster if supported(item) and
-                       rows.get(item["key"], {}).get("status") != "completed"]
+                       not (rows.get(item["key"], {}).get("status") == "completed" and
+                            rows.get(item["key"], {}).get("checked") is True)]
             if pending:
                 raise engine.StopRun("Persisted completion is missing: " + "; ".join(pending))
         elif not manual:
@@ -455,7 +475,8 @@ class QueueRunner(engine.CourseRunner):
             self.update_counts()
             return
         missing = [item["title"] for item in roster
-                   if rows.get(item["key"], {}).get("status") != "completed"]
+                   if not (rows.get(item["key"], {}).get("status") == "completed" and
+                           rows.get(item["key"], {}).get("checked") is True)]
         if missing:
             record["outline_unverified"] = missing
             self.store.event("module_outline_unverified", "; ".join(missing), self.course["id"])
@@ -651,11 +672,11 @@ async def _verify_course_certificate(store, tab, course, certificate_url=None):
     return proof
 
 
-async def _discover_with_retry(store, tab, excluded):
-    """Retry only transient My Learning reads, never an ambiguous course click."""
+async def _scan_with_retry(store, tab, excluded):
+    """Retry only transient reads of every My Learning page, without opening a course."""
     for attempt in range(3):
         try:
-            return await discover_next_course(tab, excluded)
+            return await scan_in_progress(tab, excluded)
         except Exception as exc:
             message = str(exc).lower()
             disconnected = any(part in message for part in (
@@ -696,27 +717,28 @@ async def _open_my_learning_with_retry(store, tab, course_id):
 
 
 async def _next_course_id(store, args, tab, processed, auto_my_learning):
-    """Visit In Progress before trusting a local checkpoint.
+    """Scan In Progress before certificate checks or any course-card click.
 
-    A saved certificate is also pending work: verify it before choosing a
-    different course. My Learning may contain a course removed from the local
-    text list; the live unfinished card takes precedence in automatic mode.
+    A saved certificate is pending work. The caller verifies it before opening
+    another course. Live started courses take priority over new cards, and
+    locally configured courses are used only after the site list is exhausted.
     """
     active_ids = _configured_course_ids(store, args)
     remaining = [identity for identity in active_ids if identity not in processed]
     if auto_my_learning:
+        selected = await _scan_with_retry(store, tab, set(processed))
+        store.event("my_learning_scanned", "Все страницы In Progress прочитаны; " +
+                    ("выбран " + selected["id"] if selected else "незавершённых карточек не найдено"))
         # A crash can leave a certificate link saved before its matching page
-        # was verified. Visit My Learning first, then finish that check before
-        # opening another course's Get started or Resume card.
+        # was verified. No scanned course card is opened before that check.
         pending_certificate = next((identity for identity in remaining
                                     if valid_certificate_url(store.course(identity).get("certificate_page_url"))), None)
         if pending_certificate is not None:
-            await _open_my_learning_with_retry(store, tab, pending_certificate)
             return pending_certificate
-        discovered = await _discover_with_retry(store, tab, set(processed))
-        if discovered is not None:
+        if selected is not None:
+            discovered = await open_scanned_course(tab, selected)
             identity, url = course_identity(discovered.get("url", ""))
-            if identity != discovered.get("id"):
+            if identity != selected["id"] or identity != discovered.get("id"):
                 raise engine.StopRun("My Learning returned an inconsistent course link.")
             if identity not in active_ids:
                 _append_my_learning_course(store, args, discovered)
@@ -807,10 +829,44 @@ def _saved_reflection_item(course, key, attempt_url):
 
 async def _recover_visible_optional_reflection(store, args, tab):
     """Preserve a pending Submit modal before certificate or roster navigation."""
+    saved = pending_reflections(store)
     if not hasattr(tab, "evaluate"):
+        if saved:
+            raise engine.StopRun("A saved optional reflection Submit cannot be checked: Chrome is unavailable.")
         return False
     location = await tab.evaluate("({url:location.href})")
     url = location.get("url", "") if isinstance(location, dict) else ""
+    if len(saved) > 1:
+        raise engine.StopRun("Multiple optional reflection submissions remain unresolved.")
+    if saved:
+        marker = saved[0]
+        base = marker["url"].rstrip("/")
+        if not re.fullmatch(re.escape(base) + r"/attempt(?:/view-feedback)?/?", url):
+            error = engine.StopRun("The saved optional reflection attempt is not open in Chrome; "
+                                   "its Submit result remains unresolved.")
+            error.course_id, error.item_key = marker["course_id"], marker["key"]
+            raise error
+        course = store.course(marker["course_id"])
+        item = _saved_reflection_item(course, marker["key"], base + "/attempt")
+        if item is None:
+            raise engine.StopRun("The saved optional reflection is missing its exact course roster row.")
+        engine.configure_course(course["url"])
+        directory = ROOT / "logs" / ("queue_recovery_" + course["id"] + "_" +
+                                      engine.datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
+        directory.mkdir(parents=True)
+        runner = QueueRunner(tab, args, directory, store, course)
+        try:
+            recovered = await recover_pending_reflection(runner, item)
+            if not recovered:
+                raise engine.StopRun("The saved optional reflection Submit has no confirmed result yet.")
+        except Exception as exc:
+            message = str(exc) or type(exc).__name__
+            store.update(course["id"], status="attention", current_item=item["key"], message=message[:900])
+            store.event("course_attention", message, course["id"])
+            print("COURSE_ATTENTION:", course["id"], message, flush=True)
+            raise
+        store.event("reflection_preflight_recovered", item["title"], course["id"])
+        return True
     parsed = engine.urlsplit(url)
     match = re.fullmatch(
         r"/learn/([A-Za-z0-9_-]+)/assignment-submission/([A-Za-z0-9_-]+)/[A-Za-z0-9_-]+/attempt/?",
@@ -853,12 +909,29 @@ async def run_queue(store, args, tab):
     try:
         try:
             await _recover_visible_optional_reflection(store, args, tab)
-        except Exception:
+            await recover_pending_quiz(tab, store, root=ROOT)
+        except Exception as exc:
             store.data.update(status="attention", current_course=None)
+            message = str(exc) or type(exc).__name__
+            course_id = getattr(exc, "course_id", None)
+            if course_id and any(row["id"] == course_id for row in store.data["courses"]):
+                store.update(course_id, status="attention",
+                             current_item=getattr(exc, "item_key", None), message=message[:900])
+            store.event("queue_attention", "Восстановление отправки: " + message)
+            print("QUEUE_ATTENTION:", message, flush=True)
             return 2
         processed = set()
         while True:
-            next_id = await _next_course_id(store, args, tab, processed, auto_my_learning)
+            try:
+                next_id = await _next_course_id(store, args, tab, processed, auto_my_learning)
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception as exc:
+                message = str(exc) or type(exc).__name__
+                store.data.update(status="attention", current_course=None)
+                store.event("queue_attention", "Не удалось однозначно прочитать очередь: " + message)
+                print("QUEUE_ATTENTION:", message, flush=True)
+                return 2
             if next_id is None:
                 break
             processed.add(next_id)
@@ -1107,6 +1180,37 @@ def _preferred_learning_tabs(pages, store):
     return []
 
 
+def _pending_submission_tabs(pages, store):
+    """Prefer an exact open attempt over My Learning during recovery."""
+    targets = []
+    for marker in pending_reflections(store):
+        targets.append(("reflection", marker["url"]))
+    for course in store.data["courses"]:
+        if course.get("removed_from_queue"):
+            continue
+        checkpoint = course.get("checkpoint")
+        attempts = checkpoint.get("attempts", {}) if isinstance(checkpoint, dict) else {}
+        for key, ledger in attempts.items():
+            if (isinstance(ledger, dict) and
+                    (ledger.get("pending") or (ledger.get("count", 0) and
+                     not ledger.get("passed") and not ledger.get("feedback_ready"))) and
+                    re.fullmatch(r"assignment:([A-Za-z0-9_-]+)", key)):
+                targets.append(("quiz", f"/learn/{course['id']}/assignment-submission/{key.split(':', 1)[1]}/"))
+    if len(targets) != 1:
+        return []
+    kind, target = targets[0]
+    if kind == "reflection":
+        target = engine.urlsplit(target).path.rstrip("/")
+        matches = [page for page in pages if re.fullmatch(
+            re.escape(target) + r"/attempt(?:/view-feedback)?/?",
+            engine.urlsplit(page.get("url", "")).path)]
+    else:
+        matches = [page for page in pages if engine.urlsplit(page.get("url", "")).path.startswith(target)]
+    if len(matches) > 1:
+        raise engine.StopRun("Several Chrome tabs show the same unresolved assignment; select one exact result tab.")
+    return matches
+
+
 def my_learning_tabs():
     return [p for p in engine.local_json(engine.CDP_URL + "/json/list")
             if p.get("type") == "page" and _my_learning_url(p.get("url", ""))]
@@ -1137,7 +1241,19 @@ async def session(store, args):
     learning_pages = sorted(my_learning_tabs(),
                             key=lambda row: ("myLearningTab=IN_PROGRESS" not in row.get("url", ""),
                                              row.get("id", "")))
-    if getattr(args, "auto_my_learning", True):
+    try:
+        pending_pages = _pending_submission_tabs(course_pages, store)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        message = str(exc) or type(exc).__name__
+        store.data.update(status="attention", current_course=None)
+        store.event("queue_attention", "Не удалось выбрать вкладку для сохранённой отправки: " + message)
+        print("QUEUE_ATTENTION:", message, flush=True)
+        return 2
+    if pending_pages:
+        pages = pending_pages
+    elif getattr(args, "auto_my_learning", True):
         pages = learning_pages or _preferred_learning_tabs(course_pages, store)
     else:
         pages = _preferred_learning_tabs(course_pages, store) or learning_pages

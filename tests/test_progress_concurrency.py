@@ -151,6 +151,10 @@ class ProgressConcurrencyTests(unittest.TestCase):
     def test_captured_nine_completed_items_finish_module_during_monitor_reads(self):
         engine.configure_course(URL)
         captured = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        # This older capture predates the explicit success-icon field. Model
+        # the observed green marks required by the current completion gate.
+        for row in captured["items"]:
+            row["checked"] = True
         roster = list(engine.rows_by_key(captured).values())
         self.assertEqual(len(roster), 9)
         self.assertTrue(all(row["status"] == "completed" for row in roster))
@@ -167,8 +171,8 @@ class ProgressConcurrencyTests(unittest.TestCase):
             with ConcurrentReader(root) as watcher, redirect_stdout(io.StringIO()):
                 asyncio.run(runner.process_module(1, roster))
             self.assertGreaterEqual(len(watcher.samples), 2)
-            self.assertEqual(len(tab.navigations), 2)
-            self.assertGreaterEqual(tab.inspections, 12)
+            self.assertEqual(len(tab.navigations), 1)
+            self.assertGreaterEqual(tab.inspections, 10)
             for method in ("reading", "video", "quiz", "solve_quiz_questions"):
                 getattr(runner, method).assert_not_awaited()
             self.assertTrue(runner.checkpoint["modules"]["1"]["verified_complete"])

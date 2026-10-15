@@ -26,6 +26,11 @@ class Store:
     def update(self, identity, **fields):
         self.data["courses"][0].update(fields)
 
+    def course(self, identity):
+        row = self.data["courses"][0]
+        assert row["id"] == identity
+        return row
+
     def event(self, kind, message, identity=None):
         self.events.append((kind, message, identity))
 
@@ -34,6 +39,19 @@ class Store:
 
 
 class ReflectionPreflightTests(unittest.IsolatedAsyncioTestCase):
+    async def test_saved_submit_marker_blocks_my_learning_navigation_from_other_tab(self):
+        course = {"id": COURSE, "url": "https://www.coursera.org/learn/" + COURSE,
+                  "title": "Explainable Machine Learning (XAI)",
+                  "checkpoint": {"modules": {}, "pending_reflections": {
+                      ITEM["key"]: {"url": URL, "title": ITEM["title"],
+                                    "phase": "first_dispatch"}}}}
+        store = Store(course)
+        tab = SimpleNamespace(evaluate=AsyncMock(return_value={
+            "url": "https://www.coursera.org/my-learning?myLearningTab=IN_PROGRESS"}))
+        with self.assertRaisesRegex(engine.StopRun, "not open in Chrome"):
+            await queue._recover_visible_optional_reflection(store, SimpleNamespace(), tab)
+        self.assertIn(ITEM["key"], course["checkpoint"]["pending_reflections"])
+
     async def test_saved_roster_recovery_runs_before_course_navigation(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

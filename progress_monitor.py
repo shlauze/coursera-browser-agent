@@ -34,7 +34,8 @@ QUEUE_EVENTS = {"queue_started", "course_started", "module_started", "item_start
                 "module_completed", "item_manual_required", "module_manual_required",
                 "course_completed", "course_discovered", "certificate_opened",
                 "certificate_attention", "course_transition_attention", "my_learning_retry", "course_attention",
-                "queue_paused", "queue_completed"}
+                "queue_paused", "queue_completed", "queue_attention",
+                "my_learning_scanned", "quiz_preflight_reconciled"}
 
 
 def clean_text(value, limit=240):

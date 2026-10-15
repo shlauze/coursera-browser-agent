@@ -14,6 +14,7 @@ import time
 from urllib.parse import urlsplit
 
 import coursera_start as engine
+from course_state import now
 
 
 MAX_FIELDS = 6
@@ -21,6 +22,7 @@ MAX_SECONDS = 180
 ENTRY_PROBES = 20
 FORM_PROBES = 60
 RESULT_PROBES = 180
+PENDING_PHASES = {"first_dispatch", "first_clicked", "confirm_dispatch", "confirm_clicked"}
 
 
 REFLECTION_JS = r"""(request=>{
@@ -226,6 +228,77 @@ def _item_identity(item):
     return url, title
 
 
+def pending_reflections(store):
+    """Return exact saved optional-reflection submissions needing reconciliation.
+
+    Only the assignment identity and phase are stored.  Draft answers are not
+    copied into the queue checkpoint.  A corrupt or mismatched marker blocks
+    startup rather than directing the browser to a guessed assignment.
+    """
+    pending = []
+    for course in store.data.get("courses", []):
+        checkpoint = course.get("checkpoint", {})
+        markers = checkpoint.get("pending_reflections", {}) if isinstance(checkpoint, dict) else None
+        if not isinstance(markers, dict):
+            raise engine.StopRun("The saved optional reflection submission markers are invalid.")
+        for key, marker in markers.items():
+            if (not isinstance(key, str) or not isinstance(marker, dict) or
+                    marker.get("phase") not in PENDING_PHASES or
+                    not isinstance(marker.get("url"), str) or
+                    not isinstance(marker.get("title"), str)):
+                raise engine.StopRun("A saved optional reflection submission marker is invalid.")
+            item = {"key": key, "url": marker["url"], "title": marker["title"]}
+            if not _candidate(item):
+                raise engine.StopRun("A saved optional reflection marker does not identify a practice assignment.")
+            url, _ = _item_identity(item)
+            parts = urlsplit(url).path.split("/")
+            if len(parts) < 3 or parts[2] != course.get("id"):
+                raise engine.StopRun("A saved optional reflection marker belongs to another course.")
+            pending.append({"course_id": course["id"], "key": key, "url": url,
+                            "title": marker["title"], "phase": marker["phase"]})
+    return pending
+
+
+def _marker_map(runner):
+    checkpoint = getattr(runner, "checkpoint", None)
+    store = getattr(runner, "store", None)
+    if not isinstance(checkpoint, dict) or store is None or not callable(getattr(store, "save", None)):
+        raise engine.StopRun("The optional reflection has no durable queue checkpoint; Submit was not clicked.")
+    markers = checkpoint.setdefault("pending_reflections", {})
+    if not isinstance(markers, dict):
+        raise engine.StopRun("The saved optional reflection submission markers are invalid.")
+    return markers
+
+
+def _set_pending(runner, item, url, phase):
+    if phase not in PENDING_PHASES:
+        raise ValueError("Invalid reflection submission phase")
+    markers = _marker_map(runner)
+    previous = markers.get(item["key"], {})
+    if previous:
+        if not isinstance(previous, dict):
+            raise engine.StopRun("A saved optional reflection marker changed before confirmation.")
+        prior_item = {"key": item["key"], "url": previous.get("url"),
+                      "title": previous.get("title")}
+        try:
+            prior_url, prior_title = _item_identity(prior_item)
+            _, current_title = _item_identity(item)
+        except (AttributeError, TypeError, engine.StopRun):
+            raise engine.StopRun("A saved optional reflection marker changed before confirmation.") from None
+        if prior_url != url or prior_title != current_title:
+            raise engine.StopRun("A different optional reflection is already reserved under this item key.")
+    markers[item["key"]] = {"url": url, "title": previous.get("title", item["title"]), "phase": phase,
+                            "reserved_at": previous.get("reserved_at", now()), "updated_at": now()}
+    runner.store.save()
+
+
+def _clear_pending(runner, item):
+    markers = _marker_map(runner)
+    if item["key"] in markers:
+        del markers[item["key"]]
+        runner.store.save()
+
+
 async def _ui(tab, url, title, action="inspect", **fields):
     request = {"url": url, "title": title, "action": action,
                "authorized_notice": engine.AUTHORIZED_QUIZ_NOTICE, **fields}
@@ -391,7 +464,9 @@ async def _green_verified(runner, item):
     state = await runner.snapshot()
     row = engine.rows_by_key(state).get(item["key"])
     if row and row.get("status") == "completed" and row.get("checked") is True:
-        return bool(await runner.verified_item(item))
+        if await runner.verified_item(item):
+            _clear_pending(runner, item)
+            return True
     return False
 
 
@@ -415,11 +490,17 @@ async def _await_reflection_result(runner, item, url, title, answers, *, confirm
             continue
         if current.get("confirmation") and not confirmed_once:
             confirmation = current["confirmation"]
+            _set_pending(runner, item, url, "confirm_dispatch")
             confirmed = await _ui(runner.tab, url, title, "confirm_submit",
                 snapshot_id=current["snapshot_id"], answers=answers,
                 expected_confirmation=confirmation)
             if confirmed.get("clicked") != "Confirm Submit":
+                if confirmed.get("error") and not confirmed.get("clicked"):
+                    # REFLECTION_JS returns errors before dispatching a click.
+                    # The first Submit still happened, so keep its reservation.
+                    _set_pending(runner, item, url, "first_clicked")
                 raise engine.StopRun("The optional practice assignment confirmation changed; no second Submit was sent.")
+            _set_pending(runner, item, url, "confirm_clicked")
             confirmed_once = True
             runner.event("reflection_submit_confirmed", key=item["key"])
         if current.get("result_page"):
@@ -439,11 +520,15 @@ async def _recover_pending_confirmation(runner, item, url, title, state):
     # The first Submit already opened this exact modal. Never create another
     # answer or dispatch the first Submit again after a restart.
     answers = _pending_confirmation_answers(state)
+    _set_pending(runner, item, url, "confirm_dispatch")
     confirmed = await _ui(runner.tab, url, title, "confirm_submit",
         snapshot_id=state["snapshot_id"], answers=answers,
         expected_confirmation=state["confirmation"])
     if confirmed.get("clicked") != "Confirm Submit":
+        if confirmed.get("error") and not confirmed.get("clicked"):
+            _set_pending(runner, item, url, "first_clicked")
         raise engine.StopRun("The pending optional reflection confirmation changed; it was not clicked.")
+    _set_pending(runner, item, url, "confirm_clicked")
     runner.event("reflection_submit_confirmed", key=item["key"], recovered=True)
     return await _await_reflection_result(runner, item, url, title, answers,
                                           confirmed_once=True)
@@ -462,6 +547,12 @@ async def recover_pending_reflection(runner, item):
     if state.get("submission_dialog") and not state.get("confirmation"):
         raise engine.StopRun("The previous optional reflection Submit is still processing or its confirmation controls changed; no new click was sent.")
     if not state.get("confirmation"):
+        markers = _marker_map(runner)
+        if item["key"] in markers and state.get("result_page"):
+            return await _await_reflection_result(runner, item, url, title, [], confirmed_once=True)
+        if item["key"] in markers:
+            raise engine.StopRun("The saved optional reflection Submit has no confirmed result or confirmation; "
+                                 "its reservation was preserved.")
         if (state.get("attempt") and not state.get("result_page") and
                 any(field.get("value") for field in state.get("fields", []) if isinstance(field, dict))):
             raise engine.StopRun("The optional reflection has a saved draft or an unresolved Submit result; it was preserved.")
@@ -480,6 +571,8 @@ async def maybe_complete_reflection(runner, item):
     url, title = _item_identity(item)
     if await _green_verified(runner, item):
         return True
+    if item["key"] in _marker_map(runner):
+        return await recover_pending_reflection(runner, item)
     deadline = time.monotonic() + MAX_SECONDS
     state = await _ui(runner.tab, url, title)
     for _ in range(12):
@@ -567,9 +660,15 @@ async def maybe_complete_reflection(runner, item):
         await asyncio.sleep(.5)
     else:
         raise engine.StopRun("The optional practice assignment Submit control did not become uniquely available.")
+    _set_pending(runner, item, url, "first_dispatch")
     submitted = await _ui(runner.tab, url, title, "submit", snapshot_id=current["snapshot_id"], answers=answers)
     if submitted.get("clicked") != "Submit":
+        if submitted.get("error") and not submitted.get("clicked"):
+            # The JavaScript guard rejected the action before any click.
+            # The marker must not block a later fresh attempt in that case.
+            _clear_pending(runner, item)
         raise engine.StopRun("The optional practice assignment Submit was not clicked: " +
                              str(submitted.get("error", "unknown state")))
+    _set_pending(runner, item, url, "first_clicked")
     runner.event("reflection_submit_clicked", key=item["key"])
     return await _await_reflection_result(runner, item, url, title, answers)

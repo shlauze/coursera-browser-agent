@@ -28,6 +28,7 @@ def with_row(key=None, status="Not completed"):
         row["url"] = "https://www.coursera.org/learn/philosophy/supplement/" + key + "/other"
     row["aria_label"] = "About this Course, " + status
     row["evidence"] = ["aria-label: " + row["aria_label"]]
+    row["checked"] = status == "Completed"
     value["items"] = [row]
     value["buttons"] = [{"label": "Collapse course outline", "disabled": False}]
     return value
@@ -171,6 +172,12 @@ class OutlineRegressionTests(unittest.IsolatedAsyncioTestCase):
         runner = self.runner(with_row(status="Not completed"), with_row(status="Completed"))
         self.assertFalse(await runner.verified_item(ITEM))
         self.assertTrue(await runner.verified_item(ITEM))
+
+    async def test_completed_label_without_green_icon_is_not_verified(self):
+        row = with_row(status="Completed")
+        row["items"][0]["checked"] = False
+        runner = self.runner(row)
+        self.assertFalse(await runner.verified_item(ITEM))
 
 
 class OutlineJavascriptTests(unittest.TestCase):

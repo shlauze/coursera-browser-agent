@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.40"
+RUNNER_VERSION = "4.0-groq.41"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -1732,8 +1732,7 @@ class CourseRunner:
         while True:
             value = await self.snapshot()
             row = rows_by_key(value).get(item["key"])
-            needs_green_icon = item["key"].split(":", 1)[0] in {"ungradedLab", "coach", "programming"}
-            if row and row["status"] == "completed" and (not needs_green_icon or row.get("checked") is True):
+            if row and row["status"] == "completed" and row.get("checked") is True:
                 self.event("item_verified",key=item["key"],url=value["url"],evidence=row["evidence"])
                 print("ITEM_CONFIRMED:",item["title"],flush=True)
                 return True

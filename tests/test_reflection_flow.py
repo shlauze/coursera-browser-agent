@@ -1,10 +1,12 @@
 """Focused offline checks for optional text-only Practice Assignments."""
 
+import copy
 import json
 from pathlib import Path
 import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +86,8 @@ class ReflectionTab:
                  ambiguous_entry=False, pending=False, entry_delay=0,
                  recover_confirmation=False, incomplete_recovery=False,
                  processing_confirmation=False, result_delay=0, form_delay=0,
-                 offscreen=False):
+                 offscreen=False, submit_error=False, confirm_error=False,
+                 submit_transport_error=False):
         self.started = recover_confirmation
         self.confirmation = confirmation or recover_confirmation
         self.processing_confirmation = processing_confirmation
@@ -96,12 +99,18 @@ class ReflectionTab:
         self.entry_delay = entry_delay
         self.form_delay = form_delay
         self.offscreen = offscreen
+        self.submit_error = submit_error
+        self.confirm_error = confirm_error
+        self.submit_transport_error = submit_transport_error
         self.values = ([ANSWERS[0], "" if incomplete_recovery else ANSWERS[1]]
                        if recover_confirmation else
                        ["Saved learner answer", ""] if existing else ["", ""])
         self.submitted = recover_confirmation
         self.confirmed = False
         self.actions = []
+        self.marker_provider = None
+        self.marker_at_submit = None
+        self.marker_at_confirm = None
 
     def _state(self, **fields):
         attempt = self.started
@@ -135,9 +144,19 @@ class ReflectionTab:
             self.values = [row["reply"] for row in request["answers"]]
             return self._state(filled=True)
         if action == "submit":
+            if self.marker_provider:
+                self.marker_at_submit = self.marker_provider()
+            if self.submit_transport_error:
+                raise RuntimeError("Chrome connection closed after dispatch outcome became unknown")
+            if self.submit_error:
+                return self._state(error="The reflection form changed before click.")
             self.submitted = True
             return self._state(clicked="Submit")
         if action == "confirm_submit":
+            if self.marker_provider:
+                self.marker_at_confirm = self.marker_provider()
+            if self.confirm_error:
+                return self._state(error="The Submit confirmation changed before click.")
             self.confirmed = True
             return self._state(clicked="Confirm Submit")
         if action == "finish_frozen_modal":
@@ -160,6 +179,12 @@ class ReflectionRunner:
         self.tab = tab
         self.events = []
         self.opened = []
+        self.checkpoint = {}
+        self.saved = []
+        self.store = SimpleNamespace(save=self._save)
+
+    def _save(self):
+        self.saved.append(copy.deepcopy(self.checkpoint))
 
     async def snapshot(self):
         done = (self.tab.submitted and not self.tab.pending and
@@ -253,6 +278,18 @@ class ReflectionValidationTests(unittest.TestCase):
             reflection._validate_answers(json.dumps({"answers": [
                 {"id": "t1", "reply": ANSWERS[0]}, {"id": "t0", "reply": ANSWERS[1]}]}), fields)
 
+    def test_saved_pending_reflection_exposes_exact_assignment_base_url(self):
+        course = {"id": "explainable-machine-learning-xai", "checkpoint": {
+            "pending_reflections": {ITEM["key"]: {
+                "url": ITEM["url"], "title": ITEM["title"], "phase": "first_clicked"}}}}
+        store = SimpleNamespace(data={"courses": [course]})
+        self.assertEqual(reflection.pending_reflections(store), [{
+            "course_id": course["id"], "key": ITEM["key"], "url": ITEM["url"],
+            "title": ITEM["title"], "phase": "first_clicked"}])
+        course["checkpoint"]["pending_reflections"][ITEM["key"]]["url"] += "/attempt"
+        with self.assertRaisesRegex(engine.StopRun, "URL or identity is invalid"):
+            reflection.pending_reflections(store)
+
 
 class ReflectionFlowTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, tab):
@@ -275,6 +312,92 @@ class ReflectionFlowTests(unittest.IsolatedAsyncioTestCase):
                          ["reflection_opened", "reflection_answers_prepared", "reflection_filled",
                           "reflection_submit_clicked"])
         model.assert_awaited_once()
+
+    async def test_first_submit_is_reserved_durably_before_click_then_cleared_on_green(self):
+        tab = ReflectionTab()
+        runner = ReflectionRunner(tab)
+        tab.marker_provider = lambda: copy.deepcopy(runner.checkpoint)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            self.assertTrue(await reflection.maybe_complete_reflection(runner, ITEM))
+        marker = tab.marker_at_submit["pending_reflections"][ITEM["key"]]
+        self.assertEqual((marker["url"], marker["phase"]), (ITEM["url"], "first_dispatch"))
+        self.assertTrue(any(saved.get("pending_reflections", {}).get(ITEM["key"], {}).get("phase") ==
+                            "first_dispatch" for saved in runner.saved))
+        self.assertEqual(runner.checkpoint["pending_reflections"], {})
+
+    async def test_second_submit_is_reserved_before_confirmation_click(self):
+        tab = ReflectionTab(confirmation=True)
+        runner = ReflectionRunner(tab)
+        tab.marker_provider = lambda: copy.deepcopy(runner.checkpoint)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            self.assertTrue(await reflection.maybe_complete_reflection(runner, ITEM))
+        self.assertEqual(tab.marker_at_confirm["pending_reflections"][ITEM["key"]]["phase"],
+                         "confirm_dispatch")
+        self.assertEqual(runner.checkpoint["pending_reflections"], {})
+
+    async def test_unknown_result_keeps_durable_pending_marker(self):
+        tab = ReflectionTab(pending=True)
+        runner = ReflectionRunner(tab)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "outcome is still unknown"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
+        self.assertEqual(runner.checkpoint["pending_reflections"][ITEM["key"]]["phase"],
+                         "first_clicked")
+        self.assertEqual(tab.actions.count("submit"), 1)
+
+    async def test_first_submit_guard_error_refunds_marker_only_when_no_click_proven(self):
+        tab = ReflectionTab(submit_error=True)
+        runner = ReflectionRunner(tab)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "was not clicked"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
+        self.assertTrue(any(saved.get("pending_reflections", {}).get(ITEM["key"], {}).get("phase") ==
+                            "first_dispatch" for saved in runner.saved))
+        self.assertEqual(runner.checkpoint["pending_reflections"], {})
+
+    async def test_first_submit_transport_error_keeps_marker(self):
+        tab = ReflectionTab(submit_transport_error=True)
+        runner = ReflectionRunner(tab)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(RuntimeError, "connection closed"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
+        self.assertEqual(runner.checkpoint["pending_reflections"][ITEM["key"]]["phase"],
+                         "first_dispatch")
+
+    async def test_confirm_guard_error_restores_first_submit_reservation(self):
+        tab = ReflectionTab(confirmation=True, confirm_error=True)
+        runner = ReflectionRunner(tab)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "no second Submit"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
+        self.assertEqual(tab.actions.count("submit"), 1)
+        self.assertEqual(tab.actions.count("confirm_submit"), 1)
+        self.assertEqual(runner.checkpoint["pending_reflections"][ITEM["key"]]["phase"],
+                         "first_clicked")
+
+    async def test_saved_marker_prevents_new_submit_without_observed_result(self):
+        tab = ReflectionTab(recover_confirmation=True, pending=True)
+        tab.confirmation = False
+        runner = ReflectionRunner(tab)
+        runner.checkpoint["pending_reflections"] = {ITEM["key"]: {
+            "url": ITEM["url"], "title": ITEM["title"], "phase": "first_clicked"}}
+        with self.assertRaisesRegex(engine.StopRun, "no confirmed result"):
+            await reflection.maybe_complete_reflection(runner, ITEM)
+        self.assertNotIn("submit", tab.actions)
+        self.assertNotIn("confirm_submit", tab.actions)
+        self.assertIn(ITEM["key"], runner.checkpoint["pending_reflections"])
 
     async def test_exact_confirmation_is_clicked_once(self):
         tab = ReflectionTab(confirmation=True)
@@ -322,9 +445,14 @@ class ReflectionFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_green_mark_stops_after_one_submit(self):
         tab = ReflectionTab(green=False)
-        with self.assertRaisesRegex(engine.StopRun, "green course mark"):
-            await self._run(tab)
+        runner = ReflectionRunner(tab)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers), \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "green course mark"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
         self.assertEqual(tab.actions.count("submit"), 1)
+        self.assertIn(ITEM["key"], runner.checkpoint["pending_reflections"])
 
     async def test_unavailable_submit_result_is_not_retried(self):
         tab = ReflectionTab(pending=True)
