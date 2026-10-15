@@ -17,7 +17,7 @@ import coursera_start as engine
 from course_state import MAX_COURSES, QueueStore, RunLock, course_identity, load_courses, now, safe_limits
 from course_adapter import (discover_modules, discover_roster, inspect_sidebar_progress,
                             verified_sidebar_module, verify_course_completion)
-from my_learning import (scan_in_progress, open_scanned_course,
+from my_learning import (MY_LEARNING_URL, scan_in_progress, open_scanned_course,
                          find_completed_certificate,
                          observed_certificate_url, open_certificate_page,
                          open_my_learning, valid_certificate_url, verify_saved_certificate)
@@ -1241,6 +1241,67 @@ def _wait_for_start_tab(seconds=20):
     raise engine.StopRun("Chrome открылся, но вкладка Coursera не появилась за 20 секунд.")
 
 
+async def _show_my_learning_start_page(*, allow_site_redirect=False):
+    """Show In Progress without disturbing a pending Submit tab.
+
+    Before the login prompt, a Coursera sign-in redirect is allowed. After
+    Enter, the caller requires the exact In Progress page.
+    """
+    metadata = engine.local_json(engine.CDP_URL + "/json/version")
+    address = metadata.get("webSocketDebuggerUrl") if isinstance(metadata, dict) else None
+    if not isinstance(address, str):
+        raise engine.StopRun("Chrome did not expose its managed browser target.")
+    owner = engine.ChromeTab(address)
+    await owner.connect()
+    try:
+        pages = sorted(my_learning_tabs(), key=lambda page: page.get("id", ""))
+        if not pages and not learning_tabs():
+            # A newly launched Chrome target may still be about:blank while
+            # its requested My Learning URL is loading.
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                pages = sorted(my_learning_tabs(), key=lambda page: page.get("id", ""))
+                if pages:
+                    break
+        exact = next((page for page in pages if page.get("url") == MY_LEARNING_URL), None)
+        target = exact or next((page for page in pages
+                                if isinstance(page.get("webSocketDebuggerUrl"), str)), None)
+        if target is not None:
+            target_id = target.get("id")
+            if not isinstance(target_id, str) or not target_id:
+                raise engine.StopRun("The My Learning tab has no Chrome target ID.")
+            if exact is None:
+                tab = engine.ChromeTab(target["webSocketDebuggerUrl"])
+                await tab.connect()
+                try:
+                    result = await tab.call("Page.navigate", {"url": MY_LEARNING_URL})
+                    if result.get("errorText"):
+                        raise engine.StopRun("My Learning navigation failed: " + str(result["errorText"]))
+                finally:
+                    await tab.close()
+        else:
+            result = await owner.call("Target.createTarget", {"url": MY_LEARNING_URL})
+            target_id = result.get("targetId")
+            if not isinstance(target_id, str) or not target_id:
+                raise engine.StopRun("Chrome did not create a My Learning tab.")
+        await owner.call("Target.activateTarget", {"targetId": target_id})
+        for probe in range(40):
+            if any(page.get("id") == target_id and page.get("url") == MY_LEARNING_URL
+                   for page in my_learning_tabs()):
+                return target_id
+            if allow_site_redirect and probe >= 20:
+                targets = engine.local_json(engine.CDP_URL + "/json/list")
+                current = next((page.get("url", "") for page in targets
+                                if page.get("type") == "page" and page.get("id") == target_id), "")
+                parsed = engine.urlsplit(current)
+                if parsed.scheme == "https" and parsed.hostname in {"www.coursera.org", "coursera.org"}:
+                    return target_id
+            await asyncio.sleep(0.5)
+        raise engine.StopRun("My Learning In Progress did not open. Sign in to Coursera in the managed Chrome window and retry.")
+    finally:
+        await owner.close()
+
+
 async def session(store, args):
     course_pages = learning_tabs()
     learning_pages = sorted(my_learning_tabs(),
@@ -1313,14 +1374,8 @@ def main():
         from configure_new_pc import load_notice
         engine.configure_course(courses[0]["url"], notice=load_notice())
         engine.groq_key()
-        # Reuse the owned browser even if it still shows the preceding course.
-        if engine.profile_process_running():
-            engine.local_json(engine.CDP_URL + "/json/version")
-            if not learning_tabs() and not my_learning_tabs():
-                engine.ensure_browser()
-        else:
-            engine.ensure_browser()
-        _wait_for_start_tab()
+        engine.ensure_browser(start_url=MY_LEARNING_URL)
+        asyncio.run(_show_my_learning_start_page(allow_site_redirect=True))
         if args.monitor:
             subprocess.Popen([sys.executable, str(ROOT / "progress_monitor.py")],
                 cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1328,8 +1383,10 @@ def main():
         print("RUNNER_VERSION:", engine.RUNNER_VERSION)
         print("Повторы тестов:", "до проходного результата Coursera" if args.quiz_attempts == 0 else f"до {args.quiz_attempts} попыток всего")
         print(f"Курсов в списке: {len(courses)}. Далее: My Learning → In Progress, все страницы.")
-        if not args.yes and input("Нажмите Enter для запуска или q для выхода: ").strip().lower() == "q":
+        if not args.yes and input("Войдите в Coursera, затем нажмите Enter для запуска или q для выхода: ").strip().lower() == "q":
             return 0
+        asyncio.run(_show_my_learning_start_page())
+        _wait_for_start_tab()
         set_state = ctypes.windll.kernel32.SetThreadExecutionState
         set_state.argtypes, set_state.restype = [ctypes.c_uint], ctypes.c_uint
         previous = set_state(0x80000001)

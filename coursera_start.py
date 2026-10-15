@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.42"
+RUNNER_VERSION = "4.0-groq.43"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -107,7 +107,13 @@ def profile_process_running():
     return False
 
 
-def ensure_browser():
+def ensure_browser(*, start_url=None):
+    if start_url is not None:
+        parsed = urlsplit(start_url)
+        if (parsed.scheme != "https" or parsed.netloc != "www.coursera.org" or
+                parsed.path != "/my-learning" or
+                parsed.query != "myLearningTab=IN_PROGRESS" or parsed.fragment):
+            raise ValueError("The queue startup page must be Coursera My Learning In Progress.")
     chrome = find_chrome()
     PROFILE.mkdir(parents=True, exist_ok=True)
     with socket.socket() as probe:
@@ -121,7 +127,7 @@ def ensure_browser():
             )
         local_json(CDP_URL + "/json/version")
         print("Reusing the Coursera Chrome profile.", flush=True)
-        if course_tabs():
+        if start_url is not None or course_tabs():
             return
 
     subprocess.Popen(
@@ -134,7 +140,7 @@ def ensure_browser():
             "--no-first-run",
             "--no-default-browser-check",
             "--new-window",
-            COURSE_URL,
+            start_url or COURSE_URL,
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
