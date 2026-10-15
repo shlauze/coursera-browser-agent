@@ -25,7 +25,7 @@ from lab_flow import complete_lab
 from programming_flow import diagnose_programming
 from dialogue_flow import run_dialogue
 from reflection_flow import maybe_complete_reflection, recover_pending_reflection, pending_reflections
-from pending_preflight import recover_pending_quiz, explicit_platform_attempt
+from pending_preflight import recover_pending_quizzes, _unresolved, explicit_platform_attempt
 
 ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
@@ -561,6 +561,9 @@ def _append_my_learning_course(store, args, discovered):
     with RunLock(ROOT / "state" / "courses.lock"):
         configured = load_courses(path)
         if any(row["id"] == identity for row in configured):
+            # The monitor may have added this course during the full page
+            # scan. Refresh the in-memory queue before using its saved state.
+            _configured_course_ids(store, args)
             return False
         if len(configured) >= MAX_COURSES:
             raise engine.StopRun(f"The course queue has reached its {MAX_COURSES}-course limit.")
@@ -736,14 +739,22 @@ async def _next_course_id(store, args, tab, processed, auto_my_learning):
         if pending_certificate is not None:
             return pending_certificate
         if selected is not None:
-            discovered = await open_scanned_course(tab, selected)
-            identity, url = course_identity(discovered.get("url", ""))
-            if identity != selected["id"] or identity != discovered.get("id"):
+            identity, url = course_identity(selected.get("url", ""))
+            if identity != selected.get("id"):
                 raise engine.StopRun("My Learning returned an inconsistent course link.")
             if identity not in active_ids:
-                _append_my_learning_course(store, args, discovered)
+                _append_my_learning_course(store, args, selected)
+                # A course removed from courses.txt may still be In Progress on
+                # Coursera. Rejoining it activates its old Submit markers, so
+                # reconcile them before clicking its course card.
+                await _recover_visible_optional_reflection(store, args, tab)
+                await recover_pending_quizzes(tab, store, root=ROOT)
             elif store.course(identity)["url"] != url:
                 raise engine.StopRun("My Learning returned a different link for a configured course.")
+            discovered = await open_scanned_course(tab, selected)
+            opened_id, opened_url = course_identity(discovered.get("url", ""))
+            if opened_id != identity or opened_url != url or discovered.get("id") != identity:
+                raise engine.StopRun("My Learning returned an inconsistent course link.")
             return identity
     for identity in remaining:
         course = store.course(identity)
@@ -909,7 +920,7 @@ async def run_queue(store, args, tab):
     try:
         try:
             await _recover_visible_optional_reflection(store, args, tab)
-            await recover_pending_quiz(tab, store, root=ROOT)
+            await recover_pending_quizzes(tab, store, root=ROOT)
         except Exception as exc:
             store.data.update(status="attention", current_course=None)
             message = str(exc) or type(exc).__name__
@@ -1185,30 +1196,24 @@ def _pending_submission_tabs(pages, store):
     targets = []
     for marker in pending_reflections(store):
         targets.append(("reflection", marker["url"]))
-    for course in store.data["courses"]:
-        if course.get("removed_from_queue"):
-            continue
-        checkpoint = course.get("checkpoint")
-        attempts = checkpoint.get("attempts", {}) if isinstance(checkpoint, dict) else {}
-        for key, ledger in attempts.items():
-            if (isinstance(ledger, dict) and
-                    (ledger.get("pending") or (ledger.get("count", 0) and
-                     not ledger.get("passed") and not ledger.get("feedback_ready"))) and
-                    re.fullmatch(r"assignment:([A-Za-z0-9_-]+)", key)):
-                targets.append(("quiz", f"/learn/{course['id']}/assignment-submission/{key.split(':', 1)[1]}/"))
-    if len(targets) != 1:
-        return []
-    kind, target = targets[0]
-    if kind == "reflection":
-        target = engine.urlsplit(target).path.rstrip("/")
-        matches = [page for page in pages if re.fullmatch(
-            re.escape(target) + r"/attempt(?:/view-feedback)?/?",
-            engine.urlsplit(page.get("url", "")).path)]
-    else:
-        matches = [page for page in pages if engine.urlsplit(page.get("url", "")).path.startswith(target)]
-    if len(matches) > 1:
-        raise engine.StopRun("Several Chrome tabs show the same unresolved assignment; select one exact result tab.")
-    return matches
+    for course, key, ledger in _unresolved(store):
+        if ledger.get("pending") and re.fullmatch(r"assignment:([A-Za-z0-9_-]+)", key):
+            targets.append(("quiz", f"/learn/{course['id']}/assignment-submission/{key.split(':', 1)[1]}/"))
+    chosen = []
+    for kind, target in targets:
+        if kind == "reflection":
+            target = engine.urlsplit(target).path.rstrip("/")
+            matches = [page for page in pages if re.fullmatch(
+                re.escape(target) + r"/attempt(?:/view-feedback)?/?",
+                engine.urlsplit(page.get("url", "")).path)]
+        else:
+            matches = [page for page in pages if engine.urlsplit(page.get("url", "")).path.startswith(target)]
+        if len(matches) > 1:
+            raise engine.StopRun("Several Chrome tabs show the same unresolved assignment; select one exact result tab.")
+        chosen.extend(matches)
+    if len(chosen) > 1:
+        raise engine.StopRun("Several different unresolved assignments are open; close all but one result tab.")
+    return chosen
 
 
 def my_learning_tabs():

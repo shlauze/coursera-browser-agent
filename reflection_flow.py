@@ -237,6 +237,8 @@ def pending_reflections(store):
     """
     pending = []
     for course in store.data.get("courses", []):
+        if course.get("removed_from_queue"):
+            continue
         checkpoint = course.get("checkpoint", {})
         markers = checkpoint.get("pending_reflections", {}) if isinstance(checkpoint, dict) else None
         if not isinstance(markers, dict):

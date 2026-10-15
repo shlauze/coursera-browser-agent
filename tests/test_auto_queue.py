@@ -226,7 +226,7 @@ class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             with patch.object(queue, "ROOT", root), \
-                 patch.object(queue, "recover_pending_quiz", new=recover, create=True), \
+                 patch.object(queue, "recover_pending_quizzes", new=recover), \
                  patch.object(queue, "_scan_with_retry", new=scan, create=True), \
                  patch.object(queue, "discover_modules", AsyncMock(
                      side_effect=engine.StopRun("Fixture stops after startup"))):
@@ -244,8 +244,8 @@ class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
                                    continue_on_attention=False, minutes=1,
                                    max_steps=60, quiz_attempts=0)
             with patch.object(queue, "ROOT", root), \
-                 patch.object(queue, "recover_pending_quiz", AsyncMock(
-                     side_effect=engine.StopRun("Pending quiz result is uncertain")), create=True), \
+                 patch.object(queue, "recover_pending_quizzes", AsyncMock(
+                     side_effect=engine.StopRun("Pending quiz result is uncertain"))), \
                  patch.object(queue, "_scan_with_retry", AsyncMock(return_value=None), create=True) as scan:
                 result = await queue.run_queue(store, args, SimpleNamespace())
             self.assertEqual(result, 2)
@@ -279,17 +279,71 @@ class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
                                    "https://www.coursera.org/learn/older-course\n", encoding="utf-8")
             store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
             store.update("older-course", status="attention", run_directory=str(root / "logs" / "old"))
+            store.course("older-course").setdefault("checkpoint", {}).setdefault("attempts", {})["assignment:7jgHj"] = {
+                "count": 1, "pending": True, "passed": False, "submit_phase": "confirm_clicked"}
             course_file.write_text("https://www.coursera.org/learn/new-course\n", encoding="utf-8")
             args = SimpleNamespace(courses=course_file)
             observed = {"id":"older-course", "url":"https://www.coursera.org/learn/older-course",
                         "title":"Older Course", "action":"resume"}
+            async def check_reactivated_ledger(_tab, saved_store, *, root):
+                self.assertEqual(root, Path(directory))
+                self.open_scanned.assert_not_awaited()
+                self.assertEqual([(course["id"], key) for course, key, _ in queue._unresolved(saved_store)],
+                                 [("older-course", "assignment:7jgHj")])
+                return []
             with patch.object(queue, "ROOT", root), \
-                 patch.object(queue, "_scan_with_retry", AsyncMock(return_value=observed)) as discover:
+                 patch.object(queue, "_scan_with_retry", AsyncMock(return_value=observed)) as discover, \
+                 patch.object(queue, "recover_pending_quizzes", new=AsyncMock(side_effect=check_reactivated_ledger)) as recover:
                 selected = await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
             self.assertEqual(selected, "older-course")
             self.assertFalse(store.course("older-course").get("removed_from_queue"))
             self.assertEqual([c["id"] for c in load_courses(course_file)], ["new-course", "older-course"])
             discover.assert_awaited_once()
+            recover.assert_awaited_once()
+
+    async def test_reactivated_reflection_is_checked_before_course_card_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/older-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            store.update("older-course", status="attention", run_directory=str(root / "logs" / "old"))
+            store.course("older-course").setdefault("checkpoint", {})["pending_reflections"] = {
+                "assignment:reflect123": {
+                    "url": "https://www.coursera.org/learn/older-course/assignment-submission/reflect123/reflection",
+                    "title": "Reflection (Optional) Practice Assignment", "phase": "first_clicked"}}
+            course_file.write_text("https://www.coursera.org/learn/new-course\n", encoding="utf-8")
+            args = SimpleNamespace(courses=course_file)
+            observed = {"id": "older-course", "url": "https://www.coursera.org/learn/older-course",
+                        "title": "Older Course", "action": "resume"}
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "_scan_with_retry", AsyncMock(return_value=observed)), \
+                 patch.object(queue, "recover_pending_quizzes", new=AsyncMock()) as recover:
+                with self.assertRaisesRegex(engine.StopRun, "reflection Submit cannot be checked"):
+                    await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
+            self.open_scanned.assert_not_awaited()
+            recover.assert_not_awaited()
+
+    async def test_monitor_add_during_scan_refreshes_course_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            course_file = root / "courses.txt"
+            course_file.write_text("https://www.coursera.org/learn/new-course\n", encoding="utf-8")
+            store = QueueStore(root / "state" / "queue.json", load_courses(course_file))
+            args = SimpleNamespace(courses=course_file)
+            observed = {"id": "site-course", "url": "https://www.coursera.org/learn/site-course",
+                        "title": "Site Course", "action": "resume"}
+            async def scan(_store, _tab, _excluded):
+                course_file.write_text("https://www.coursera.org/learn/new-course\n"
+                                       "https://www.coursera.org/learn/site-course\n", encoding="utf-8")
+                return observed
+            with patch.object(queue, "ROOT", root), \
+                 patch.object(queue, "_scan_with_retry", new=scan):
+                selected = await queue._next_course_id(store, args, SimpleNamespace(), set(), True)
+            self.assertEqual(selected, "site-course")
+            self.assertEqual(store.course("site-course")["id"], "site-course")
+            self.assertEqual([row["id"] for row in load_courses(course_file)],
+                             ["new-course", "site-course"])
 
     async def test_empty_in_progress_falls_back_to_configured_new_course(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -441,6 +495,52 @@ class AutoQueueTests(unittest.IsolatedAsyncioTestCase):
             result = await queue.session(store, SimpleNamespace(auto_my_learning=True))
         self.assertEqual(result, 0)
         make_tab.assert_called_once_with("ws://pending-quiz")
+
+    async def test_pending_quiz_tab_precedes_my_learning_with_other_failed_ledger(self):
+        course_url = "https://www.coursera.org/learn/first-course"
+        quiz_page = {"url":course_url + "/assignment-submission/Q1/quiz/attempt",
+                     "webSocketDebuggerUrl":"ws://pending-quiz"}
+        learning_page = {"url":"https://www.coursera.org/my-learning?myLearningTab=IN_PROGRESS",
+                         "webSocketDebuggerUrl":"ws://learning"}
+        store = SimpleNamespace(data={"courses":[{"id":"first-course", "checkpoint":{
+            "attempts":{
+                "assignment:Q1":{"count":2, "pending":True, "platform_attempt":2},
+                "assignment:Q2":{"count":1, "pending":False, "passed":False,
+                                 "feedback_ready":False}}}}]})
+        tab = SimpleNamespace(connect=AsyncMock(),
+                              evaluate=AsyncMock(return_value={"url":quiz_page["url"]}),
+                              close=AsyncMock())
+        with patch.object(queue, "learning_tabs", return_value=[quiz_page]), \
+             patch.object(queue, "my_learning_tabs", return_value=[learning_page]), \
+             patch.object(queue.engine, "ChromeTab", return_value=tab) as make_tab, \
+             patch.object(queue, "run_queue", AsyncMock(return_value=0)) as run:
+            result = await queue.session(store, SimpleNamespace(auto_my_learning=True))
+        self.assertEqual(result, 0)
+        make_tab.assert_called_once_with("ws://pending-quiz")
+        run.assert_awaited_once_with(store, unittest.mock.ANY, tab)
+
+    async def test_single_exact_tab_is_chosen_among_two_saved_pending_quizzes(self):
+        course_url = "https://www.coursera.org/learn/first-course"
+        quiz_page = {"url":course_url + "/assignment-submission/Q1/quiz/attempt",
+                     "webSocketDebuggerUrl":"ws://pending-quiz"}
+        learning_page = {"url":"https://www.coursera.org/my-learning?myLearningTab=IN_PROGRESS",
+                         "webSocketDebuggerUrl":"ws://learning"}
+        store = SimpleNamespace(data={"courses":[{"id":"first-course", "checkpoint":{
+            "attempts":{
+                "assignment:Q1":{"count":2, "pending":True, "submit_phase":"confirm_clicked"},
+                "assignment:Q2":{"count":1, "pending":True,
+                                 "submit_phase":"confirmation_observed"}}}}]})
+        tab = SimpleNamespace(connect=AsyncMock(),
+                              evaluate=AsyncMock(return_value={"url":quiz_page["url"]}),
+                              close=AsyncMock())
+        with patch.object(queue, "learning_tabs", return_value=[quiz_page]), \
+             patch.object(queue, "my_learning_tabs", return_value=[learning_page]), \
+             patch.object(queue.engine, "ChromeTab", return_value=tab) as make_tab, \
+             patch.object(queue, "run_queue", AsyncMock(return_value=0)) as run:
+            result = await queue.session(store, SimpleNamespace(auto_my_learning=True))
+        self.assertEqual(result, 0)
+        make_tab.assert_called_once_with("ws://pending-quiz")
+        run.assert_awaited_once_with(store, unittest.mock.ANY, tab)
 
     async def test_duplicate_pending_result_tabs_save_attention_before_navigation(self):
         course_url = "https://www.coursera.org/learn/first-course"

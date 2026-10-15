@@ -18,7 +18,7 @@ MY_LEARNING_URL = "https://www.coursera.org/my-learning?myLearningTab=IN_PROGRES
 COMPLETED_LEARNING_URL = "https://www.coursera.org/my-learning?myLearningTab=COMPLETED"
 MAX_PAGES = 100
 POLL_SECONDS = 0.5
-PAGE_PROBES = 40
+PAGE_PROBES = 120
 
 
 def _site_url(url):
@@ -418,15 +418,26 @@ async def _close_new_certificate_tabs(tab, before_ids, token):
     return closed
 
 
-async def _wait_for_page(tab, expected_page=None):
+def _page_roster(snapshot):
+    """Identify the visible course rows independently of the page indicator."""
+    rows = snapshot.get("course_rows")
+    if not isinstance(rows, list) or not rows:
+        rows = snapshot.get("cards", [])
+    return tuple(sorted(row.get("id") for row in rows
+                        if isinstance(row, dict) and isinstance(row.get("id"), str)))
+
+
+async def _wait_for_page(tab, expected_page=None, previous_snapshot=None):
     previous = None
+    previous_roster = _page_roster(previous_snapshot) if previous_snapshot else None
     for _ in range(PAGE_PROBES):
         snapshot = await _evaluate(tab, PAGE_JS, {"action": "inspect"})
         if (not snapshot.get("error") and snapshot.get("ready") == "complete"
                 and snapshot.get("in_progress_selected")
                 and (snapshot.get("course_link_count", 0) > 0 or snapshot.get("explicit_empty"))
                 and snapshot.get("page") is not None
-                and (expected_page is None or snapshot["page"] == expected_page)):
+                and (expected_page is None or snapshot["page"] == expected_page)
+                and (previous_roster is None or _page_roster(snapshot) != previous_roster)):
             signature = snapshot.get("signature")
             if signature == previous:
                 return snapshot
@@ -718,6 +729,14 @@ def _progress_kind(status, action=None):
     return "unknown"
 
 
+def _deferred_group_course(status):
+    """A later specialization course has no start action until earlier work is done."""
+    match = re.fullmatch(
+        r"Course\s+(\d+)\s+of\s+(\d+)\s*[·•-]\s*Not started",
+        status.strip(), flags=re.I) if isinstance(status, str) else None
+    return bool(match and 1 < int(match[1]) <= int(match[2]))
+
+
 async def _open_selected_course(tab, snapshot, card):
     """Open only the card selected from the completed cross-page inventory."""
     expected = course_from_lesson_url(card.get("title_url"))
@@ -763,6 +782,7 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
     seen_pages = set()
     found = {}
     unhandled = set()
+    deferred = set()
     for _ in range(MAX_PAGES):
         page = snapshot.get("page")
         if type(page) is not int or page < 1 or page in seen_pages:
@@ -796,6 +816,9 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
                     raise RuntimeError("My Learning showed conflicting progress for " + identity)
                 found[identity] = (kind, page, None)
                 continue
+            if kind == "new" and card is None and _deferred_group_course(row.get("status")):
+                deferred.add(identity)
+                continue
             if kind == "unknown" or not card or action not in {"get_started", "resume", "continue_learning"}:
                 unhandled.add(identity)
                 continue
@@ -827,7 +850,8 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
                                   {"action": "next_page", "signature": snapshot["signature"]})
         if not clicked.get("clicked") or clicked.get("previous_page") != page:
             raise RuntimeError("The next My Learning page could not be selected.")
-        snapshot = await _wait_for_page(tab, expected_page=page + 1)
+        snapshot = await _wait_for_page(tab, expected_page=page + 1,
+                                        previous_snapshot=snapshot)
     else:
         raise RuntimeError("My Learning has more pages than the supported safety limit.")
     if unhandled:
@@ -836,6 +860,9 @@ async def scan_in_progress(tab, excluded_ids: set[str]):
     selected = next((entry for kind in ("started", "new") for entry in found.values()
                      if entry[0] == kind), None)
     if selected is None:
+        if deferred:
+            raise RuntimeError("My Learning still lists later specialization courses without a start action: " +
+                               ", ".join(sorted(deferred)[:5]))
         return None
     kind, selected_page, selected_card = selected
     return {"id":selected_card["id"], "url":selected_card["url"],
@@ -863,7 +890,8 @@ async def open_scanned_course(tab, selected):
                                   {"action": "next_page", "signature": snapshot["signature"]})
         if not clicked.get("clicked") or clicked.get("previous_page") != expected_page:
             raise RuntimeError("My Learning pagination changed before course selection.")
-        snapshot = await _wait_for_page(tab, expected_page=expected_page + 1)
+        snapshot = await _wait_for_page(tab, expected_page=expected_page + 1,
+                                        previous_snapshot=snapshot)
     current = next((card for card in snapshot.get("cards", [])
                     if isinstance(card, dict) and card.get("id") == expected["id"]), None)
     if (current is None or current.get("title_url") != selected.get("title_url")

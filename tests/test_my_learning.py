@@ -120,6 +120,51 @@ class FakeTab:
         raise AssertionError("Unknown page script")
 
 
+class LaggedPageTab(FakeTab):
+    """Page number updates before React replaces the previous page's cards."""
+
+    def __init__(self, pages, stale_inspections):
+        super().__init__(pages)
+        self.stale_inspections = stale_inspections
+        self.remaining_stale = 0
+        self.second_page_inspections = 0
+
+    async def evaluate(self, expression):
+        result = await super().evaluate(expression)
+        if not expression.startswith(learning.PAGE_JS):
+            return result
+        request = json.loads(expression[len(learning.PAGE_JS) + 1:-1])
+        if request["action"] == "next_page" and result.get("clicked"):
+            self.remaining_stale = self.stale_inspections
+        elif request["action"] == "inspect" and self.page == 2:
+            self.second_page_inspections += 1
+            if self.remaining_stale is None or self.remaining_stale > 0:
+                if self.remaining_stale is not None:
+                    self.remaining_stale -= 1
+                old_cards = self.pages[0]
+                result.update(cards=old_cards,
+                              course_rows=[{"id": c["id"], "status": c.get("source", "")}
+                                           for c in old_cards],
+                              course_link_count=len(old_cards),
+                              signature="page-2-with-page-1-cards")
+        return result
+
+
+class GroupedDeferredTab(FakeTab):
+    """A later course in a specialization is visible without a start action."""
+
+    async def evaluate(self, expression):
+        result = await super().evaluate(expression)
+        if expression.startswith(learning.PAGE_JS):
+            request = json.loads(expression[len(learning.PAGE_JS) + 1:-1])
+            if request["action"] == "inspect" and self.page == 1:
+                result["course_rows"].append({"id": "future-course",
+                                              "status": "Course 2 of 3 · Not started"})
+                result["course_link_count"] += 1
+                result["explicit_empty"] = False
+        return result
+
+
 class UrlTests(unittest.TestCase):
     def test_certificate_url_is_strict(self):
         valid = "https://www.coursera.org/account/accomplishments/verify/EXAMPLECERT12345"
@@ -293,6 +338,25 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
                 await learning.discover_next_course(tab, set())
         self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
 
+    async def test_grouped_future_course_does_not_block_actionable_started_course(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = GroupedDeferredTab([[], [started]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            selected = await learning.scan_in_progress(tab, set())
+        self.assertEqual(selected["id"], "unfinished")
+        self.assertEqual(selected["kind"], "started")
+        self.assertEqual(selected["selected_page"], 2)
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
+
+    async def test_only_grouped_future_course_stops_instead_of_finishing_queue(self):
+        tab = GroupedDeferredTab([[]])
+        with patch.object(learning, "POLL_SECONDS", 0):
+            with self.assertRaises(RuntimeError) as raised:
+                await learning.scan_in_progress(tab, set())
+        self.assertRegex(str(raised.exception), "deferred|unavailable|unfinished|action")
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
+
     async def test_unknown_status_blocks_new_course(self):
         unknown = card("unknown", "Unknown")
         unknown["source"] = "Course · Waiting for feedback"
@@ -388,6 +452,30 @@ class NavigationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(learning, "POLL_SECONDS", 0), patch.object(learning, "PAGE_PROBES", 3):
             with self.assertRaisesRegex(RuntimeError, "stable course list"):
                 await learning.discover_next_course(tab, {"done"})
+
+    async def test_waits_for_new_cards_after_page_indicator_advances(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = LaggedPageTab([[card("done", "Done")], [started]], stale_inspections=4)
+        with patch.object(learning, "POLL_SECONDS", 0), patch.object(learning, "PAGE_PROBES", 8):
+            selected = await learning.scan_in_progress(tab, set())
+            self.assertEqual(selected["id"], "unfinished")
+            self.assertEqual(selected["selected_page"], 2)
+            opened = await learning.open_scanned_course(tab, selected)
+        self.assertEqual(opened["id"], "unfinished")
+        self.assertGreaterEqual(tab.second_page_inspections, 12)
+        self.assertEqual([value for name, value in tab.commands if name == "click_course"],
+                         ["unfinished"])
+
+    async def test_stale_cards_forever_stop_at_bounded_page_wait(self):
+        started = card("unfinished", "Unfinished", action="resume")
+        started["source"] = "Course · 43% complete"
+        tab = LaggedPageTab([[card("done", "Done")], [started]], stale_inspections=None)
+        with patch.object(learning, "POLL_SECONDS", 0), patch.object(learning, "PAGE_PROBES", 6):
+            with self.assertRaisesRegex(RuntimeError, "stable course list"):
+                await learning.scan_in_progress(tab, set())
+        self.assertEqual(tab.second_page_inspections, 6)
+        self.assertFalse(any(name == "click_course" for name, _ in tab.commands))
 
     async def test_transient_empty_page_does_not_end_scan(self):
         tab = FakeTab([[card("later", "Later")]])

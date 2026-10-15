@@ -1,13 +1,14 @@
 """Startup quiz recovery must finish a saved result without a fresh attempt."""
 
 import copy
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 
 import coursera_start as engine
-from pending_preflight import recover_pending_quiz
+from pending_preflight import recover_pending_quiz, recover_pending_quizzes
 
 
 COURSE_ID = "sample-course"
@@ -16,6 +17,9 @@ ITEM_URL = COURSE_URL + "/assignment-submission/QUIZ1/graded-quiz"
 FEEDBACK_URL = ITEM_URL + "/view-feedback"
 KEY = "assignment:QUIZ1"
 ITEM = {"key": KEY, "url": ITEM_URL, "title": "Graded quiz"}
+SECOND_KEY = "assignment:QUIZ2"
+SECOND_ITEM_URL = COURSE_URL + "/assignment-submission/QUIZ2/second-quiz"
+SECOND_FEEDBACK_URL = SECOND_ITEM_URL + "/view-feedback"
 
 
 def result(url=FEEDBACK_URL, *, grade=50, details=True, attempt=None):
@@ -45,12 +49,18 @@ class Store:
     def event(self, kind, message, course_id=None):
         self.events.append((kind, message, course_id))
 
+    def add_quiz(self, key, url, ledger):
+        self.course["checkpoint"]["attempts"][key] = copy.deepcopy(ledger)
+        self.course["checkpoint"]["modules"]["1"]["roster"].append(
+            {"key": key, "url": url, "title": "Another graded quiz"})
+
 
 class Tab:
-    def __init__(self, url, ui, feedback_ui=None):
+    def __init__(self, url, ui, feedback_ui=None, green=False):
         self.url = url
         self.ui = ui
         self.feedback_ui = feedback_ui
+        self.green = green
         self.actions = []
 
     async def navigate(self, url):
@@ -60,6 +70,11 @@ class Tab:
     async def evaluate(self, expression):
         if expression == "({url:location.href})":
             return {"url": self.url}
+        if expression == engine.PAGE_JS:
+            self.actions.append(("sidebar", self.url))
+            return {"url": self.url, "items": ([{
+                "url": ITEM_URL, "type": "assignment", "aria_label": "Graded quiz, Passed",
+                "checked": True, "evidence": []}] if self.green else [])}
         if '"action": "button"' in expression:
             # The preflight is only permitted to open an observed review link.
             assert '"label": "View feedback"' in expression
@@ -83,6 +98,129 @@ class PendingPreflightTests(unittest.IsolatedAsyncioTestCase):
             tab = Tab(ITEM_URL, result())
             self.assertIsNone(await recover_pending_quiz(tab, store, root=Path(directory)))
             self.assertEqual(tab.actions, [])
+            self.assertEqual(store.saves, 0)
+
+    async def test_removed_course_pending_marker_is_ignored_without_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 1, "pending": True, "submit_phase": "confirm_clicked"})
+            store.course["removed_from_queue"] = True
+            tab = Tab("https://www.coursera.org/my-learning", result())
+            await recover_pending_quizzes(tab, store, root=Path(directory))
+            self.assertTrue(store.course["checkpoint"]["attempts"][KEY]["pending"])
+            self.assertEqual(tab.actions, [])
+            self.assertEqual(store.saves, 0)
+
+    async def test_unsubmitted_confirmation_stays_for_normal_course_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 1, "pending": True,
+                           "submit_phase": "confirmation_observed", "question_count": 1})
+            tab = Tab("https://www.coursera.org/my-learning", result())
+            await recover_pending_quizzes(tab, store, root=Path(directory))
+            self.assertTrue(store.course["checkpoint"]["attempts"][KEY]["pending"])
+            self.assertEqual(store.course["checkpoint"]["attempts"][KEY]["count"], 1)
+            self.assertEqual(tab.actions, [])
+            self.assertEqual(store.saves, 0)
+
+    async def test_missing_current_roster_uses_unique_bounded_historical_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = root / "logs" / "queue_sample-course_20261015_120000_000001"
+            previous.mkdir(parents=True)
+            (previous / "events.jsonl").write_text(
+                json.dumps({"event": "module_roster", "module": 3, "roster": [ITEM]}) + "\n",
+                encoding="utf-8")
+            current = root / "logs" / "queue_sample-course_20261015_150000_000001"
+            current.mkdir(parents=True)
+            (current / "events.jsonl").write_text("", encoding="utf-8")
+            store = Store({"count": 1, "pending": False, "passed": False,
+                           "feedback_ready": False, "question_count": 1,
+                           "result_url": FEEDBACK_URL})
+            store.course["checkpoint"]["modules"] = {}
+            store.course["run_directory"] = str(current)
+            tab = Tab("https://www.coursera.org/my-learning", result())
+            await recover_pending_quizzes(tab, store, root=root)
+            self.assertTrue(store.course["checkpoint"]["attempts"][KEY]["feedback_ready"])
+            self.assertEqual(tab.actions[0], ("navigate", FEEDBACK_URL))
+            self.assertEqual({action for action, _ in tab.actions}, {"navigate", "inspect"})
+
+    async def test_two_settled_failed_results_review_feedback_one_by_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 1, "pending": False, "passed": False,
+                           "feedback_ready": False, "question_count": 1,
+                           "result_url": FEEDBACK_URL})
+            store.add_quiz(SECOND_KEY, SECOND_ITEM_URL,
+                           {"count": 2, "pending": False, "passed": False,
+                            "feedback_ready": False, "question_count": 1,
+                            "result_url": SECOND_FEEDBACK_URL})
+            tab = Tab("https://www.coursera.org/my-learning", result())
+            await recover_pending_quizzes(tab, store, root=Path(directory))
+            attempts = store.course["checkpoint"]["attempts"]
+            self.assertTrue(attempts[KEY]["feedback_ready"])
+            self.assertTrue(attempts[SECOND_KEY]["feedback_ready"])
+            self.assertEqual(attempts[KEY]["feedback_ready_count"], 1)
+            self.assertEqual(attempts[SECOND_KEY]["feedback_ready_count"], 2)
+            self.assertEqual([value for action, value in tab.actions if action == "navigate"],
+                             [FEEDBACK_URL, SECOND_FEEDBACK_URL])
+            self.assertEqual({action for action, _ in tab.actions}, {"navigate", "inspect"})
+            self.assertEqual(store.saves, 2)
+
+    async def test_pending_exact_result_is_reconciled_before_other_failed_feedback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 2, "pending": True, "passed": False,
+                           "submit_phase": "confirm_clicked", "platform_attempt": 2,
+                           "question_count": 1})
+            store.add_quiz(SECOND_KEY, SECOND_ITEM_URL,
+                           {"count": 1, "pending": False, "passed": False,
+                            "feedback_ready": False, "question_count": 1,
+                            "result_url": SECOND_FEEDBACK_URL})
+            pending_ui = result(ITEM_URL + "/attempt", attempt=2)
+            pending_ui["buttons"] = [{"label": "View feedback", "disabled": False}]
+            tab = Tab(ITEM_URL + "/attempt", pending_ui, feedback_ui=result(attempt=2))
+            await recover_pending_quizzes(tab, store, root=Path(directory))
+            attempts = store.course["checkpoint"]["attempts"]
+            self.assertFalse(attempts[KEY]["pending"])
+            self.assertTrue(attempts[KEY]["feedback_ready"])
+            self.assertTrue(attempts[SECOND_KEY]["feedback_ready"])
+            self.assertEqual(tab.actions[0], ("inspect", ITEM_URL + "/attempt"))
+            self.assertIn(("feedback", "View feedback"), tab.actions)
+            self.assertEqual([value for action, value in tab.actions if action == "navigate"],
+                             [SECOND_FEEDBACK_URL])
+            self.assertNotIn("Submit", [value for _, value in tab.actions])
+
+    async def test_uncertain_pending_result_remains_reserved_with_other_failed_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 2, "pending": True, "passed": False,
+                           "submit_phase": "confirm_clicked", "platform_attempt": 2,
+                           "question_count": 1})
+            store.add_quiz(SECOND_KEY, SECOND_ITEM_URL,
+                           {"count": 1, "pending": False, "passed": False,
+                            "feedback_ready": False, "question_count": 1,
+                            "result_url": SECOND_FEEDBACK_URL})
+            tab = Tab(ITEM_URL + "/attempt", result(attempt=1))
+            with self.assertRaises(engine.StopRun):
+                await recover_pending_quizzes(tab, store, root=Path(directory))
+            ledger = store.course["checkpoint"]["attempts"][KEY]
+            self.assertTrue(ledger["pending"])
+            self.assertEqual(ledger["count"], 2)
+            self.assertEqual([action for action, _ in tab.actions if action != "inspect"], [])
+            self.assertEqual(store.saves, 0)
+
+    async def test_two_pending_results_report_exact_unresolved_assignment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 1, "pending": True, "passed": False,
+                           "submit_phase": "confirm_clicked", "question_count": 1})
+            store.add_quiz(SECOND_KEY, SECOND_ITEM_URL,
+                           {"count": 1, "pending": True, "passed": False,
+                            "submit_phase": "confirmation_observed", "question_count": 1})
+            tab = Tab(ITEM_URL + "/attempt", result(attempt=2))
+            with self.assertRaises(engine.StopRun) as caught:
+                await recover_pending_quizzes(tab, store, root=Path(directory))
+            self.assertNotIn("Multiple saved quiz results", str(caught.exception))
+            self.assertEqual(caught.exception.course_id, COURSE_ID)
+            self.assertEqual(caught.exception.item_key, KEY)
+            self.assertTrue(store.course["checkpoint"]["attempts"][KEY]["pending"])
+            self.assertTrue(store.course["checkpoint"]["attempts"][SECOND_KEY]["pending"])
+            self.assertEqual([action for action, _ in tab.actions if action != "inspect"], [])
             self.assertEqual(store.saves, 0)
 
     async def test_exact_pending_failed_result_saves_complete_feedback(self):
@@ -116,21 +254,36 @@ class PendingPreflightTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = Store({"count": 1, "pending": True, "question_count": 1})
             tab = Tab("https://www.coursera.org/my-learning", result())
-            with self.assertRaisesRegex(engine.StopRun, "not open in Chrome") as caught:
+            with self.assertRaisesRegex(engine.StopRun, "no Coursera attempt number") as caught:
                 await recover_pending_quiz(tab, store, root=Path(directory))
             self.assertEqual(caught.exception.course_id, COURSE_ID)
             self.assertEqual(caught.exception.item_key, KEY)
-            self.assertEqual(tab.actions, [])
+            self.assertEqual(tab.actions[0], ("navigate", ITEM_URL))
             self.assertTrue(store.course["checkpoint"]["attempts"][KEY]["pending"])
             self.assertEqual(store.saves, 0)
 
-    async def test_observed_but_unsubmitted_confirmation_never_claims_old_grade(self):
+    async def test_old_pending_submit_recovers_from_fresh_pass_and_green_mark(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store({"count": 1, "pending": True, "submit_phase": "confirm_clicked",
+                           "question_count": 1})
+            tab = Tab("https://www.coursera.org/my-learning",
+                      result(ITEM_URL, grade=100, details=False), green=True)
+            outcomes = await recover_pending_quizzes(tab, store, root=Path(directory))
+            self.assertEqual(len(outcomes), 1)
+            self.assertTrue(outcomes[0]["passed"])
+            ledger = store.course["checkpoint"]["attempts"][KEY]
+            self.assertFalse(ledger["pending"])
+            self.assertTrue(ledger["passed"])
+            self.assertEqual(tab.actions[0], ("navigate", ITEM_URL))
+            self.assertIn(("sidebar", ITEM_URL), tab.actions)
+            self.assertNotIn("Submit", [value for _, value in tab.actions])
+
+    async def test_observed_but_unsubmitted_confirmation_waits_for_normal_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store({"count": 1, "pending": True, "submit_phase": "confirmation_observed",
                            "question_count": 1})
             tab = Tab(FEEDBACK_URL, result(grade=100))
-            with self.assertRaisesRegex(engine.StopRun, "final Submit was not clicked"):
-                await recover_pending_quiz(tab, store, root=Path(directory))
+            self.assertIsNone(await recover_pending_quiz(tab, store, root=Path(directory)))
             self.assertEqual(tab.actions, [])
             self.assertTrue(store.course["checkpoint"]["attempts"][KEY]["pending"])
             self.assertEqual(store.saves, 0)
