@@ -126,7 +126,7 @@ SIDEBAR_JS = "(request=>{" + _COMMON_JS + r"""
       let u;try{u=new URL(a.href,location.href);}catch{continue;}
       if(!sameCourse(u)) continue;
       const parts=u.pathname.slice(request.course_path.length).split('/').filter(Boolean);
-      if(parts.length<2 || !['supplement','lecture','assignment-submission','exam','quiz','team','peer','ungradedLab','coach','programming'].includes(parts[0])) continue;
+      if(parts.length<2 || !['supplement','lecture','assignment-submission','exam','quiz','team','peer','ungradedLab','ungradedLti','ungradedPlugin','ungradedWidget','coach','programming'].includes(parts[0])) continue;
       const label=clean(a.getAttribute('aria-label'));
       const tokens=label.toLowerCase().split(',').map(x=>x.trim());
       const negative=tokens.some(x=>/\b(?:failed|not passed|not completed|incomplete|not submitted|in progress|not started)\b/.test(x));
@@ -338,7 +338,7 @@ def _roster_rows(snapshot):
         identity = raw.get("identity") or urlsplit(raw.get("url", "")).path.split("/")[4]
         key = canonical + ":" + identity
         row = dict(supported.get(key, raw))
-        row.update(key=key, unsupported=canonical not in {"supplement", "lecture", "assignment", "ungradedLab", "coach"} or kind == "team")
+        row.update(key=key, unsupported=canonical not in {"supplement", "lecture", "assignment", "ungradedLab", "ungradedLti", "ungradedPlugin", "ungradedWidget", "coach"} or kind == "team")
         row.setdefault("status", "unknown")
         if row["unsupported"]:
             row["unsupported_reason"] = "No automatic handler for lesson type: " + kind

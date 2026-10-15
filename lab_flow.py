@@ -98,12 +98,12 @@ LAB_PAGE_JS = r"""(request => {
     disabled: !!element.disabled || element.getAttribute('aria-disabled') === 'true',
     href: element.matches('a[href]') ? element.href : element.closest('a[href]')?.href || null
   }));
-  const launch = actions.filter(action => /^Launch lab$/i.test(action.label));
+  const launch = actions.filter(action => /^(?:Launch|Resume) lab$/i.test(action.label));
   const mark = actions.filter(action => /^Mark as complete(?:d)?$/i.test(action.label));
   const result = {url: location.href, ready: document.readyState, heading: heading[0],
     launch_count: launch.length, mark_count: mark.length,
     launch_disabled: launch[0]?.disabled ?? null, mark_disabled: mark[0]?.disabled ?? null,
-    launch_href: launch[0]?.href || null};
+    launch_href: launch[0]?.href || null, launch_label: launch.length === 1 ? launch[0].label : null};
   if (!request.action || request.action === 'inspect') return result;
   const selected = request.action === 'launch' ? launch : request.action === 'mark' ? mark : [];
   if (selected.length !== 1 || selected[0].disabled || document.readyState !== 'complete')
@@ -304,7 +304,7 @@ async def _verify_green_with_outline(tab, item, path, heading, verify_completion
 
 
 async def complete_lab(tab, item, course_url, *, verify_completion, event=None):
-    """Launch a lab, wait for its site, return and verify Coursera's green mark.
+    """Launch or resume a lab, wait for its site, then verify Coursera's green mark.
 
     The caller must first open the exact lab lesson. `verify_completion` is the
     site's sidebar verifier, accepting `(item, wait=seconds)` and returning a
@@ -321,14 +321,14 @@ async def complete_lab(tab, item, course_url, *, verify_completion, event=None):
         return
     page = await _wait_lab_page(tab, path, heading)
     if page['launch_count'] != 1 or page['launch_disabled']:
-        raise engine.StopRun('The lab page needs exactly one available Launch lab action.')
+        raise engine.StopRun('The lab page needs exactly one available Launch lab or Resume lab action.')
     before = await _page_targets(tab)
     source_id = _source_target(tab, before, path)
     launch = await _lab_snapshot(tab, path, heading, 'launch')
     if launch.get('clicked') != 'launch':
-        raise engine.StopRun('Launch lab was not clicked on the expected lesson: ' + launch.get('error', 'unknown change'))
+        raise engine.StopRun('Launch/Resume lab was not clicked on the expected lesson: ' + launch.get('error', 'unknown change'))
     if event:
-        event('lab_launched', key=item['key'])
+        event('lab_launched', key=item['key'], action=page.get('launch_label'))
     mode, launched_id, host = await _wait_launched_site(tab, path, source_id, before, page.get('launch_href'))
     if event:
         event('lab_site_loaded', key=item['key'], host=host, mode=mode)

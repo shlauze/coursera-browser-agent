@@ -115,6 +115,7 @@ class OutlineRegressionTests(unittest.IsolatedAsyncioTestCase):
         for kind, heading, suffix in (
             ("ungradedLab", "Build a Perceptron", "Lab"),
             ("coach", "Deep Learning in Context", "Dialogue"),
+            ("ungradedWidget", "Overview", "Ungraded Plugin"),
         ):
             with self.subTest(kind=kind):
                 url = f"https://www.coursera.org/learn/philosophy/{kind}/sample/lesson"

@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.54"
+RUNNER_VERSION = "4.0-groq.55"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -190,7 +190,7 @@ def item_key(url):
     kind, identity = parts[3:5]
     if kind in {"assignment-submission", "exam", "quiz", "team"}:
         kind = "assignment"
-    if kind not in {"supplement", "lecture", "assignment", "peer", "ungradedLab", "coach", "programming"}:
+    if kind not in {"supplement", "lecture", "assignment", "peer", "ungradedLab", "ungradedLti", "ungradedPlugin", "ungradedWidget", "coach", "programming"}:
         return None
     return f"{kind}:{identity}"
 
@@ -242,7 +242,7 @@ PAGE_JS = r"""(() => {
   const shown = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
   if (!['www.coursera.org','coursera.org'].includes(location.hostname) ||
       !location.pathname.startsWith('/learn/philosophy/')) return {blocked:true,url:location.href};
-  const allowed = new Set(['supplement','lecture','assignment-submission','exam','quiz','peer','ungradedLab','coach','programming']);
+  const allowed = new Set(['supplement','lecture','assignment-submission','exam','quiz','peer','ungradedLab','ungradedLti','ungradedPlugin','ungradedWidget','coach','programming']);
   const items = [];
   for (const a of document.querySelectorAll('a[href]')) {
     if (!shown(a)) continue;
@@ -449,11 +449,46 @@ QUIZ_UI_JS = r"""(async request => {
     .filter(e=>!e.matches('input') && !e.querySelector('input[type="radio"],input[type="checkbox"]'));
   const choiceElements = [...native,...custom].filter(e=>shown(e) || Array.from(e.labels || []).some(shown) || (e.parentElement && shown(e.parentElement)));
   const numericElements = Array.from(document.querySelectorAll('input[type="number"]')).filter(shown);
+  const singleQuestionText=e=>{
+    for (let p=e.parentElement,depth=0;p && depth<10 && !p.matches('body,main,form');p=p.parentElement,depth++) {
+      const text=questionOnly(p.innerText);
+      if (text.length>2600) break;
+      if (/\bQuestion\s+\d+\b/i.test(text) &&
+          (text.match(/\bQuestion\s+\d+\b/gi) || []).length===1)
+        return text.slice(0,2600);
+    }
+    return '';
+  };
+  const nativeOptions=e=>{
+    const all=Array.from(e.options || []);
+    // An enabled empty value may be a real answer. Do not silently discard it
+    // as a placeholder or guess what the site means by an empty submission.
+    const unavailable=o=>o.disabled || o.hidden || !!o.parentElement?.disabled ||
+      !!o.closest?.('optgroup[disabled]');
+    if (all.some(o=>o.value==='' && !unavailable(o))) return null;
+    const options=all.filter(o=>!unavailable(o));
+    const labels=options.map(o=>clean(o.textContent || o.label));
+    if (options.length<2 || options.length>12 ||
+        options.some(o=>o.disabled || !o.value || o.value.length>250) ||
+        labels.some(x=>!x || x.length>250) ||
+        new Set(labels.map(x=>x.toLowerCase())).size!==labels.length ||
+        new Set(options.map(o=>o.value)).size!==options.length) return null;
+    return options;
+  };
+  const nativeSelectedText=e=>{
+    if (!e.value) return '';
+    const option=Array.from(e.options || []).find(o=>o.value===e.value);
+    return clean(option?.textContent || option?.label || '');
+  };
+  // An ordinary HTML select is an answer only when it belongs to exactly one
+  // numbered question and its entire option set can be identified uniquely.
+  const nativeSelectElements=Array.from(document.querySelectorAll('select'))
+    .filter(e=>shown(e) && !!singleQuestionText(e) && !!nativeOptions(e));
   // CML fill-in-the-blank answers use a CDS listbox trigger and an aria-hidden
   // backing input. The backing input is not an editable text response.
   const selectElements = Array.from(document.querySelectorAll(
     'span.rc-FillableBlank [role="button"][aria-haspopup="listbox"]')).filter(shown);
-  const candidates = [...choiceElements,...numericElements,...selectElements]
+  const candidates = [...choiceElements,...numericElements,...selectElements,...nativeSelectElements]
     .sort((a,b)=>a===b?0:(a.compareDocumentPosition(b)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1));
   const offscreenModal=e=>{
     const modal=e.closest('.cds-Modal-container');
@@ -464,10 +499,12 @@ QUIZ_UI_JS = r"""(async request => {
   const offscreenElements=candidates.filter(offscreenModal);
   const elements=candidates.filter(e=>!offscreenModal(e));
   const offscreenDraft=offscreenElements.some(e=>selectElements.includes(e)?
-    clean(e.innerText)!=='Select answer':e.matches('input[type="number"]')?
+    clean(e.innerText)!=='Select answer':nativeSelectElements.includes(e)?
+    !!e.value:e.matches('input[type="number"]')?
     !!e.value:e.matches('input')?!!e.checked:e.getAttribute('aria-checked')==='true');
   const isNotice = text => /\bhonor code\b|\bI\s*,[^,]{1,100},\s*(understand|confirm|certify|agree)\b|\bI (understand that submitting|certify that|declare that)\b/i.test(text);
   const questionText = e => {
+    if (nativeSelectElements.includes(e)) return singleQuestionText(e);
     if (selectElements.includes(e)) {
       const fillable=e.closest('span.rc-FillableBlank');
       for (let p=fillable?.parentElement, depth=0;p && depth<10 && !p.matches('body,main,form');p=p.parentElement,depth++) {
@@ -479,16 +516,7 @@ QUIZ_UI_JS = r"""(async request => {
       }
       return '';
     }
-    if (e.matches('input[type="number"]')) {
-      for (let p=e.parentElement, depth=0;p && depth<10 && !p.matches('body,main,form');p=p.parentElement,depth++) {
-        const text=questionOnly(p.innerText);
-        if (text.length>2600) break;
-        if (/\bQuestion\s+\d+\b/i.test(text) &&
-            (text.match(/\bQuestion\s+\d+\b/gi) || []).length===1)
-          return text.slice(0,2600);
-      }
-      return questionOnly(label(e));
-    }
+    if (e.matches('input[type="number"]')) return singleQuestionText(e) || questionOnly(label(e));
     let best=label(e), p=e.parentElement;
     for (let depth=0;p && depth<9 && !p.matches('body,main,form');depth++,p=p.parentElement) {
       const allInside=choiceElements.filter(c=>p.contains(c));
@@ -503,26 +531,31 @@ QUIZ_UI_JS = r"""(async request => {
     return questionOnly(best).slice(0,2600);
   };
   const readControls = () => elements.map((e,i)=>({
-    id:'c'+i,type:selectElements.includes(e)?'select':e.type || e.getAttribute('role'),
+    id:'c'+i,type:selectElements.includes(e)?'select':nativeSelectElements.includes(e)?'native_select':e.type || e.getAttribute('role'),
     name:selectElements.includes(e)?e.id || '':e.name || '',
-    value:selectElements.includes(e)?(clean(e.innerText)==='Select answer'?'':clean(e.innerText)):e.value || '',
+    value:selectElements.includes(e)?(clean(e.innerText)==='Select answer'?'':clean(e.innerText)):
+      nativeSelectElements.includes(e)?nativeSelectedText(e):e.value || '',
     expanded:selectElements.includes(e)?e.getAttribute('aria-expanded')==='true':null,
-    label:(selectElements.includes(e)?
+    label:(nativeSelectElements.includes(e)?
+      clean(e.getAttribute('aria-label') || Array.from(e.labels || []).map(x=>x.innerText).join(' ') || 'Select an answer'):
+      selectElements.includes(e)?
       (clean(e.getAttribute('aria-label')).match(/^Response area number \d+\./)?.[0] || ''):
       label(e)).slice(0,1000),question:questionText(e),
+    options:nativeSelectElements.includes(e)?nativeOptions(e)?.map(o=>clean(o.textContent || o.label)):null,
     min:e.matches('input[type="number"]')?(e.getAttribute('min') || null):null,
     max:e.matches('input[type="number"]')?(e.getAttribute('max') || null):null,
     step:e.matches('input[type="number"]')?(e.getAttribute('step') || null):null,
     kind:isNotice(label(e))?'notice':'answer',
-    selected:selectElements.includes(e) || e.matches('input[type="number"]')?false:
+    selected:selectElements.includes(e) || nativeSelectElements.includes(e) || e.matches('input[type="number"]')?false:
       e.matches('input')?!!e.checked:e.getAttribute('aria-checked')==='true',
-    disabled:!!e.disabled || (e.matches('input[type="number"]') && !!e.readOnly) ||
+    disabled:!!e.disabled || (nativeSelectElements.includes(e) && !nativeOptions(e)) ||
+      (e.matches('input[type="number"]') && !!e.readOnly) ||
       e.getAttribute('aria-disabled')==='true' || !!e.closest('fieldset[disabled]')
   }));
   let controls=readControls();
   const formId=rows=>{
-    const basis=JSON.stringify([location.pathname,rows.map(c=>['number','select'].includes(c.type)?
-      [c.id,c.type,c.name,'',c.label,c.question,c.min,c.max,c.step]:
+    const basis=JSON.stringify([location.pathname,rows.map(c=>['number','select','native_select'].includes(c.type)?
+      [c.id,c.type,c.name,'',c.label,c.question,c.min,c.max,c.step,c.options]:
       [c.id,c.type,c.name,c.value,c.label,c.question])]);
     let hash=2166136261;
     for (let i=0;i<basis.length;i++) {hash^=basis.charCodeAt(i);hash=Math.imul(hash,16777619);}
@@ -627,7 +660,7 @@ QUIZ_UI_JS = r"""(async request => {
   // separate overlay without answer fields blocks editing the attempt.
   const unsupportedSelector='textarea,select,input:not([type="radio"]):not([type="checkbox"]):not([type="number"]):not([type="hidden"]):not([type="submit"]):not([type="button"])';
   const scopedUnsupported=Array.from(scope.querySelectorAll(unsupportedSelector))
-    .filter(e=>visibleAction(e) && !e.disabled && !e.readOnly);
+    .filter(e=>visibleAction(e) && !e.disabled && !e.readOnly && !nativeSelectElements.includes(e));
   const scopedAnswers=controls.filter(c=>c.kind==='answer' && !c.disabled &&
     (!dialog || dialog.contains(elements[Number(c.id.slice(1))])));
   const dialogIsForm=!!dialog && !parts.includes('view-feedback') &&
@@ -720,6 +753,8 @@ QUIZ_UI_JS = r"""(async request => {
     (!blockingDialog && !controls.some(c=>!c.disabled && c.kind==='answer') && /Your (?:grade|latest|highest)\s*:/i.test(document.body.innerText)));
   const output=()=>({url:location.href,snapshot_id:formId(readControls()),
     answer_snapshot_id:answerFormId(readControls()),
+    select_options:Object.fromEntries(readControls().filter(c=>c.type==='native_select' && c.kind==='answer' && Array.isArray(c.options))
+      .map(c=>[c.id,c.options.map((text,i)=>({id:c.id+':o'+i,text}))])),
     controls:readControls().map(c=>({...c,in_scope:!dialog || dialog.contains(elements[Number(c.id.slice(1))])})),
     buttons:buttons.filter(b=>b.workflow),
     available_buttons:buttons.filter(b=>b.workflow && !b.disabled).map(b=>b.label),
@@ -751,6 +786,9 @@ QUIZ_UI_JS = r"""(async request => {
       return {error:'The fill-in-the-blank control was replaced.'};
     if (trigger.getAttribute('aria-expanded')!=='true')
       return {error:'The fill-in-the-blank listbox is closed.',error_code:'select_closed'};
+    const expanded=selectElements.filter(e=>e.getAttribute('aria-expanded')==='true' && visibleAction(e));
+    if (expanded.length!==1 || expanded[0]!==trigger)
+      return {error:'More than one fill-in-the-blank control is expanded.',error_code:'select_expanded_ambiguous'};
     const boxes=Array.from(document.querySelectorAll('[role="listbox"]')).filter(visibleAction);
     if (boxes.length!==1)
       return {error:'Expected one visible fill-in-the-blank listbox; found '+boxes.length+'.',
@@ -871,17 +909,17 @@ QUIZ_UI_JS = r"""(async request => {
   }
   if (request.action==='inspect_select_options') {
     const selects=scopedAnswers.filter(c=>c.type==='select');
-    if (!request.snapshot_id || blockingDialog || selects.length!==1)
+    const targets=selects.filter(c=>c.id===request.control_id);
+    const selected=targets.length===1?targets[0]:!request.control_id && selects.length===1?selects[0]:null;
+    if (!request.snapshot_id || blockingDialog || !selected)
       return {error:'The expected fill-in-the-blank form is unavailable.',...output()};
     const select_options={};
-    for (const c of selects) {
-      const observed=await visibleSelectOptions(c);
-      if (observed.error) return {...observed,...output()};
-      select_options[c.id]=observed.options;
-    }
+    const observed=await visibleSelectOptions(selected);
+    if (observed.error) return {...observed,...output()};
+    select_options[selected.id]=observed.options;
     if (formId(readControls())!==snapshot_id)
       return {error:'The quiz changed while listbox options were read.',...output()};
-    return {...output(),select_options};
+    return {...output(),select_options:{...output().select_options,...select_options}};
   }
   if (request.action==='dismiss_course_certificate') {
     if (!request.snapshot_id || !courseCertificate || !certificateClose || !visibleAction(certificateClose))
@@ -922,7 +960,7 @@ QUIZ_UI_JS = r"""(async request => {
           Math.abs((n-(min===null?0:min))/step-Math.round((n-(min===null?0:min))/step))>1e-7))
         return {error:'Numeric answer does not match the field step; no controls were changed.',control_id:c.id,...output()};
     }
-    const selectControls=scopedAnswers.filter(c=>c.type==='select');
+    const selectControls=scopedAnswers.filter(c=>['select','native_select'].includes(c.type));
     const select=request.select || {};
     if (!select || typeof select!=='object' || Array.isArray(select) ||
         Object.keys(select).length!==selectControls.length ||
@@ -936,6 +974,9 @@ QUIZ_UI_JS = r"""(async request => {
           typeof plan.text!=='string' || !plan.options.includes(plan.text) ||
           plan.id!==c.id+':o'+plan.options.indexOf(plan.text))
         return {error:'Invalid fill-in-the-blank option; no answers were changed.',...output()};
+      if (c.type==='native_select' &&
+          JSON.stringify(c.options)!==JSON.stringify(plan.options))
+        return {error:'Native dropdown options changed; no answers were changed.',...output()};
     }
     const radios=new Map();
     for (const c of scopedAnswers.filter(c=>c.type==='radio')) {
@@ -976,12 +1017,30 @@ QUIZ_UI_JS = r"""(async request => {
         if (elements.some(e=>!e.isConnected)) return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
       }
     }
+    for (const c of selectControls.filter(c=>c.type==='native_select')) {
+      const e=elements[Number(c.id.slice(1))],plan=select[c.id];
+      const option=nativeOptions(e)?.[Number(plan.id.split(':o')[1])];
+      if (!option || clean(option.textContent || option.label)!==plan.text)
+        return {error:'Native dropdown option changed before selection.',...output()};
+      if (c.value!==plan.text) {
+        e.scrollIntoView({block:'center'});
+        const setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value')?.set;
+        if (setter) setter.call(e,option.value); else e.value=option.value;
+        e.dispatchEvent(new Event('input',{bubbles:true}));
+        e.dispatchEvent(new Event('change',{bubbles:true}));
+        changed.push({id:c.id,value:plan.text});
+        await new Promise(resolve=>setTimeout(resolve,120));
+        if (elements.some(e=>!e.isConnected))
+          return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
+      }
+    }
     if (elements.some(e=>!e.isConnected)) return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
     controls=readControls();
     const scopedIds=new Set(scopedAnswers.map(c=>c.id));
     const mismatch=controls.filter(c=>scopedIds.has(c.id) &&
       (c.type==='number'?c.value!==numeric[c.id]:c.type==='select'?
-        false:c.selected!==selected.has(c.id)));
+        false:c.type==='native_select'?c.value!==select[c.id].text:
+        c.selected!==selected.has(c.id)));
     return {...output(),changed,verified:mismatch.length===0,mismatched_controls:mismatch};
   }
   if (request.action==='acknowledge_notice') {
@@ -1038,7 +1097,7 @@ QUIZ_UI_JS = r"""(async request => {
       if (request.expected_select) {
         const expected=request.expected_select;
         const allAnswers=request.action==='confirm_submit';
-        const current=controls.filter(c=>c.kind==='answer' && c.type==='select' &&
+        const current=controls.filter(c=>c.kind==='answer' && ['select','native_select'].includes(c.type) &&
           (allAnswers || !c.disabled) &&
           (allAnswers || !dialog || dialog.contains(elements[Number(c.id.slice(1))])));
         if (Object.keys(expected).length!==current.length || current.some(c=>expected[c.id]!==c.value))
@@ -1228,7 +1287,7 @@ def build_quiz_questions(ui):
     for control in ui.get("controls", []):
         if control.get("kind") != "answer" or control.get("disabled") or not control.get("in_scope", True):
             continue
-        if control.get("type") not in {"radio", "checkbox", "number", "select"}:
+        if control.get("type") not in {"radio", "checkbox", "number", "select", "native_select"}:
             raise StopRun("Unsupported quiz answer control.")
         stem = question_text(control.get("question", ""))
         label = question_text(control.get("label", ""))
@@ -1246,7 +1305,7 @@ def build_quiz_questions(ui):
                 "min":control.get("min") or None, "max":control.get("max") or None,
                 "step":control.get("step") or None}
             continue
-        if control["type"] == "select":
+        if control["type"] in {"select", "native_select"}:
             options = ui.get("select_options", {}).get(identity)
             if (group_key in groups or not isinstance(options, list) or not 2 <= len(options) <= 12 or
                     any(not isinstance(option, dict) or
@@ -1257,7 +1316,7 @@ def build_quiz_questions(ui):
                     len({option["text"].casefold() for option in options}) != len(options)):
                 raise StopRun("The fill-in-the-blank options could not be read uniquely; no answers were changed.")
             groups[group_key] = {"id":f"q{len(groups)+1}", "text":stem,
-                                 "selection":"one", "control_type":"select",
+                                 "selection":"one", "control_type":control["type"],
                                  "control_id":identity, "options":options}
             continue
         group = groups.setdefault(group_key, {
@@ -1365,7 +1424,7 @@ def validate_answer_plan(plan, questions):
         if (not choices or len(choices) != len(set(choices)) or not set(choices) <= allowed or
             (question["selection"] == "one" and len(choices) != 1) or not isinstance(answer["reason"], str)):
             raise ValueError("Answer choices do not match the question's controls.")
-        if question.get("control_type") == "select":
+        if question.get("control_type") in {"select", "native_select"}:
             option = next(option for option in question["options"] if option["id"] == choices[0])
             selects[question["control_id"]] = {
                 "id":option["id"], "text":option["text"],
@@ -1598,7 +1657,7 @@ async def press_quiz_button_when_ready(quiz_ui, label, validate, timeout=45, all
                     if c.get("kind") == "answer" and c.get("type") == "number" and
                        not c.get("disabled") and c.get("in_scope", True)}
                 expected_select = {c["id"]:c.get("value", "") for c in current.get("controls", [])
-                    if c.get("kind") == "answer" and c.get("type") == "select" and
+                    if c.get("kind") == "answer" and c.get("type") in {"select", "native_select"} and
                        not c.get("disabled") and c.get("in_scope", True)}
                 if expected_select:
                     parameters["expected_select"] = expected_select
@@ -1715,7 +1774,7 @@ class CourseRunner:
             # is ready. A matching heading proves the lesson rendered; the
             # outline row may still be collapsed or waiting for hydration.
             rendered = bool(value.get("ready") == "interactive" and heading and
-                            re.match(re.escape(heading) + r"(?:$|\s+(?:Video|Reading|Lab|Dialogue|Role Play|Practice Assignment|Graded Assignment|Assignment)\b)", title))
+                            re.match(re.escape(heading) + r"(?:$|\s+(?:Video|Reading|Lab|Dialogue|Role Play|Ungraded Plugin|Ungraded Widget|Practice Assignment|Graded Assignment|Assignment)\b)", title))
             loaded = item_key(value.get("url", "")) == item["key"] and (value.get("ready") == "complete" or rendered)
             saw_lesson = saw_lesson or loaded
             if loaded:
@@ -2041,7 +2100,7 @@ class CourseRunner:
                     print("ANSWER:", question["id"], answer_values["numeric"][question["control_id"]], flush=True)
                 else:
                     selected = answer_values["selected"] if isinstance(answer_values, dict) else answer_values
-                    if question.get("control_type") == "select":
+                    if question.get("control_type") in {"select", "native_select"}:
                         selected = [answer_values["select"][question["control_id"]]["id"]]
                     labels = [o["text"] for o in question["options"] if o["id"] in selected]
                     print("ANSWER:", question["id"], " / ".join(labels), flush=True)
@@ -2081,7 +2140,8 @@ class CourseRunner:
         async def read_select_options(current, control_id):
             """Open one observed CML dropdown and read its current options."""
             for _ in range(2):
-                probe = await quiz_ui("inspect_select_options", snapshot_id=current["snapshot_id"])
+                probe = await quiz_ui("inspect_select_options", snapshot_id=current["snapshot_id"],
+                                      control_id=control_id)
                 if probe.get("select_options", {}).get(control_id):
                     return probe
                 if probe.get("error_code") != "select_closed":
@@ -2107,7 +2167,8 @@ class CourseRunner:
                 else:
                     continue
                 for _ in range(8):
-                    probe = await quiz_ui("inspect_select_options", snapshot_id=current["snapshot_id"])
+                    probe = await quiz_ui("inspect_select_options", snapshot_id=current["snapshot_id"],
+                                          control_id=control_id)
                     if probe.get("select_options", {}).get(control_id):
                         return probe
                     if probe.get("error_code") != "select_listbox_count" or probe.get("listbox_count") != 0:
@@ -2118,11 +2179,13 @@ class CourseRunner:
 
         async def set_select_answer(current, control_id, plan):
             controls = [c for c in current.get("controls", []) if c.get("id") == control_id and
-                        c.get("type") == "select" and c.get("in_scope", True)]
+                        c.get("type") in {"select", "native_select"} and c.get("in_scope", True)]
             if len(controls) != 1:
                 raise StopRun("The fill-in-the-blank control disappeared before selection.")
             if controls[0].get("value") == plan["text"]:
                 return current
+            if controls[0].get("type") == "native_select":
+                raise StopRun("The native dropdown selection was not reflected in the quiz form.")
             current = await read_select_options(current, control_id)
             options = current.get("select_options", {}).get(control_id, [])
             if [o.get("text") for o in options] != plan["options"]:
@@ -2194,7 +2257,8 @@ class CourseRunner:
             answers = [c for c in ui.get("controls", [])
                         if c.get("kind") == "answer" and not c.get("disabled") and c.get("in_scope", True)]
             actual_numeric = {c["id"]:c.get("value", "") for c in answers if c.get("type") == "number"}
-            actual_select = {c["id"]:c.get("value", "") for c in answers if c.get("type") == "select"}
+            actual_select = {c["id"]:c.get("value", "") for c in answers
+                             if c.get("type") in {"select", "native_select"}}
             return (bool(answers) and
                     {c["id"] for c in answers if c.get("selected")} == set(selected) and
                     actual_numeric == numeric and
@@ -2214,10 +2278,19 @@ class CourseRunner:
                 select_controls = [c for c in current.get("controls", []) if c.get("kind") == "answer" and
                                    c.get("type") == "select" and not c.get("disabled") and
                                    c.get("in_scope", True)]
-                if len(select_controls) > 1:
-                    raise StopRun("This quiz has multiple fill-in-the-blank listboxes; no answers were changed.")
-                if select_controls:
-                    current = await read_select_options(current, select_controls[0]["id"])
+                if len(select_controls) > 12:
+                    raise StopRun("Too many fill-in-the-blank listboxes to identify safely.")
+                observed_options = dict(current.get("select_options", {}))
+                original_answer_snapshot = current["answer_snapshot_id"]
+                for control in select_controls:
+                    current = await read_select_options(current, control["id"])
+                    if current.get("answer_snapshot_id") != original_answer_snapshot:
+                        raise StopRun("The quiz changed while its fill-in-the-blank choices were read.")
+                    options = current.get("select_options", {}).get(control["id"])
+                    if not options or control["id"] in observed_options:
+                        raise StopRun("A fill-in-the-blank option set could not be identified uniquely.")
+                    observed_options[control["id"]] = options
+                current["select_options"] = observed_options
                 answer_snapshot = current["answer_snapshot_id"]
                 question_count = len({c.get("name") or question_text(c.get("question", ""))
                                       for c in current.get("controls", [])

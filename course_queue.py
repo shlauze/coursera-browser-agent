@@ -23,6 +23,7 @@ from my_learning import (MY_LEARNING_URL, MyLearningSelectionChanged,
                          observed_certificate_url, open_certificate_page,
                          open_my_learning, valid_certificate_url, verify_saved_certificate)
 from lab_flow import complete_lab
+from plugin_flow import complete_plugin
 from programming_flow import diagnose_programming
 from dialogue_flow import run_dialogue
 from role_play_flow import probe_role_play, run_role_play
@@ -514,7 +515,7 @@ class QueueRunner(engine.CourseRunner):
         self.store.event("module_started", f"Модуль {number}", self.course["id"])
         def supported(item):
             return (not item.get("unsupported") and
-                    item["key"].split(":", 1)[0] in {"supplement", "lecture", "assignment", "ungradedLab", "coach"})
+                    item["key"].split(":", 1)[0] in {"supplement", "lecture", "assignment", "ungradedLab", "ungradedLti", "ungradedPlugin", "ungradedWidget", "coach"})
 
         anchor = next((item for item in roster if supported(item) and engine.item_key(item["url"])), None)
         if anchor is None and any(supported(item) for item in roster):
@@ -584,6 +585,8 @@ class QueueRunner(engine.CourseRunner):
                 if is_role_play or not await self.verified_item(item):
                     operation, timeout = {"supplement":(self.reading, 120), "lecture":(self.video, 180),
                                           "assignment":(self.quiz, None), "ungradedLab":(self.lab, 240),
+                                          "ungradedLti":(self.lab, 240),
+                                          "ungradedPlugin":(self.plugin, 90), "ungradedWidget":(self.plugin, 90),
                                           "coach":(self.role_play if is_role_play else self.dialogue, 1300)}[kind]
                     self.current_operation = kind
                     try:
@@ -680,6 +683,9 @@ class QueueRunner(engine.CourseRunner):
     async def lab(self, item):
         await complete_lab(self.tab, item, self.course["url"],
                            verify_completion=self.verified_item, event=self.event)
+
+    async def plugin(self, item):
+        await complete_plugin(self, item)
 
     async def dialogue(self, item):
         await run_dialogue(self, item)

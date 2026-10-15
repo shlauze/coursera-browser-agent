@@ -99,7 +99,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         result = await adapter.discover_roster(tab, COURSE, 1)
         self.assertEqual(len(tab.expressions), 4)
         self.assertEqual([row["key"] for row in result], ["supplement:item0", "ungradedLti:item1", "peer:item2"])
-        self.assertEqual([row["unsupported"] for row in result], [False, True, True])
+        self.assertEqual([row["unsupported"] for row in result], [False, False, True])
         self.assertEqual(result[0]["status"], "completed")
 
     async def test_lab_and_dialogue_are_supported_and_keep_sidebar_keys(self):
