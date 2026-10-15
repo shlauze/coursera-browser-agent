@@ -29,11 +29,23 @@ ADVERSARIAL_INPUTS_FRAME = (
     "https://d10o6em2qtnr4q.cloudfront.net/assets/"
     "2077bfa697e84716acc84049bd4f57fe/index.html"
 )
+GENERATING_EXAMPLES_PATH = (
+    "/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa"
+    "/ungradedWidget/XMBvd/generating-adversarial-examples"
+)
+GENERATING_EXAMPLES_FRAME = (
+    "https://d10o6em2qtnr4q.cloudfront.net/assets/"
+    "315d813e2a05427384c8ae600781588d/index.html"
+)
+GENERATING_EXAMPLES_LESSON = "aRBP_qr0B-hKiamrci4zaK5L_QybF3T3"
 AUDITED_SCORM = {
     THREAT_MODEL_PATH: {"heading": "Threat model", "frame": THREAT_MODEL_FRAME,
                         "accordion": None},
     ADVERSARIAL_INPUTS_PATH: {"heading": "Adversarial inputs",
                               "frame": ADVERSARIAL_INPUTS_FRAME, "accordion": "Remarks"},
+    GENERATING_EXAMPLES_PATH: {"heading": "Generating adversarial examples",
+                               "frame": GENERATING_EXAMPLES_FRAME,
+                               "accordion": "Remarks", "continue": "DO IT YOURSELF EXERCISE EIGHT"},
 }
 
 
@@ -148,6 +160,110 @@ INNER_JS = r"""(request => {
 })"""
 
 
+EXERCISE_JS = r"""(request => {
+  const clean = value => (value || '').replace(/\s+/g, ' ').trim();
+  if (location.href !== request.frame)
+    return {error:'The audited SCORM exercise frame URL changed.'};
+  if (document.readyState !== 'complete')
+    return {pending:'SCORM exercise frame is loading.'};
+  const base = request.frame.replace(/index\.html$/, '');
+  const containers = [...document.querySelectorAll('iframe[title="container"]')];
+  if (containers.length === 0 && document.querySelectorAll('iframe').length === 0)
+    return {pending:'SCORM exercise container is being mounted.'};
+  if (containers.length !== 1 || document.querySelectorAll('iframe').length !== 1 ||
+      containers[0].src !== base + 'scorm-content/scormdriver/indexAPI.html')
+    return {error:'The audited SCORM exercise container changed.'};
+  if (!containers[0].contentDocument ||
+      containers[0].contentDocument.readyState !== 'complete')
+    return {pending:'SCORM exercise container is loading.'};
+  const driver = containers[0].contentDocument;
+  const frames = [...driver.querySelectorAll('iframe#content-frame')];
+  if (frames.length === 0 && driver.querySelectorAll('iframe').length === 0)
+    return {pending:'SCORM exercise content frame is being mounted.'};
+  if (frames.length !== 1 || clean(frames[0].title) !== request.heading)
+    return {error:'The audited SCORM exercise content frame changed.'};
+  if (!frames[0].contentDocument || frames[0].contentDocument.readyState !== 'complete' ||
+      /\/(?:blank|indexAPI)\.html$/.test(frames[0].contentDocument.URL))
+    return {pending:'SCORM exercise content is loading.'};
+  const page = frames[0].contentDocument;
+  if (page.URL !== base + 'scorm-content/scormcontent/index.html#/lessons/' + request.lesson ||
+      page.querySelectorAll('iframe').length)
+    return {error:'The SCORM exercise lesson identity changed.'};
+  const wraps = [...page.querySelectorAll('div.page-wrap')];
+  const text = wraps.length === 1 ? clean(wraps[0].innerText) : '';
+  const chromeText = clean(page.body?.innerText);
+  const progress = clean(page.querySelector('.nav-sidebar-header__progress-text')?.innerText);
+  if (wraps.length !== 1 || text.length < 6500 ||
+      !text.includes('fgsm_attack') || !text.includes('plt.plot(epsilons, accuracies') ||
+      !/\bLESSON 1 OF 1\b/i.test(chromeText) ||
+      !/^\d{1,3}% COMPLETE$/i.test(progress))
+    return {error:'The SCORM exercise is not the audited one-lesson reading.'};
+  const remarks = [...page.querySelectorAll('button.blocks-accordion__header')];
+  if (remarks.length !== 1 || clean(remarks[0].innerText) !== 'Remarks' ||
+      remarks[0].type !== 'button' || !remarks[0].closest('h2') ||
+      !['true','false'].includes(remarks[0].getAttribute('aria-expanded')))
+    return {error:'The audited Remarks explanation changed.'};
+  const panel = page.getElementById(remarks[0].getAttribute('aria-controls'));
+  if (!panel || !panel.matches('section.blocks-accordion__content') ||
+      clean(panel.innerText).length < 250 ||
+      panel.querySelector('button,[role="button"],input,textarea,select,form,[contenteditable="true"]'))
+    return {error:'Remarks is no longer a static explanation.'};
+  const continues = [...page.querySelectorAll('button[data-continue-btn]')];
+  const zooms = [...page.querySelectorAll('button[data-rmiz-btn-zoom]')];
+  const continued = /In this eighth do it yourself exercise/i.test(text) &&
+      /no solution to this exercise/i.test(text);
+  const stage = continued && continues.length === 0 && zooms.length === 0
+    ? 'continued' :
+    !continued && continues.length === 1 && zooms.length === 2 &&
+    clean(continues[0].innerText) === request.continue_label ? 'reading' : null;
+  if (!stage)
+    return {error:'The SCORM exercise page or continuation changed.'};
+  const allowed = new Set([
+    ...page.querySelectorAll('button.visually-hidden.btn-skip-to-lesson,' +
+      'button.nav-control__button,button.nav-sidebar-header__search-btn,' +
+      'button.nav-sidebar-search__close'), remarks[0], ...continues, ...zooms]);
+  const searchForms = [...page.querySelectorAll('form')];
+  if ([...page.querySelectorAll('button,[role="button"]')]
+        .filter(node => node.getClientRects().length).some(node => !allowed.has(node)) ||
+      page.querySelectorAll('input').length !== 1 ||
+      !page.querySelector('input[type="search"][disabled]') ||
+      searchForms.length !== 1 ||
+      !searchForms[0].matches('form.nav-sidebar-search--disabled') ||
+      searchForms[0].querySelectorAll('input').length !== 1 ||
+      page.querySelector('textarea,select,[contenteditable="true"]') ||
+      document.querySelector('button,input,textarea,select,form,[contenteditable="true"]') ||
+      driver.querySelector('button,input,textarea,select,form,[contenteditable="true"]'))
+    return {error:'The SCORM exercise contains an unhandled interactive control.'};
+  const wrap = wraps[0];
+  const max = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+  if (max < 1000)
+    return {error:'The SCORM exercise reading area changed.'};
+  let clicked = null;
+  if (request.action === 'expand') {
+    if (remarks[0].getAttribute('aria-expanded') === 'false') {
+      remarks[0].click();
+      clicked = 'Remarks';
+    }
+  } else if (request.action === 'scroll') {
+    if (remarks[0].getAttribute('aria-expanded') !== 'true')
+      return {error:'Remarks must be expanded before reading.'};
+    wrap.scrollTop = Math.min(max, wrap.scrollTop +
+      Math.max(300, Math.floor(wrap.clientHeight * 0.7)));
+  } else if (request.action === 'continue') {
+    if (stage !== 'reading' || remarks[0].getAttribute('aria-expanded') !== 'true' ||
+        wrap.scrollTop < max - 2)
+      return {error:'The exercise reading must finish before continuation.'};
+    continues[0].click();
+    clicked = request.continue_label;
+  } else if (request.action !== 'inspect') {
+    return {error:'Unsupported SCORM exercise action.'};
+  }
+  return {url:location.href, lesson:'LESSON 1 OF 1', progress, stage,
+    top:wrap.scrollTop, max, text_length:text.length,
+    accordion_expanded:remarks[0].getAttribute('aria-expanded') === 'true', clicked};
+})"""
+
+
 def _script(script, request):
     return script + "(" + json.dumps(request, ensure_ascii=False) + ")"
 
@@ -193,12 +309,117 @@ async def open_scorm_frame(owner, frame_url=THREAT_MODEL_FRAME):
     return frame
 
 
+async def _exercise_snapshot(frame, request, action):
+    from coursera_start import StopRun
+
+    for probe in range(40 if action == "inspect" else 1):
+        snapshot = await frame.evaluate(_script(EXERCISE_JS, {**request, "action": action}))
+        if isinstance(snapshot, dict) and snapshot.get("pending"):
+            if action != "inspect":
+                raise StopRun("The SCORM exercise changed while an action was attempted.")
+            await asyncio.sleep(0.5)
+            continue
+        return _checked(snapshot, frame_url=request["frame"])
+    raise StopRun("The SCORM exercise did not finish loading within 20 seconds.")
+
+
+async def _read_exercise_stage(frame, request, prior, stage):
+    """Scroll one stable reading screen to its end before advancing."""
+    from coursera_start import StopRun
+
+    if prior.get("stage") != stage or prior.get("accordion_expanded") is not True:
+        raise StopRun("The SCORM exercise reading stage changed before it was read.")
+    for _ in range(100):
+        if prior.get("top", -1) >= prior.get("max", 0) - 2:
+            return prior
+        current = await _exercise_snapshot(frame, request, "scroll")
+        if (current.get("stage") != stage or
+                current.get("max") != prior.get("max") or
+                current.get("text_length") != prior.get("text_length") or
+                current.get("top", 0) <= prior.get("top", -1) or
+                current.get("accordion_expanded") is not True):
+            raise StopRun("The SCORM exercise changed while its reading area was scrolled.")
+        prior = current
+        await asyncio.sleep(0.1)
+    raise StopRun("The SCORM exercise reading area did not reach its end.")
+
+
+async def complete_exercise_scorm(runner, item, path, heading):
+    """Finish the audited two-screen reading exercise and verify Coursera."""
+    from coursera_start import StopRun
+
+    if path != GENERATING_EXAMPLES_PATH or heading != "Generating adversarial examples":
+        raise StopRun("This SCORM exercise has not been audited.")
+    if await runner.verified_item(item):
+        return
+    request = {"path": path, "heading": heading, "frame": GENERATING_EXAMPLES_FRAME}
+    outer = _checked(await runner.tab.evaluate(_script(OUTER_JS, {
+        **request, "action": "inspect"})))
+    if (outer.get("ready") != "complete" or
+            outer.get("frame") != GENERATING_EXAMPLES_FRAME or
+            outer.get("mark_count") != 1 or outer.get("mark_disabled") or
+            outer.get("modal") or outer.get("other")):
+        raise StopRun("The SCORM exercise shell has no unique completion action.")
+    frame = await open_scorm_frame(runner.tab, GENERATING_EXAMPLES_FRAME)
+    try:
+        inner = {"frame": GENERATING_EXAMPLES_FRAME, "heading": heading,
+                 "lesson": GENERATING_EXAMPLES_LESSON,
+                 "continue_label": "DO IT YOURSELF EXERCISE EIGHT"}
+        prior = await _exercise_snapshot(frame, inner, "inspect")
+        if prior.get("accordion_expanded") is not True:
+            initial_length = prior.get("text_length")
+            opened = await _exercise_snapshot(frame, inner, "expand")
+            if opened.get("clicked") != "Remarks":
+                raise StopRun("The SCORM exercise Remarks explanation did not open.")
+            for _ in range(12):
+                await asyncio.sleep(0.25)
+                prior = await _exercise_snapshot(frame, inner, "inspect")
+                if (prior.get("accordion_expanded") is True and
+                        isinstance(initial_length, int) and
+                        prior.get("text_length", 0) > initial_length):
+                    break
+            else:
+                raise StopRun("SCORM exercise Remarks did not reveal its explanation.")
+        if prior.get("stage") == "reading":
+            prior = await _read_exercise_stage(frame, inner, prior, "reading")
+            clicked = await _exercise_snapshot(frame, inner, "continue")
+            if clicked.get("clicked") != inner["continue_label"]:
+                raise StopRun("The SCORM exercise continuation was not acknowledged.")
+            initial_length = prior.get("text_length")
+            for _ in range(20):
+                await asyncio.sleep(0.25)
+                prior = await _exercise_snapshot(frame, inner, "inspect")
+                if (prior.get("stage") == "continued" and
+                        isinstance(initial_length, int) and
+                        prior.get("text_length", 0) > initial_length):
+                    break
+            else:
+                raise StopRun("The SCORM exercise did not reveal its second reading screen.")
+        if prior.get("stage") != "continued":
+            raise StopRun("The SCORM exercise did not reach its final reading screen.")
+        prior = await _read_exercise_stage(frame, inner, prior, "continued")
+        if prior.get("top", -1) < prior.get("max", 0) - 2:
+            raise StopRun("The SCORM exercise final reading screen was not read to the end.")
+    finally:
+        await frame.close()
+    marked = _checked(await runner.tab.evaluate(_script(OUTER_JS, {
+        **request, "action": "mark", "inner_verified": True})))
+    if marked.get("clicked") != "mark":
+        raise StopRun("Coursera did not acknowledge the SCORM exercise Mark action.")
+    runner.event("scorm_exercise_mark_clicked", key=item["key"])
+    if not await runner.verified_item(item, wait=20):
+        raise StopRun("Coursera did not show a green completion mark for the SCORM exercise.")
+
+
 async def complete_static_scorm(runner, item, path, heading):
     """Read the static lesson, then require Coursera's own green mark."""
     from coursera_start import StopRun
 
     if not is_static_scorm(path, heading):
         raise StopRun("This SCORM widget has not been audited as a static lesson.")
+    if path == GENERATING_EXAMPLES_PATH:
+        await complete_exercise_scorm(runner, item, path, heading)
+        return
     spec = AUDITED_SCORM[path]
     frame_url = spec["frame"]
     if await runner.verified_item(item):

@@ -20,6 +20,9 @@ ITEM = {"key": "ungradedWidget:3z0Im", "title": "Threat model Ungraded Plugin â€
 REMARKS_ITEM = {"key": "ungradedWidget:2sbQI",
                 "title": "Adversarial inputs Ungraded Plugin \uFFFD 25 min Resume",
                 "url": "https://www.coursera.org" + flow.ADVERSARIAL_INPUTS_PATH}
+EXERCISE_ITEM = {"key": "ungradedWidget:XMBvd",
+                 "title": "Generating adversarial examples Ungraded Plugin â€¢ 30 min Resume",
+                 "url": "https://www.coursera.org" + flow.GENERATING_EXAMPLES_PATH}
 
 
 class OuterTab:
@@ -79,6 +82,43 @@ class RemarksTab(InnerTab):
                 "clicked": "Remarks" if action == "expand" else None}
 
 
+class ExerciseTab(InnerTab):
+    def __init__(self, *, interactive=False, altered=False):
+        super().__init__()
+        self.stage = "reading"
+        self.expanded = False
+        self.interactive = interactive
+        self.altered = altered
+        self.actions = []
+
+    async def evaluate(self, expression):
+        action = ("expand" if '"action": "expand"' in expression else
+                  "continue" if '"action": "continue"' in expression else
+                  "scroll" if '"action": "scroll"' in expression else "inspect")
+        self.actions.append(action)
+        if self.interactive:
+            return {"error": "The SCORM exercise contains an unhandled interactive control."}
+        if action == "expand":
+            self.expanded = True
+        elif action == "scroll":
+            self.top = min(8200 if self.stage == "continued" else 8000,
+                           self.top + 700)
+        elif action == "continue":
+            if self.top != 8000:
+                return {"error": "The exercise reading must finish before continuation."}
+            self.stage = "continued"
+            self.top = 0
+        return {"url": flow.GENERATING_EXAMPLES_FRAME,
+                "lesson": "LESSON 1 OF 1", "stage": self.stage,
+                "text_length": (7455 if self.stage == "continued" else
+                                7233 if self.expanded else 6880) +
+                               int(self.altered and action == "scroll"),
+                "top": self.top, "max": 8200 if self.stage == "continued" else 8000,
+                "progress": "0% COMPLETE", "accordion_expanded": self.expanded,
+                "clicked": ("Remarks" if action == "expand" else
+                            "DO IT YOURSELF EXERCISE EIGHT" if action == "continue" else None)}
+
+
 class Runner:
     def __init__(self, tab):
         self.tab = tab
@@ -97,6 +137,8 @@ class StaticScormTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(flow.is_static_scorm(flow.THREAT_MODEL_PATH, "Threat model"))
         self.assertTrue(flow.is_static_scorm(flow.ADVERSARIAL_INPUTS_PATH,
                                              "Adversarial inputs"))
+        self.assertTrue(flow.is_static_scorm(flow.GENERATING_EXAMPLES_PATH,
+                                             "Generating adversarial examples"))
         self.assertFalse(flow.is_static_scorm(flow.THREAT_MODEL_PATH, "Harmful outputs"))
         self.assertFalse(flow.is_static_scorm(
             flow.ADVERSARIAL_INPUTS_PATH.replace("2sbQI", "other"), "Adversarial inputs"))
@@ -104,6 +146,8 @@ class StaticScormTests(unittest.IsolatedAsyncioTestCase):
                                              "Threat model"))
         self.assertEqual(plugins.plugin_path(ITEM, COURSE), flow.THREAT_MODEL_PATH)
         self.assertEqual(plugins.plugin_path(REMARKS_ITEM, COURSE), flow.ADVERSARIAL_INPUTS_PATH)
+        self.assertEqual(plugins.plugin_path(EXERCISE_ITEM, COURSE),
+                         flow.GENERATING_EXAMPLES_PATH)
 
     async def test_iframe_connection_requires_exact_parent_and_asset(self):
         class Owner:
@@ -170,6 +214,38 @@ class StaticScormTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)):
             with self.assertRaisesRegex(engine.StopRun, "interactive activity"):
                 await plugins.complete_plugin(Runner(tab), REMARKS_ITEM)
+        self.assertTrue(frame.closed)
+        self.assertFalse(tab.marked)
+
+    async def test_scorm_exercise_reads_both_screens_before_mark(self):
+        tab = OuterTab(frame=flow.GENERATING_EXAMPLES_FRAME)
+        frame = ExerciseTab()
+        with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)), \
+             patch.object(flow.asyncio, "sleep", new=AsyncMock()):
+            await plugins.complete_plugin(Runner(tab), EXERCISE_ITEM)
+        self.assertEqual(frame.actions[:3], ["inspect", "expand", "inspect"])
+        self.assertIn("continue", frame.actions)
+        self.assertEqual(frame.stage, "continued")
+        self.assertEqual(frame.top, 8200)
+        self.assertTrue(frame.closed)
+        self.assertTrue(tab.marked)
+
+    async def test_scorm_exercise_unknown_control_stops_before_mark(self):
+        tab = OuterTab(frame=flow.GENERATING_EXAMPLES_FRAME)
+        frame = ExerciseTab(interactive=True)
+        with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)):
+            with self.assertRaisesRegex(engine.StopRun, "interactive control"):
+                await plugins.complete_plugin(Runner(tab), EXERCISE_ITEM)
+        self.assertTrue(frame.closed)
+        self.assertFalse(tab.marked)
+
+    async def test_scorm_exercise_changed_reading_stops_before_mark(self):
+        tab = OuterTab(frame=flow.GENERATING_EXAMPLES_FRAME)
+        frame = ExerciseTab(altered=True)
+        with patch.object(flow, "open_scorm_frame", new=AsyncMock(return_value=frame)), \
+             patch.object(flow.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "changed while"):
+                await plugins.complete_plugin(Runner(tab), EXERCISE_ITEM)
         self.assertTrue(frame.closed)
         self.assertFalse(tab.marked)
 
