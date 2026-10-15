@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
@@ -158,6 +159,22 @@ class RolePlayValidationTests(unittest.TestCase):
     def test_affirmative_feedback_is_distinct_from_empty_task_feedback(self):
         self.assertTrue(role_play._review_feedback(FIXTURE["successful_feedback"], 5))
         self.assertFalse(role_play._review_feedback(FIXTURE["premature_feedback"], 5))
+
+    def test_live_grounded_reply_feedback_verifies_every_task(self):
+        feedback = (
+            "Task 1: Present evidence objectively You maintained a high level of objectivity "
+            "by focusing on the data rather than jumping to conclusions. You correctly noted "
+            "that an accuracy decline alone is not evidence of poisoning. "
+            "Task 2: Acknowledge alternative explanations You demonstrated a balanced "
+            "perspective by considering multiple technical factors including drift and decay. "
+            "Task 3: Recommend investigation steps Your proposed investigation was logical "
+            "and well-sequenced. You outlined a clear path for review and retraining. "
+            "Task 4: Address insider threat sensitivity You handled the potential human "
+            "element with appropriate professional gravity and confidentiality. "
+            "Task 5: Request appropriate resources You justified your resource needs by "
+            "linking them directly to the investigation's requirements."
+        )
+        self.assertTrue(role_play._review_feedback(feedback, 5))
 
     def test_reply_request_contains_rubric_and_current_prompt(self):
         state = RolePlayTab().state()
@@ -343,14 +360,25 @@ class RolePlayDraftValidationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(engine, "request_groq_answers", AsyncMock(return_value=response)):
             return await role_play._draft_reply(runner, ITEM, runner.tab.state(), 1)
 
-    async def test_rejects_unsupported_measurements_and_dates(self):
+    def _assert_grounded_fallback(self, reply):
+        self.assertIsInstance(reply, str)
+        self.assertGreaterEqual(len(reply), 80)
+        self.assertLessEqual(len(reply), 2400)
+        self.assertIsNone(re.search(r"\d", reply))
+        self.assertRegex(reply.lower(), r"(?:drift|decay)")
+        self.assertRegex(reply.lower(), r"(?:audit|provenance|logs)")
+        self.assertRegex(reply.lower(), r"(?:resource|support|security team)")
+        self.assertNotRegex(reply.lower(),
+                            r"(?:based on (?:the|our) (?:logs|data)|"
+                            r"(?:i|we) (?:reviewed|checked|found|confirmed|ran|interviewed))")
+
+    async def test_unsupported_measurements_use_grounded_fallback(self):
         reply = ("Accuracy fell from 94% to 71% on October 12, and exactly 47 records were "
                  "poisoned. These measurements prove the attack, so I recommend escalating "
                  "the case immediately to the security team.")
-        with self.assertRaises(engine.StopRun):
-            await self._draft(reply)
+        self._assert_grounded_fallback(await self._draft(reply))
 
-    async def test_rejects_claimed_log_review_and_confirmed_analysis(self):
+    async def test_claimed_log_review_uses_grounded_fallback(self):
         for reply in (
             "Based on the logs we've examined, the suspicious employee altered records. "
             "Our review establishes deliberate poisoning, so we should open a formal case.",
@@ -359,8 +387,41 @@ class RolePlayDraftValidationTests(unittest.IsolatedAsyncioTestCase):
             "Manual static analysis confirms that a colleague changed the training set. "
             "We can now treat the performance drop as a deliberate insider attack.",
         ):
-            with self.subTest(reply=reply[:35]), self.assertRaises(engine.StopRun):
-                await self._draft(reply)
+            with self.subTest(reply=reply[:35]):
+                self._assert_grounded_fallback(await self._draft(reply))
+
+    async def test_fallback_is_deterministic_and_uses_only_visible_scenario(self):
+        state = RolePlayTab().state()
+        state["scenario"] = ("The malware detector's accuracy declined. The cause is unknown; "
+                             "data poisoning is only a hypothesis.")
+        state["goal"] = "Discuss evidence, alternatives, investigation, sensitivity, and support."
+        first = role_play._grounded_fallback(ITEM, state)
+        second = role_play._grounded_fallback(ITEM, state)
+        self.assertEqual(first, second)
+        self._assert_grounded_fallback(first)
+        self.assertNotIn("poisoning is confirmed", first.lower())
+        self.assertNotIn("colleague changed", first.lower())
+
+    async def test_three_rejected_drafts_fall_back_without_a_fourth_groq_request(self):
+        fabricated = ("We checked the audit logs and confirmed 47 poisoned records on October 12. "
+                      "The insider is responsible for the measured decline in model accuracy.")
+        response = {"message": {"content": json.dumps({"reply": fabricated})}}
+        runner = RolePlayRunner(RolePlayTab())
+        with patch.object(engine, "request_groq_answers", AsyncMock(return_value=response)) as groq:
+            answer = await role_play._draft_reply(runner, ITEM, runner.tab.state(), 1)
+        self.assertEqual(groq.await_count, 3)
+        self._assert_grounded_fallback(answer)
+
+    async def test_unrecognized_role_play_does_not_reuse_insider_threat_fallback(self):
+        state = RolePlayTab().state()
+        other = {**ITEM, "title": "Unrelated Role Play"}
+        self.assertIsNone(role_play._grounded_fallback(other, state))
+        fabricated = "We reviewed 47 records and confirmed the cause of this unrelated case."
+        response = {"message": {"content": json.dumps({"reply": fabricated})}}
+        runner = RolePlayRunner(RolePlayTab())
+        with patch.object(engine, "request_groq_answers", AsyncMock(return_value=response)):
+            with self.assertRaises(engine.StopRun):
+                await role_play._draft_reply(runner, other, state, 1)
 
     async def test_accepts_conditional_investigation_plan(self):
         reply = ("I would compare performance by cohort against an earlier baseline and request "
