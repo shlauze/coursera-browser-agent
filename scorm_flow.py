@@ -1313,32 +1313,42 @@ def _checked(snapshot, *, frame_url=None):
     return snapshot
 
 
-async def open_scorm_frame(owner, frame_url=THREAT_MODEL_FRAME):
-    """Connect to the exact OOPIF child of the current lesson without activation."""
+async def open_scorm_frame(owner, frame_url=THREAT_MODEL_FRAME, *, probes=40, delay=.25):
+    """Wait briefly for the exact OOPIF child of this lesson, without activation."""
     from coursera_start import CDP_URL, ChromeTab, StopRun, local_json
 
     source = urlsplit(getattr(owner, "address", ""))
     source_id = source.path.rsplit("/", 1)[-1]
     if source.scheme != "ws" or not source.path.startswith("/devtools/page/") or not source_id:
         raise StopRun("The Coursera lesson Chrome target cannot be identified.")
-    targets = (await owner.call("Target.getTargets")).get("targetInfos", [])
-    matches = [target for target in targets if isinstance(target, dict) and
-               target.get("type") == "iframe" and target.get("parentId") == source_id and
-               target.get("url") == frame_url and
-               isinstance(target.get("targetId"), str)]
-    if len(matches) != 1:
-        raise StopRun("The unique audited SCORM iframe target was not found.")
-    pages = await asyncio.to_thread(local_json, CDP_URL + "/json/list")
-    target_id = matches[0]["targetId"]
-    sockets = [page.get("webSocketDebuggerUrl") for page in pages
-               if isinstance(page, dict) and page.get("id") == target_id and
-               page.get("type") == "iframe" and page.get("url") == frame_url and
-               isinstance(page.get("webSocketDebuggerUrl"), str)]
-    if len(sockets) != 1:
-        raise StopRun("The audited SCORM iframe has no unique debugging endpoint.")
-    frame = ChromeTab(sockets[0])
-    await frame.connect()
-    return frame
+    # Coursera inserts the iframe element before Chrome exposes its OOPIF
+    # target (and sometimes before /json/list exposes the target socket).
+    # Keep the exact parent/asset identity and bound the wait; never attach to
+    # another tab's matching asset or choose among ambiguous matches.
+    for attempt in range(probes):
+        targets = (await owner.call("Target.getTargets")).get("targetInfos", [])
+        matches = [target for target in targets if isinstance(target, dict) and
+                   target.get("type") == "iframe" and target.get("parentId") == source_id and
+                   target.get("url") == frame_url and
+                   isinstance(target.get("targetId"), str)]
+        if len(matches) > 1:
+            raise StopRun("The unique audited SCORM iframe target was not found.")
+        if len(matches) == 1:
+            pages = await asyncio.to_thread(local_json, CDP_URL + "/json/list")
+            target_id = matches[0]["targetId"]
+            sockets = [page.get("webSocketDebuggerUrl") for page in pages
+                       if isinstance(page, dict) and page.get("id") == target_id and
+                       page.get("type") == "iframe" and page.get("url") == frame_url and
+                       isinstance(page.get("webSocketDebuggerUrl"), str)]
+            if len(sockets) > 1:
+                raise StopRun("The audited SCORM iframe has no unique debugging endpoint.")
+            if len(sockets) == 1:
+                frame = ChromeTab(sockets[0])
+                await frame.connect()
+                return frame
+        if attempt + 1 < probes:
+            await asyncio.sleep(delay)
+    raise StopRun("The unique audited SCORM iframe target was not found within the probe limit.")
 
 
 async def _exercise_snapshot(frame, request, action, *, script=EXERCISE_JS):

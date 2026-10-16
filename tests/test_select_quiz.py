@@ -106,6 +106,8 @@ async function main(){
     option_text:'Counterfactual',expected_options:['Changed','Counterfactual','Influential Instances']});
   const set=await run({...base,action:'set_answers',snapshot_id:optionsRead.snapshot_id,
     selected:[],numeric:{},select:{c0:{id:'c0:o1',text:'Counterfactual',options:optionLabels}}});
+  if(payload.attestationBeforeOption)
+    body.innerText='By clicking Submit, you confirm this work is your own.';
   const optionLocator=await run({...base,action:'locate_select_option',
     snapshot_id:optionsRead.snapshot_id,control_id:'c0',option_id:'c0:o1',
     option_text:'Counterfactual',expected_options:optionLabels});
@@ -154,6 +156,17 @@ main().catch(error=>{console.error(error);process.exit(1)});
 
 
 class SelectQuizTests(unittest.TestCase):
+    def test_late_authorship_hydration_blocks_option_click(self):
+        result=subprocess.run(["node","-e",SELECT_DOM],
+                              input=json.dumps({"code":engine.QUIZ_UI_JS,
+                                                "attestationBeforeOption":True}),
+                              capture_output=True,text=True,encoding="utf-8")
+        self.assertEqual(result.returncode,0,result.stderr[-2000:])
+        view=json.loads(result.stdout)
+        self.assertTrue(view["set"]["verified"])
+        self.assertIn("authorship",view["optionAction"]["error"])
+        self.assertNotIn("option:1",view["clicks"])
+
     def test_only_exact_frozen_empty_modal_transition_is_finished(self):
         result=subprocess.run(["node","-e",FROZEN_MODAL_DOM],
                               input=json.dumps({"code":engine.QUIZ_UI_JS}),

@@ -562,10 +562,55 @@ class StaticScormTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(engine, "local_json", return_value=pages), \
              patch.object(engine, "ChromeTab", return_value=socket):
             with self.assertRaisesRegex(engine.StopRun, "unique audited SCORM iframe"):
-                await flow.open_scorm_frame(Owner("ANOTHER_TAB"))
+                await flow.open_scorm_frame(Owner("ANOTHER_TAB"), probes=1)
             result = await flow.open_scorm_frame(Owner("EXPECTED"))
         self.assertIs(result, socket)
         self.assertTrue(socket.connected)
+
+    async def test_iframe_connection_waits_for_exact_target_and_socket(self):
+        class Owner:
+            address = "ws://127.0.0.1:9223/devtools/page/EXPECTED"
+            calls = 0
+
+            async def call(self, method):
+                self.calls += 1
+                if self.calls == 1:
+                    return {"targetInfos": []}
+                return {"targetInfos": [{"type": "iframe", "parentId": "EXPECTED",
+                         "targetId": "FRAME", "url": flow.THREAT_MODEL_FRAME}]}
+
+        class FrameSocket:
+            connected = False
+
+            async def connect(self):
+                self.connected = True
+
+        owner, socket = Owner(), FrameSocket()
+        pages = [[], [{"type": "iframe", "id": "FRAME",
+                       "url": flow.THREAT_MODEL_FRAME,
+                       "webSocketDebuggerUrl": "ws://127.0.0.1:9223/devtools/page/FRAME"}]]
+        with patch.object(engine, "local_json", side_effect=pages), \
+             patch.object(engine, "ChromeTab", return_value=socket), \
+             patch.object(flow.asyncio, "sleep", new=AsyncMock()) as sleep:
+            result = await flow.open_scorm_frame(owner, probes=4)
+        self.assertIs(result, socket)
+        self.assertTrue(socket.connected)
+        self.assertEqual(owner.calls, 3)
+        self.assertEqual(sleep.await_count, 2)
+
+    async def test_iframe_connection_rejects_ambiguous_exact_targets(self):
+        class Owner:
+            address = "ws://127.0.0.1:9223/devtools/page/EXPECTED"
+
+            async def call(self, method):
+                return {"targetInfos": [{"type": "iframe", "parentId": "EXPECTED",
+                         "targetId": target, "url": flow.THREAT_MODEL_FRAME}
+                        for target in ("FRAME_1", "FRAME_2")]}
+
+        with patch.object(engine, "local_json") as pages:
+            with self.assertRaisesRegex(engine.StopRun, "unique audited SCORM iframe"):
+                await flow.open_scorm_frame(Owner(), probes=4)
+        pages.assert_not_called()
 
     async def test_plugin_routing_reads_static_widget_before_mark(self):
         tab, frame = OuterTab(), InnerTab()

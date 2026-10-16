@@ -394,7 +394,7 @@ class NumericWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(engine.StopRun, "changed before submission"):
                     await runner.quiz({"key": KEY})
         self.assertEqual([call["action"] for call in calls],
-                         ["inspect", "set_answers", "inspect"])
+                         ["inspect", "inspect", "set_answers", "inspect"])
 
 
 class NumericHistoryTests(unittest.TestCase):

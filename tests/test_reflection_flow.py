@@ -41,7 +41,8 @@ const text=(id,value,parent,shown=true)=>({id,value,parentElement:parent,readOnl
   disabled:false,maxLength:10000,labels:[],placeholder:'What do you think?',
   getClientRects:()=>shown?rect():[],getAttribute:key=>key==='aria-labelledby'?'prompt':null,
   closest:()=>null});
-const body={innerText:payload.title+' Practice Assignment '+payload.question+' Ready to submit? Submit Cancel',
+const body={innerText:payload.title+' Practice Assignment '+payload.question+' '+
+  (payload.attestation||'')+' Ready to submit? Submit Cancel',
   parentElement:null,getAttribute:()=>null};
 const hidden={parentElement:body,getAttribute:key=>key==='aria-hidden'?'true':null};
 const answer=text('text-area-autoGradableResponseId~test',payload.answer,body);
@@ -75,8 +76,11 @@ const context={document,location:new URL(payload.url+'/attempt'),URL,getComputed
 const fn=vm.runInNewContext(payload.code,context);
 const common={url:payload.url,title:payload.title,authorized_notice:''};
 const before=fn({...common,action:'inspect'});
-const result=fn({...common,action:'confirm_submit',snapshot_id:before.snapshot_id,
-  expected_confirmation:before.confirmation,answers:[{id:'t0',reply:payload.answer}]});
+const result=payload.action==='fill'
+  ? fn({...common,action:'fill',snapshot_id:before.snapshot_id,
+      answers:[{id:'t0',reply:payload.reply}]})
+  : fn({...common,action:'confirm_submit',snapshot_id:before.snapshot_id,
+      expected_confirmation:before.confirmation,answers:[{id:'t0',reply:payload.answer}]});
 process.stdout.write(JSON.stringify({before,result,clicks}));
 """
 
@@ -86,7 +90,7 @@ class ReflectionTab:
                  ambiguous_entry=False, pending=False, entry_delay=0,
                  recover_confirmation=False, incomplete_recovery=False,
                  processing_confirmation=False, result_delay=0, form_delay=0,
-                 offscreen=False, submit_error=False, confirm_error=False,
+                 offscreen=False, submit_error=False, confirm_error=False, authorship=False,
                  submit_transport_error=False):
         self.started = recover_confirmation
         self.confirmation = confirmation or recover_confirmation
@@ -101,6 +105,7 @@ class ReflectionTab:
         self.offscreen = offscreen
         self.submit_error = submit_error
         self.confirm_error = confirm_error
+        self.authorship = authorship
         self.submit_transport_error = submit_transport_error
         self.values = ([ANSWERS[0], "" if incomplete_recovery else ANSWERS[1]]
                        if recover_confirmation else
@@ -124,6 +129,10 @@ class ReflectionTab:
                 "offscreen_draft": self.offscreen and any(self.values),
                 "unsupported": [{"type": "radio", "label": "Other"}] if self.mixed and attempt else [],
                 "notice_count": 0, "notice_checked": None,
+                "manual_submission_required": self.authorship,
+                "authorship_statement": (
+                    "By clicking Submit, you confirm this work is your own."
+                    if self.authorship else None),
                 "entry_labels": (["Start assignment", "Resume assignment"]
                                  if self.ambiguous_entry else
                                  ([] if self.entry_delay else ["Start assignment"])) if not attempt else [],
@@ -234,6 +243,37 @@ class ReflectionValidationTests(unittest.TestCase):
         self.assertEqual(state["result"].get("clicked"), "Confirm Submit")
         self.assertEqual(state["clicks"], ["Submit"])
 
+    def test_authorship_statement_blocks_recovered_confirmation(self):
+        payload = {"code": reflection.REFLECTION_JS, "url": ITEM["url"],
+                   "title": "Interests and Aspirations in XAI (Optional)",
+                   "question": QUESTIONS[0], "answer": ANSWERS[0],
+                   "attestation": "By clicking Submit, you confirm this work is your own. "
+                                  "Submitting work created with AI tools may result in course failure."}
+        result = subprocess.run(["node", "-e", NODE_CONFIRM_DOM],
+                                input=json.dumps(payload), text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = json.loads(result.stdout)
+        self.assertTrue(state["before"]["manual_submission_required"])
+        self.assertIn("work is your own", state["before"]["authorship_statement"])
+        self.assertIn("authorship", state["result"]["error"])
+        self.assertEqual(state["clicks"], [])
+
+    def test_authorship_statement_blocks_fill_action(self):
+        payload = {"code": reflection.REFLECTION_JS, "url": ITEM["url"],
+                   "title": "Interests and Aspirations in XAI (Optional)",
+                   "question": QUESTIONS[0], "answer": "", "action": "fill",
+                   "reply": ANSWERS[0],
+                   "attestation": "By clicking Submit, you confirm this work is your own."}
+        result = subprocess.run(["node", "-e", NODE_CONFIRM_DOM],
+                                input=json.dumps(payload), text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = json.loads(result.stdout)
+        self.assertIn("authorship", state["result"]["error"])
+        self.assertEqual(state["before"]["fields"][0]["value"], "")
+        self.assertEqual(state["clicks"], [])
+
     def test_processing_confirmation_without_buttons_is_not_clicked(self):
         payload = {"code": reflection.REFLECTION_JS, "url": ITEM["url"],
                    "title": "Interests and Aspirations in XAI (Optional)",
@@ -299,6 +339,36 @@ class ReflectionFlowTests(unittest.IsolatedAsyncioTestCase):
              patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
             result = await reflection.maybe_complete_reflection(runner, ITEM)
         return result, runner, model
+
+    async def test_authorship_attestation_stops_before_model_or_submit(self):
+        tab = ReflectionTab(authorship=True)
+        runner = ReflectionRunner(tab)
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=model_answers) as model, \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "own work"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
+        model.assert_not_awaited()
+        self.assertNotIn("fill", tab.actions)
+        self.assertNotIn("submit", tab.actions)
+        self.assertNotIn("confirm_submit", tab.actions)
+
+    async def test_late_authorship_hydration_stops_before_fill(self):
+        tab = ReflectionTab()
+        runner = ReflectionRunner(tab)
+
+        async def hydrate_after_model(*args, **kwargs):
+            tab.authorship = True
+            return await model_answers(*args, **kwargs)
+
+        with patch.object(engine, "COURSE_SLUG", "explainable-machine-learning-xai"), \
+             patch.object(engine, "request_groq_answers", side_effect=hydrate_after_model) as model, \
+             patch.object(reflection.asyncio, "sleep", new=AsyncMock()):
+            with self.assertRaisesRegex(engine.StopRun, "own work"):
+                await reflection.maybe_complete_reflection(runner, ITEM)
+        model.assert_awaited_once()
+        self.assertNotIn("fill", tab.actions)
+        self.assertNotIn("submit", tab.actions)
 
     async def test_text_only_optional_practice_submits_once_and_requires_green_mark(self):
         tab = ReflectionTab()

@@ -122,6 +122,24 @@ class CapturedDialogTests(unittest.TestCase):
             self.assertIn('error', output['result'])
             self.assertEqual(output['clicks'], [])
 
+    def test_checked_name_does_not_allow_submit_with_own_work_statement(self):
+        form = copy.deepcopy(FORM)
+        for control in form['controls']:
+            if control['kind'] == 'notice':
+                control['selected'] = True
+        for action in form['observed_controls']:
+            if action['label'] == 'Submit':
+                action['disabled'] = False
+        observed = javascript({'ui':form})[0]['result']
+        self.assertTrue(observed['manual_submission_required'])
+        request = {'key':'assignment:oVRfd','action':'button','label':'Submit',
+                   'authorized_notice':course.AUTHORIZED_QUIZ_NOTICE,
+                   'authorized_notice_confirmed':True,
+                   'snapshot_id':observed['snapshot_id']}
+        attempt = javascript({'ui':form,'request':request})[0]
+        self.assertIn('authorship', attempt['result']['error'])
+        self.assertEqual(attempt['clicks'], [])
+
 
 class WorkflowTransitionTests(unittest.IsolatedAsyncioTestCase):
     async def test_written_reflection_pauses_before_model_or_browser_action(self):
@@ -166,6 +184,10 @@ class WorkflowTransitionTests(unittest.IsolatedAsyncioTestCase):
         pending,result = [output['result'] for output in javascript({'ui':PENDING},{'ui':RESULT})]
         selected = [c['id'] for c in FORM['controls'] if c['kind']=='answer' and c['selected']]
         form = copy.deepcopy(FORM)
+        # This test covers delayed processing for a routine notice. The
+        # captured source also has an own-work attestation, tested separately.
+        form['authorship_statement'] = None
+        form['manual_submission_required'] = False
         for control in form['controls']:
             if control['kind']=='notice':
                 control['selected']=True

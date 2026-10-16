@@ -37,6 +37,8 @@ LESSON_URL = FRAME.replace("index.html", "") + (
 
 def action(expression):
     for name in ("inspect", "expand", "flip", "carousel_dot",
+                 "process_carousel_dot", "tab_select",
+                 "checklist_check",
                  "hotspot_open", "hotspot_close", "scroll", "continue", "mark"):
         if '"action": "' + name + '"' in expression:
             return name
@@ -141,9 +143,13 @@ class InnerTab:
             "continue_count": int(self.stages[self.stage]["continue"]),
             "carousel_count": 0, "carousel_active_index": 0,
             "carousel_contents": [], "carousel_signature": "[]",
+            "tab_count": 0, "tab_active_index": 0,
+            "tabs": [], "tab_signature": "[]",
             "hotspot_count": 0, "hotspot_markers": [],
             "hotspot_signature": "[]", "hotspot_viewed_count": 0,
             "hotspot_open_index": 0,
+            "checklist_count": 0, "checklist_checked_count": 0,
+            "checklist": [], "checklist_signature": "[]",
             "clicked": operation if operation != "inspect" else None,
         }
 
@@ -188,6 +194,46 @@ class CarouselInnerTab(InnerTab):
         return snapshot
 
 
+class StaticTabsInnerTab(InnerTab):
+    TABS = [
+        {"label": "GENDER CLASSIFICATION SYSTEMS",
+         "content": "Several sensitive AI applications are riddled with examples of biased behaviour. " * 2},
+        {"label": "RECIDIVISM PREDICTION TOOL",
+         "content": "Fairness bias in AI models stems from biased training data and design. " * 2},
+    ]
+
+    def __init__(self, *, active=1, stuck=False):
+        super().__init__([{
+            "accordions": 0, "cards": 0, "max": 0, "continue": False,
+        }])
+        self.active = active
+        self.visited = {active}
+        self.stuck = stuck
+        self.tab_clicks = []
+
+    async def evaluate(self, expression):
+        if action(expression) == "tab_select":
+            request = json.loads(expression[len(flow.INNER_JS) + 1:-1])
+            assert request["tab_signature"] == json.dumps([
+                [entry["label"], entry["content"]] for entry in self.TABS
+            ])
+            index = request["tab_index"]
+            self.tab_clicks.append(index)
+            if not self.stuck:
+                self.active = index
+                self.visited.add(index)
+        snapshot = await super().evaluate(expression)
+        snapshot.update({
+            "tab_count": 2,
+            "tab_active_index": self.active,
+            "tabs": self.TABS,
+            "tab_signature": json.dumps([
+                [entry["label"], entry["content"]] for entry in self.TABS
+            ]),
+        })
+        return snapshot
+
+
 class HotspotInnerTab(InnerTab):
     LABELS = [
         "Marker, Blue team (defensive AI), Right arrow",
@@ -199,24 +245,38 @@ class HotspotInnerTab(InnerTab):
         for label in LABELS
     ]
 
-    def __init__(self, *, viewed=False, stuck=None):
+    def __init__(self, *, viewed=False, stuck=None, plus=False,
+                 viewed_on_close=False):
         super().__init__([{
             "accordions": 4, "cards": 0, "max": 600, "continue": False,
         }])
-        self.viewed = {1, 2, 3} if viewed else set()
+        self.viewed = set(range(1, len(self.LABELS) + 1)) if viewed else set()
         self.open_index = 0
         self.stuck = stuck
+        self.plus = plus
+        self.viewed_on_close = viewed_on_close
         self.hotspot_clicks = []
-        self.signature = json.dumps([
+
+    def current_labels(self):
+        if not self.plus:
+            return self.LABELS
+        return [
+            "Marker, " + label.split(", ")[1] +
+            (", Minus" if index == self.open_index else ", Plus")
+            for index, label in enumerate(self.LABELS, start=1)
+        ]
+
+    def current_signature(self):
+        return json.dumps([
             [f"bubble-{index}", label, content]
             for index, (label, content) in enumerate(
-                zip(self.LABELS, self.CONTENTS), start=1)
+                zip(self.current_labels(), self.CONTENTS), start=1)
         ])
 
     async def evaluate(self, expression):
         operation = action(expression)
         if operation not in ("inspect", "hotspot_open", "hotspot_close"):
-            assert self.viewed == {1, 2, 3} and self.open_index == 0, (
+            assert self.viewed == set(range(1, len(self.LABELS) + 1)) and self.open_index == 0, (
                 "Reading controls were used before all graphic markers were closed"
             )
         if operation in ("hotspot_open", "hotspot_close"):
@@ -224,33 +284,53 @@ class HotspotInnerTab(InnerTab):
             assert match, "hotspot action must identify an audited marker"
             index = int(match[1])
             request = json.loads(expression[len(flow.INNER_JS) + 1:-1])
-            assert request["hotspot_signature"] == self.signature, (
+            assert request["hotspot_signature"] == self.current_signature(), (
                 "static marker identity must be sent"
             )
             self.hotspot_clicks.append((operation, index))
             if self.stuck != operation:
                 if operation == "hotspot_open":
                     assert not self.open_index and index not in self.viewed
-                    self.viewed.add(index)
+                    if not self.viewed_on_close:
+                        self.viewed.add(index)
                     self.open_index = index
                 else:
                     assert self.open_index == index
+                    if self.viewed_on_close:
+                        self.viewed.add(index)
                     self.open_index = 0
         snapshot = await super().evaluate(expression)
         snapshot.update({
-            "hotspot_count": 3,
+            "hotspot_count": len(self.LABELS),
             "hotspot_markers": [
                 {"id": f"bubble-{index}", "label": label,
                  "content": content, "viewed": index in self.viewed,
                  "expanded": index == self.open_index}
                 for index, (label, content) in enumerate(
-                    zip(self.LABELS, self.CONTENTS), start=1)
+                    zip(self.current_labels(), self.CONTENTS), start=1)
             ],
-            "hotspot_signature": self.signature,
+            "hotspot_signature": self.current_signature(),
             "hotspot_viewed_count": len(self.viewed),
             "hotspot_open_index": self.open_index,
         })
         return snapshot
+
+
+class ResponsibleHotspotInnerTab(HotspotInnerTab):
+    NAMES = ["Fairness", "Reliability & Safety", "Privacy & Security",
+             "Inclusiveness", "Transparency & explainability", "Accountability",
+             "Gender", "Religion", "Medical history", "Race", "National origin",
+             "Marital status", "Age", "Disability"]
+    LABELS = [f"Marker, {name}, Plus" for name in NAMES]
+    CONTENTS = [
+        f"{name} describes a responsible AI principle in enough detail " * 3
+        if index < 6 else name
+        for index, name in enumerate(NAMES)
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.viewed = set(range(1, 7))
 
 
 class Runner:
@@ -331,6 +411,23 @@ class RiseFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(runner.tab.marked)
         self.assertTrue(inner.closed)
 
+    async def test_static_tabs_read_before_mark(self):
+        for active in (1, 2):
+            with self.subTest(active=active):
+                inner = StaticTabsInnerTab(active=active)
+                runner = await self.run_flow(inner)
+                self.assertEqual(inner.visited, {1, 2})
+                self.assertEqual(inner.tab_clicks, [3 - active])
+                self.assertTrue(runner.tab.marked)
+
+    async def test_static_tab_that_does_not_activate_never_marks(self):
+        inner = StaticTabsInnerTab(stuck=True)
+        runner = Runner()
+        with self.assertRaisesRegex(StopRun, "did not advance"):
+            await self.run_flow(inner, runner)
+        self.assertEqual(inner.visited, {1})
+        self.assertFalse(runner.tab.marked)
+
     async def test_labeled_graphic_open_read_close_all_before_mark(self):
         class VisitGuard(OuterTab):
             def __init__(self, inner):
@@ -370,6 +467,43 @@ class RiseFlowTests(unittest.IsolatedAsyncioTestCase):
                     await self.run_flow(inner, runner, max_actions=12)
                 self.assertFalse(runner.tab.marked)
                 self.assertTrue(inner.closed)
+
+    async def test_plus_markers_with_minus_open_state_read_before_mark(self):
+        inner = HotspotInnerTab(plus=True)
+        runner = await self.run_flow(inner)
+        self.assertEqual(inner.viewed, {1, 2, 3})
+        self.assertEqual(inner.open_index, 0)
+        self.assertEqual(len(inner.hotspot_clicks), 6)
+        self.assertTrue(runner.tab.marked)
+
+    async def test_marker_becomes_viewed_only_after_dialog_closes(self):
+        inner = HotspotInnerTab(plus=True, viewed_on_close=True)
+        runner = await self.run_flow(inner)
+        self.assertEqual(inner.viewed, {1, 2, 3})
+        self.assertEqual(inner.hotspot_clicks, [
+            (step, index) for index in range(1, 4)
+            for step in ("hotspot_open", "hotspot_close")
+        ])
+        self.assertTrue(runner.tab.marked)
+
+    async def test_two_responsible_ai_graphics_read_all_fourteen_markers(self):
+        class ResponsibleOuterTab(OuterTab):
+            async def evaluate(self, expression):
+                result = await super().evaluate(expression)
+                result["frame_title"] = "Responsible AI"
+                return result
+
+        inner = ResponsibleHotspotInnerTab()
+        runner = Runner(ResponsibleOuterTab())
+        with patch.object(flow, "lesson_heading", return_value="Responsible AI"):
+            await self.run_flow(inner, runner, max_actions=50)
+        self.assertEqual(inner.viewed, set(range(1, 15)))
+        self.assertEqual(inner.open_index, 0)
+        self.assertEqual(inner.hotspot_clicks, [
+            (step, index) for index in range(7, 15)
+            for step in ("hotspot_open", "hotspot_close")
+        ])
+        self.assertTrue(runner.tab.marked)
 
     async def test_exclusive_accordions_survive_dom_rerender(self):
         inner = InnerTab(
@@ -432,6 +566,92 @@ class RiseFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inner.calls, ["inspect"] * flow.SETTLE_PROBES)
         self.assertFalse(runner.tab.marked)
         self.assertTrue(inner.closed)
+
+    async def test_exact_lesson_index_transition_gets_bounded_extra_probes(self):
+        class TransitionTab(InnerTab):
+            def __init__(self, pending_count, *, exact_route=True):
+                super().__init__([{
+                    "accordions": 0, "cards": 0, "max": 0, "continue": False,
+                }])
+                self.pending_count = pending_count
+                self.exact_route = exact_route
+
+            async def evaluate(self, expression):
+                if action(expression) == "inspect" and self.pending_count:
+                    self.pending_count -= 1
+                    self.calls.append("inspect")
+                    return {"pending": "Rise lesson route is initializing.",
+                            "diagnostic": {
+                                "route_class": "content-index-transition",
+                                "lesson_index_route": self.exact_route,
+                                "suffix_kind": "hash", "suffix_length": 9,
+                                "has_hash": True,
+                            }}
+                return await super().evaluate(expression)
+
+        request = {"frame": FRAME, "frame_title": "Defence techniques and strategies"}
+        with patch.object(flow, "LESSON_INDEX_PROBES", 6), \
+                patch.object(flow, "INITIAL_MOUNT_PROBES", 6), \
+                patch.object(flow.asyncio, "sleep", new_callable=AsyncMock):
+            eventually_ready = TransitionTab(4)
+            result = await flow._inner(eventually_ready, request, "inspect",
+                                       probes=3, delay=0)
+            self.assertEqual(result["lesson"], LESSON)
+            self.assertEqual(eventually_ready.calls, ["inspect"] * 5)
+
+            never_ready = TransitionTab(10)
+            with self.assertRaisesRegex(StopRun, "probe limit"):
+                await flow._inner(never_ready, request, "inspect", probes=3, delay=0)
+            self.assertEqual(never_ready.calls, ["inspect"] * 6)
+
+            other_hash = TransitionTab(10, exact_route=False)
+            with self.assertRaisesRegex(StopRun, "probe limit"):
+                await flow._inner(other_hash, request, "inspect", probes=3, delay=0)
+            self.assertEqual(other_hash.calls, ["inspect"] * 3)
+
+    async def test_verified_initial_mount_gets_bounded_extra_probes(self):
+        class MountingTab(InnerTab):
+            def __init__(self, pending_count, *, stage="lesson-frame"):
+                super().__init__([{
+                    "accordions": 0, "cards": 0, "max": 0, "continue": False,
+                }])
+                self.pending_count = pending_count
+                self.mount_stage = stage
+
+            async def evaluate(self, expression):
+                if action(expression) == "inspect" and self.pending_count:
+                    self.pending_count -= 1
+                    self.calls.append("inspect")
+                    return {"pending": "Rise lesson is mounting.",
+                            "diagnostic": {"mount_stage": self.mount_stage}}
+                return await super().evaluate(expression)
+
+        request = {"frame": FRAME, "frame_title": "Defence techniques and strategies"}
+        with patch.object(flow, "INITIAL_MOUNT_PROBES", 6), \
+                patch.object(flow, "LESSON_INDEX_PROBES", 6), \
+                patch.object(flow.asyncio, "sleep", new_callable=AsyncMock):
+            eventually_ready = MountingTab(4)
+            result = await flow._inner(eventually_ready, request, "inspect",
+                                       probes=3, delay=0)
+            self.assertEqual(result["lesson"], LESSON)
+            self.assertEqual(eventually_ready.calls, ["inspect"] * 5)
+
+            never_ready = MountingTab(10)
+            with self.assertRaisesRegex(
+                    StopRun, "probe limit.*Last pending: Rise lesson is mounting"):
+                await flow._inner(never_ready, request, "inspect", probes=3, delay=0)
+            self.assertEqual(never_ready.calls, ["inspect"] * 6)
+
+            mismatched_stage = MountingTab(10, stage="driver")
+            with self.assertRaisesRegex(StopRun, "probe limit"):
+                await flow._inner(mismatched_stage, request, "inspect", probes=3, delay=0)
+            self.assertEqual(mismatched_stage.calls, ["inspect"] * 3)
+
+            established = MountingTab(10)
+            with self.assertRaisesRegex(StopRun, "probe limit"):
+                await flow._inner(established, {**request, "lesson": LESSON},
+                                  "inspect", probes=3, delay=0)
+            self.assertEqual(established.calls, ["inspect"] * 3)
 
     async def test_unknown_activity_stops_without_mark(self):
         inner = InnerTab([], error="Rise lesson has an unrecognized button or activity.")
@@ -567,8 +787,8 @@ class RiseFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def test_browser_scripts_compile_and_reject_wrong_origin(self):
         script = """
-const source = process.argv[1];
-const inner = process.argv[2];
+const fs = require('node:fs');
+const {source, inner} = JSON.parse(fs.readFileSync(0, 'utf8'));
 const outer = new Function('return ' + source)();
 const reader = new Function('return ' + inner)();
 global.location = {href:'https://example.invalid/'};
@@ -578,7 +798,8 @@ const b = reader({action:'inspect',frame:'https://example.invalid/index.html'});
 if (!a.error || !b.error) process.exit(2);
 """
         result = subprocess.run(
-            ["node", "-e", script, flow.OUTER_JS, flow.INNER_JS],
+            ["node", "-e", script],
+            input=json.dumps({"source": flow.OUTER_JS, "inner": flow.INNER_JS}),
             capture_output=True, text=True, check=False, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -682,7 +903,8 @@ const wrap={scrollHeight:950,clientHeight:550,scrollTop:0,
   querySelectorAll:selector=>selector==='a[href]'?[]:[]};
 const progressNode={get innerText(){return state.kind==='invalid_progress'?'Loading':
   '0% COMPLETE';}};
-const page={get URL(){return state.kind.startsWith('route_')?
+const page={get URL(){return state.kind==='route_lesson_index'?
+  data.indexUrl:state.kind.startsWith('route_')?
   data.unseenUrl:data.lessonUrl;},readyState:'complete',
   body:{get innerText(){return state.kind==='missing_label'?longText:
     state.kind==='wrong_label'?'LESSON 2 OF 2 '+longText:
@@ -735,6 +957,7 @@ for(const kind of incomplete){
 for(const kind of ['wrong_label','invalid_progress','unknown_button','activity'])
   results.unsafe[kind]=inspect(kind);
 results.routePending=inspect('route_transition');
+results.lessonIndexPending=inspect('route_lesson_index');
 results.routeBlocked=inspect('route_unknown_button');
 results.routeConverged=inspect('valid');
 results.converged=inspect('valid');
@@ -747,6 +970,8 @@ process.stdout.write(JSON.stringify(results));
                 "lessonUrl": lesson_url, "lesson": lesson,
                 "unseenUrl": frame.replace("index.html", "") +
                              "scorm-content/scormcontent/index.html#/mounting-topic",
+                "indexUrl": frame.replace("index.html", "") +
+                            "scorm-content/scormcontent/index.html#/lessons",
             }),
             capture_output=True, text=True, check=False, timeout=10,
         )
@@ -760,8 +985,10 @@ process.stdout.write(JSON.stringify(results));
                 self.assertNotIn("error", initial, initial)
                 self.assertEqual(set(initial["diagnostic"]), {
                     "wrap_count", "text_length", "body_length", "lesson_marker",
-                    "progress_nodes", "progress_valid",
+                    "progress_nodes", "progress_valid", "mount_stage",
                 })
+                self.assertEqual(initial["diagnostic"]["mount_stage"],
+                                 "lesson-scaffold")
                 established = snapshots["established"][kind]
                 self.assertIn("error", established, established)
                 self.assertNotIn("pending", established, established)
@@ -772,6 +999,18 @@ process.stdout.write(JSON.stringify(results));
         self.assertIn("pending", snapshots["routePending"])
         self.assertEqual(
             snapshots["routePending"]["diagnostic"]["suffix_kind"], "hash"
+        )
+        self.assertFalse(
+            snapshots["routePending"]["diagnostic"]["lesson_index_route"]
+        )
+        self.assertNotIn("mount_stage", snapshots["routePending"]["diagnostic"])
+        self.assertIn("pending", snapshots["lessonIndexPending"])
+        self.assertTrue(
+            snapshots["lessonIndexPending"]["diagnostic"]["lesson_index_route"]
+        )
+        self.assertEqual(
+            snapshots["lessonIndexPending"]["diagnostic"]["mount_stage"],
+            "lesson-route",
         )
         self.assertIn("error", snapshots["routeBlocked"])
         self.assertNotIn("pending", snapshots["routeBlocked"])

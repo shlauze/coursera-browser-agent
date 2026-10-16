@@ -148,6 +148,14 @@ async def complete_plugin(runner, item, *, probes=PROBES, probe_delay=PROBE_DELA
         return
     if path in AUDITED_SCORM:
         raise StopRun("An audited SCORM lesson changed its course-outline heading.")
+    from rise_best_practices import PATH as BEST_PRACTICES_PATH
+    if path == BEST_PRACTICES_PATH:
+        if heading != "Best practices":
+            raise StopRun("The Best practices course-outline heading changed.")
+        from rise_best_practices import complete_best_practices
+
+        await complete_best_practices(runner, item)
+        return
     if (path.startswith(ADVERSARIAL_AI_COURSE_PATH + "/ungradedWidget/") and
             item["key"].startswith("ungradedWidget:")):
         from rise_scorm_flow import complete_rise_scorm

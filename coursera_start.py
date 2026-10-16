@@ -34,7 +34,7 @@ PROFILE = ROOT / "coursera-chrome-profile"
 COURSE_URL = "https://www.coursera.org/learn/philosophy"
 COURSE_SLUG = "philosophy"
 MODEL = "openai/gpt-oss-120b"
-RUNNER_VERSION = "4.0-groq.80"
+RUNNER_VERSION = "4.0-groq.95"
 # Offline sample only. Runtime setup loads the learner's exact notice from the
 # ignored settings.json file; other agreements still require a separate review.
 AUTHORIZED_QUIZ_NOTICE = "I, Example Learner, understand and agree."
@@ -825,16 +825,24 @@ QUIZ_UI_JS = r"""(async request => {
     clean(e.innerText)==='Ready to submit? Submit Cancel' &&
     Array.from(e.querySelectorAll(actionSelector)).map(x=>clean(x.innerText)).join('|')==='Submit|Cancel');
   const blockingDialog=!!dialog && !dialogIsForm && !dialogIsResult && !dialogIsPending;
-  const honorText=clean(document.body.innerText);
-  const authorshipStatement=honorText.match(/By clicking Submit,? you confirm (?:that )?this work is your own\.[^]*?(?= I,| You must select| Submit|$)/i)?.[0] || null;
+  // The configured learner name identifies a checkbox, but never authorizes a
+  // false statement that AI-drafted work is the learner's own. Recheck this on
+  // every action, including an already checked box and a recovered Submit modal.
+  const authorshipPatterns=[
+    /\bBy (?:clicking|selecting|pressing) (?:the )?Submit(?: button)?,? (?:you|I) (?:confirm|certify|declare|attest)(?: that)? (?:this|the|my|your|all) .{0,100}\b(?:my|your|their) own\b/i,
+    /\b(?:I|you) (?:confirm|certify|declare|attest)(?: that)? (?:this|the|my|your) (?:work|submission|assignment|project|answers?) (?:is|are) (?:entirely )?(?:my|your) own\b/i,
+    /\bSubmitting (?:work|answers?|a submission) created with AI tools may result in\b/i
+  ];
+  const liveAuthorshipStatement=()=>authorshipPatterns.map(pattern=>
+    clean(document.body.innerText).match(pattern)?.[0]).find(Boolean)||null;
+  const authorshipStatement=liveAuthorshipStatement();
   const standardNotice=c=>/understand that submitting work that (isn't|isn’t|is not) my own may result/i.test(c.label);
   const normalizedNotice=text=>clean(text).replace(/\.$/,'').toLowerCase();
   const authorizedNotice=c=>c.kind==='notice' && c.type==='checkbox' && !!request.authorized_notice &&
     normalizedNotice(c.label)===normalizedNotice(request.authorized_notice);
   const knownNoticePresent=controls.some(authorizedNotice);
   const personalNotices=controls.filter(c=>c.kind==='notice' && !c.disabled && !standardNotice(c) && !authorizedNotice(c));
-  const manualSubmission=personalNotices.length>0 ||
-    (!!authorshipStatement && !knownNoticePresent && !request.authorized_notice_confirmed);
+  const manualSubmission=personalNotices.length>0 || !!authorshipStatement;
   // A styled link is visually a button, but has no button role in the DOM.
   const buttonElements=Array.from(scope.querySelectorAll(actionSelector)).filter(visibleAction);
   const workflow = text => {
@@ -1019,6 +1027,8 @@ QUIZ_UI_JS = r"""(async request => {
       option_id:request.option_id,option_text:request.option_text};
   }
   if (request.action==='activate_select_option') {
+    if (liveAuthorshipStatement())
+      return {error:'An authorship attestation requires learner review; no answer option was clicked.',...output()};
     const c=scopedAnswers.find(c=>c.type==='select' && c.id===request.control_id);
     if (!request.snapshot_id || blockingDialog || !c || !Array.isArray(request.expected_options))
       return {error:'The requested fill-in-the-blank option is unavailable.',...output()};
@@ -1030,6 +1040,8 @@ QUIZ_UI_JS = r"""(async request => {
     if (index<0) return {error:'The requested fill-in-the-blank option is not in this list.',...output()};
     const e=observed.nodes[index],found=await locateSelectTarget(e);
     if (found.error) return {...found,...output()};
+    if (liveAuthorshipStatement())
+      return {error:'An authorship attestation appeared before the answer option click.',...output()};
     // CDS options select through React onClick; the exact value is verified
     // from the live trigger after React updates the form.
     e.click();
@@ -1064,6 +1076,8 @@ QUIZ_UI_JS = r"""(async request => {
     return {clicked:'Close',dialog_kind:'course_sidebar_drawer',url:location.href};
   }
   if (request.action==='set_answers') {
+    if (liveAuthorshipStatement())
+      return {error:'An authorship attestation requires learner review; no answers were changed.',...output()};
     if (blockingDialog || resultPage || !scopedAnswers.length || scopedUnsupported.length)
       return {error:'No fully supported editable quiz form is open.',...output()};
     if (!request.snapshot_id) return {error:'A current snapshot_id is required.',...output()};
@@ -1141,6 +1155,8 @@ QUIZ_UI_JS = r"""(async request => {
     // Set states, never blindly toggle. Repeating the same plan performs no clicks.
     const changed=[];
     for (const c of scopedAnswers) {
+      if (liveAuthorshipStatement())
+        return {error:'An authorship attestation appeared while answers were being set; no further answers were changed.',...output()};
       if (['number','text','select','native_select'].includes(c.type)) continue;
       const want=selected.has(c.id);
       if (c.type==='radio' && !want) continue;
@@ -1155,6 +1171,8 @@ QUIZ_UI_JS = r"""(async request => {
       }
     }
     for (const c of numericControls) {
+      if (liveAuthorshipStatement())
+        return {error:'An authorship attestation appeared while answers were being set; no further answers were changed.',...output()};
       const e=elements[Number(c.id.slice(1))], want=numeric[c.id];
       if (e.value!==want) {
         e.scrollIntoView({block:'center'});
@@ -1168,6 +1186,8 @@ QUIZ_UI_JS = r"""(async request => {
       }
     }
     for (const c of textControls) {
+      if (liveAuthorshipStatement())
+        return {error:'An authorship attestation appeared while answers were being set; no further answers were changed.',...output()};
       const e=elements[Number(c.id.slice(1))],want=text[c.id];
       if (e.value!==want) {
         e.scrollIntoView({block:'center'});
@@ -1182,6 +1202,8 @@ QUIZ_UI_JS = r"""(async request => {
       }
     }
     for (const c of selectControls.filter(c=>c.type==='native_select')) {
+      if (liveAuthorshipStatement())
+        return {error:'An authorship attestation appeared while answers were being set; no further answers were changed.',...output()};
       const e=elements[Number(c.id.slice(1))],plan=select[c.id];
       const option=nativeOptions(e)?.[Number(plan.id.split(':o')[1])];
       if (!option || clean(option.textContent || option.label)!==plan.text)
@@ -1198,6 +1220,8 @@ QUIZ_UI_JS = r"""(async request => {
           return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
       }
     }
+    if (liveAuthorshipStatement())
+      return {error:'An authorship attestation appeared while answers were being set; no further answers were changed.',...output()};
     if (elements.some(e=>!e.isConnected)) return {error:'The form rerendered while answers were set. Inspect the new form before submitting.'};
     controls=readControls();
     const scopedIds=new Set(scopedAnswers.map(c=>c.id));
@@ -1208,7 +1232,7 @@ QUIZ_UI_JS = r"""(async request => {
     return {...output(),changed,verified:mismatch.length===0,mismatched_controls:mismatch};
   }
   if (request.action==='acknowledge_notice') {
-    if (manualSubmission) return {error:'An unrecognized personal confirmation requires review.',...output()};
+    if (manualSubmission) return {error:'An authorship or personal confirmation requires learner review.',...output()};
     if (!request.snapshot_id) return {error:'A current snapshot_id is required for the notice.',...output()};
     const c=controls.find(c=>c.id===request.control_id && c.kind==='notice' && !c.disabled);
     if (!c) return {error:'Notice checkbox not found.',...output()};
@@ -2382,9 +2406,11 @@ class CourseRunner:
 
         async def read_select_options(current, control_id):
             """Open one observed CML dropdown and read its current options."""
+            require_manual_submission(current)
             for _ in range(2):
                 probe = await quiz_ui("inspect_select_options", snapshot_id=current["snapshot_id"],
                                       control_id=control_id)
+                require_manual_submission(probe)
                 if probe.get("select_options", {}).get(control_id):
                     return probe
                 if probe.get("error_code") != "select_closed":
@@ -2392,12 +2418,14 @@ class CourseRunner:
                                   str(probe.get("error", "unknown state")))
                 action = await quiz_ui("activate_select_trigger", snapshot_id=current["snapshot_id"],
                                        control_id=control_id)
+                require_manual_submission(action)
                 if action.get("dispatched") != "mousedown":
                     raise StopRun("Fill-in-the-blank trigger could not be opened: " +
                                   str(action.get("error", "No mouse event confirmed.")))
                 for _ in range(12):
                     await asyncio.sleep(0.25)
                     current = await quiz_ui()
+                    require_manual_submission(current)
                     if (current.get("error") or item_key(current.get("url", "")) != item["key"] or
                             current.get("answer_snapshot_id") != probe.get("answer_snapshot_id")):
                         raise StopRun("The quiz changed while the fill-in-the-blank listbox opened.")
@@ -2412,6 +2440,7 @@ class CourseRunner:
                 for _ in range(8):
                     probe = await quiz_ui("inspect_select_options", snapshot_id=current["snapshot_id"],
                                           control_id=control_id)
+                    require_manual_submission(probe)
                     if probe.get("select_options", {}).get(control_id):
                         return probe
                     if probe.get("error_code") != "select_listbox_count" or probe.get("listbox_count") != 0:
@@ -2421,6 +2450,7 @@ class CourseRunner:
             raise StopRun("The fill-in-the-blank listbox did not open after two verified mouse events.")
 
         async def set_select_answer(current, control_id, plan):
+            require_manual_submission(current)
             controls = [c for c in current.get("controls", []) if c.get("id") == control_id and
                         c.get("type") in {"select", "native_select"} and c.get("in_scope", True)]
             if len(controls) != 1:
@@ -2436,12 +2466,14 @@ class CourseRunner:
             action = await quiz_ui("activate_select_option", snapshot_id=current["snapshot_id"],
                                    control_id=control_id, option_id=plan["id"],
                                    option_text=plan["text"], expected_options=plan["options"])
+            require_manual_submission(action)
             if action.get("dispatched") != "click":
                 raise StopRun("Fill-in-the-blank option could not be selected: " +
                               str(action.get("error", "No click confirmed.")))
             for _ in range(16):
                 await asyncio.sleep(0.25)
                 observed = await quiz_ui()
+                require_manual_submission(observed)
                 if observed.get("error") or item_key(observed.get("url", "")) != item["key"]:
                     raise StopRun("The quiz changed while the fill-in-the-blank option was selected.")
                 values = [c.get("value") for c in observed.get("controls", [])
@@ -2451,13 +2483,15 @@ class CourseRunner:
             raise StopRun("The clicked fill-in-the-blank option was not reflected in the quiz form.")
 
         def require_manual_submission(ui):
-            if not ui.get("manual_submission_required"):
+            if not (ui.get("manual_submission_required") or ui.get("authorship_statement")):
                 return
             statement = ui.get("authorship_statement") or "; ".join(ui.get("personal_statements", []))
             self.event("quiz_manual_submission_required", key=item["key"], statement=statement)
             print("MANUAL_SUBMISSION_REQUIRED:", statement, flush=True)
-            raise StopRun("An unrecognized confirmation needs review. The configured quiz notice "
-                          "is authorized, but this statement is different. Chrome stays open.")
+            if ui.get("authorship_statement"):
+                raise StopRun("Coursera asks the learner to attest this is their own work. "
+                              "AI-drafted answers cannot be certified automatically; review and submit personally.")
+            raise StopRun("An unrecognized personal confirmation needs learner review. Chrome stays open.")
 
         async def acknowledge_notices(current):
             nonlocal authorized_notice_confirmed
@@ -2519,7 +2553,13 @@ class CourseRunner:
             print("QUIZ_ATTEMPT:", number, "— до проходного результата" if attempt_limit is None else "", flush=True)
             authorized_notice_confirmed = False
             current = await self.prepare_quiz(item, quiz_ui)
+            require_manual_submission(current)
+            # The notice can hydrate after the first visible form. A fresh
+            # inspection before any option read or model call closes that gap.
+            current = await quiz_ui()
+            require_manual_submission(current)
             for plan_round in range(3):
+                require_manual_submission(current)
                 select_controls = [c for c in current.get("controls", []) if c.get("kind") == "answer" and
                                    c.get("type") == "select" and not c.get("disabled") and
                                    c.get("in_scope", True)]
@@ -2529,6 +2569,7 @@ class CourseRunner:
                 original_answer_snapshot = current["answer_snapshot_id"]
                 for control in select_controls:
                     current = await read_select_options(current, control["id"])
+                    require_manual_submission(current)
                     if current.get("answer_snapshot_id") != original_answer_snapshot:
                         raise StopRun("The quiz changed while its fill-in-the-blank choices were read.")
                     options = current.get("select_options", {}).get(control["id"])
@@ -2537,6 +2578,7 @@ class CourseRunner:
                     observed_options[control["id"]] = options
                 current["select_options"] = observed_options
                 answer_snapshot = current["answer_snapshot_id"]
+                require_manual_submission(current)
                 question_count = len({c.get("name") or question_text(c.get("question", ""))
                                       for c in current.get("controls", [])
                                       if c.get("kind") == "answer" and not c.get("disabled") and c.get("in_scope", True)})
@@ -2548,6 +2590,7 @@ class CourseRunner:
                 replan = False
                 for _ in range(3):
                     current = await quiz_ui()
+                    require_manual_submission(current)
                     if (current.get("error") or item_key(current.get("url", "")) != item["key"] or
                             not current.get("editable_form")):
                         raise StopRun("The quiz changed while the model was answering. No stale answer ids were clicked.")
@@ -2564,6 +2607,7 @@ class CourseRunner:
                         raise StopRun("Answer selections were not verified: " +
                                       str(result.get("error", result.get("mismatched_controls"))))
                     current = result
+                    require_manual_submission(current)
                     for control_id, plan in selects.items():
                         current = await set_select_answer(current, control_id, plan)
                     if current.get("answer_snapshot_id") != answer_snapshot:

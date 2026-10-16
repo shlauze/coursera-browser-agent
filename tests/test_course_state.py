@@ -110,12 +110,35 @@ class AtomicJsonRetryTests(unittest.TestCase):
                 with self.assertRaises(OSError) as caught:
                     state.atomic_json(path, {'new':True})
             self.assertIs(caught.exception, error)
-            self.assertEqual(replace.call_count, 8)
+            self.assertEqual(replace.call_count, 24)
             delays = [call.args[0] for call in sleep.call_args_list]
-            self.assertEqual(len(delays), 7)
+            self.assertEqual(len(delays), 23)
             self.assertTrue(all(0 < delay <= 0.25 for delay in delays))
-            self.assertLessEqual(sum(delays), 1.2)
+            self.assertLessEqual(sum(delays), 5.4)
             self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'old':True})
+            self.assertEqual(list(Path(directory).glob('*.tmp')), [])
+
+    def test_extended_transient_conflict_eventually_replaces_same_temp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'queue.json'
+            state.atomic_json(path, {'old':True})
+            replace = state.os.replace
+            sources = []
+
+            def conflicting_replace(source, destination):
+                sources.append(Path(source))
+                self.assertEqual(json.loads(Path(source).read_text(encoding='utf-8')), {'new':True})
+                if len(sources) <= 10:
+                    self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'old':True})
+                    raise self.windows_error(5)
+                return replace(source, destination)
+
+            with patch.object(state.os, 'replace', side_effect=conflicting_replace), patch('time.sleep') as sleep:
+                state.atomic_json(path, {'new':True})
+            self.assertEqual(len(sources), 11)
+            self.assertEqual(len(set(sources)), 1)
+            self.assertEqual(sleep.call_count, 10)
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'new':True})
             self.assertEqual(list(Path(directory).glob('*.tmp')), [])
 
     def test_cleanup_failure_does_not_hide_original_replace_exception(self):

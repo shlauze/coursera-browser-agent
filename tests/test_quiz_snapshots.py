@@ -42,6 +42,35 @@ class JavascriptFingerprintTests(unittest.TestCase):
         self.assertTrue(after["result"]["authorized_notice_present"])
         self.assertEqual(before["clicks"]+after["clicks"],[])
 
+    def test_configured_name_does_not_override_own_work_attestation(self):
+        observed = javascript({"ui":AFTER})[0]["result"]
+        self.assertTrue(observed["authorized_notice_present"])
+        self.assertTrue(observed["manual_submission_required"])
+        self.assertIn("work is your own", observed["authorship_statement"])
+        notice = next(c for c in observed["controls"] if c["kind"] == "notice")
+        request = {"key":ITEM["key"], "action":"acknowledge_notice",
+                   "authorized_notice":course.AUTHORIZED_QUIZ_NOTICE,
+                   "snapshot_id":observed["snapshot_id"], "control_id":notice["id"],
+                   "authorized_notice_confirmed":True}
+        attempted = javascript({"ui":AFTER,"request":request})[0]
+        self.assertIn("authorship", attempted["result"]["error"])
+        self.assertEqual(attempted["clicks"], [])
+
+    def test_routine_notice_without_authorship_statement_remains_available(self):
+        routine = copy.deepcopy(AFTER)
+        routine["page_text"] = routine["page_text"].replace(
+            "By clicking Submit, you confirm this work is your own.", "")
+        observed = javascript({"ui":routine})[0]["result"]
+        self.assertTrue(observed["authorized_notice_present"])
+        self.assertFalse(observed["manual_submission_required"])
+        notice = next(c for c in observed["controls"] if c["kind"] == "notice")
+        request = {"key":ITEM["key"], "action":"acknowledge_notice",
+                   "authorized_notice":course.AUTHORIZED_QUIZ_NOTICE,
+                   "snapshot_id":observed["snapshot_id"], "control_id":notice["id"]}
+        acknowledged = javascript({"ui":routine,"request":request})[0]
+        self.assertTrue(acknowledged["result"]["notice_checked"])
+        self.assertEqual(acknowledged["clicks"], [notice["id"]])
+
     def test_changed_answer_identity_or_content_changes_fingerprint(self):
         baseline = javascript({"ui":AFTER})[0]["result"]["answer_snapshot_id"]
         variants = []
@@ -56,15 +85,26 @@ class JavascriptFingerprintTests(unittest.TestCase):
             self.assertNotEqual(result["result"]["answer_snapshot_id"],baseline)
 
     def test_full_stale_guard_rejects_before_click_but_fresh_snapshot_works(self):
+        routine = copy.deepcopy(AFTER)
+        routine["page_text"] = routine["page_text"].replace(
+            "By clicking Submit, you confirm this work is your own.", "")
         request = {"key":ITEM["key"],"action":"set_answers", "selected":SELECTED,
                    "authorized_notice":course.AUTHORIZED_QUIZ_NOTICE,"snapshot_id":BEFORE["snapshot_id"]}
-        stale = javascript({"ui":AFTER,"request":request})[0]
+        stale = javascript({"ui":routine,"request":request})[0]
         self.assertEqual(stale["result"]["error_code"],"stale_quiz_snapshot")
         self.assertEqual(stale["clicks"],[])
         request["snapshot_id"] = AFTER["snapshot_id"]
-        fresh = javascript({"ui":AFTER,"request":request})[0]
+        fresh = javascript({"ui":routine,"request":request})[0]
         self.assertTrue(fresh["result"]["verified"])
         self.assertEqual(fresh["clicks"],[])
+
+    def test_authorship_statement_blocks_answer_mutation_before_click(self):
+        request = {"key":ITEM["key"], "action":"set_answers", "selected":SELECTED,
+                   "authorized_notice":course.AUTHORIZED_QUIZ_NOTICE,
+                   "snapshot_id":AFTER["snapshot_id"]}
+        blocked = javascript({"ui":AFTER,"request":request})[0]
+        self.assertIn("authorship", blocked["result"]["error"])
+        self.assertEqual(blocked["clicks"], [])
 
 
 class ReachedSubmit(Exception):
@@ -78,10 +118,21 @@ class QuizWorkflowTests(unittest.IsolatedAsyncioTestCase):
         cls.before, cls.after = (copy.deepcopy(BEFORE),copy.deepcopy(AFTER))
         for fixture,value in zip((cls.before,cls.after),values):
             fixture["answer_snapshot_id"] = value["result"]["answer_snapshot_id"]
+            # The workflow fixture models a routine notice. The original
+            # captured page additionally asserts own-work authorship and is
+            # tested separately above as a blocked submission.
+            fixture["authorship_statement"] = None
+            fixture["manual_submission_required"] = False
+            fixture["page_text"] = fixture.get("page_text", "").replace(
+                "By clicking Submit, you confirm this work is your own.", "")
 
-    async def execute(self, stale_count=0, changed_answer=False, partial_error=False, changed_before_submit=False):
+    async def execute(self, stale_count=0, changed_answer=False, partial_error=False,
+                      changed_before_submit=False, authorship=False,
+                      authorship_in_prepare=False):
         calls = []
         current = copy.deepcopy(self.after)
+        if authorship:
+            current["authorship_statement"] = "By clicking Submit, you confirm this work is your own."
         applied = 0
         checked = False
 
@@ -90,7 +141,7 @@ class QuizWorkflowTests(unittest.IsolatedAsyncioTestCase):
             request = json.loads(expression[len(course.QUIZ_UI_JS)+1:-1])
             calls.append(request)
             value = copy.deepcopy(current)
-            if changed_answer:
+            if changed_answer and runner.solve_quiz_questions.await_count:
                 value["answer_snapshot_id"] = "changed-answer"
             if checked:
                 value["controls"][-1]["selected"] = True
@@ -116,7 +167,10 @@ class QuizWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             runner = course.CourseRunner(SimpleNamespace(evaluate=evaluate),SimpleNamespace(max_steps=40),Path(directory))
-            runner.prepare_quiz = AsyncMock(return_value=copy.deepcopy(self.before))
+            prepared = copy.deepcopy(self.before)
+            if authorship_in_prepare:
+                prepared["authorship_statement"] = "By clicking Submit, you confirm this work is your own."
+            runner.prepare_quiz = AsyncMock(return_value=prepared)
             runner.solve_quiz_questions = AsyncMock(return_value=SELECTED)
             with patch.object(course,"press_quiz_button_when_ready",side_effect=submit):
                 try:
@@ -132,6 +186,21 @@ class QuizWorkflowTests(unittest.IsolatedAsyncioTestCase):
         answer = next(c for c in calls if c["action"]=="set_answers")
         self.assertEqual(answer["snapshot_id"],self.after["snapshot_id"])
         self.assertTrue(any(c["action"]=="acknowledge_notice" for c in calls))
+
+    async def test_late_authorship_statement_blocks_before_model_or_answer_fill(self):
+        error,calls,models = await self.execute(authorship=True)
+        self.assertIsInstance(error,course.StopRun)
+        self.assertIn("own work", str(error))
+        self.assertEqual(models, 0)
+        self.assertFalse(any(c["action"]=="set_answers" for c in calls))
+        self.assertFalse(any(c["action"]=="acknowledge_notice" for c in calls))
+
+    async def test_prepared_authorship_statement_blocks_without_fresh_action(self):
+        error,calls,models = await self.execute(authorship_in_prepare=True)
+        self.assertIsInstance(error,course.StopRun)
+        self.assertIn("own work", str(error))
+        self.assertEqual(models, 0)
+        self.assertEqual(calls, [])
 
     async def test_only_preclick_stale_error_retries_without_new_model_call(self):
         error,calls,models = await self.execute(stale_count=2)

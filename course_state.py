@@ -94,12 +94,12 @@ def atomic_json(path, value):
         # Windows readers/scanners can briefly deny rename/delete sharing.
         # Retry replacement of the same fully flushed file; never truncate the
         # old checkpoint or acknowledge an unsaved attempt reservation.
-        for attempt in range(8):
+        for attempt in range(24):
             try:
                 os.replace(temporary, path)
                 return
             except OSError as error:
-                if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 7:
+                if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 23:
                     raise
                 time.sleep(min(0.025 * 2 ** attempt, 0.25))
     finally:

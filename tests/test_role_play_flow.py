@@ -38,14 +38,22 @@ class RolePlayTab:
         self.actions = []
 
     def state(self, **extra):
+        transcript = [FIXTURE["opening_prompt"]]
+        for message in self.messages:
+            transcript.extend((message,
+                               "Please continue the investigation and address the remaining tasks."))
         return {"url": ITEM["url"], "ready": "complete", "role_play": True,
                 "phase": self.phase, "task_total": len(FIXTURE["tasks"]),
                 "task_complete": self.progress, "tasks": FIXTURE["tasks"],
                 "latest_prompt": FIXTURE["opening_prompt"] if not self.messages else
                     "Please continue the investigation and address the remaining tasks.",
+                "last_coach_message": FIXTURE["opening_prompt"] if not self.messages else
+                    "Please continue the investigation and address the remaining tasks.",
                 "last_user_message": self.messages[-1] if self.messages else "",
                 "user_message_count": len(self.messages), "composer_value": self.composer,
-                "conversation_text": " ".join(self.messages),
+                "last_user_followed_by_coach": bool(self.messages),
+                "transcript_valid": True,
+                "conversation_text": " ".join(transcript),
                 "start_count": 0, "end_count": int(self.phase == "active"),
                 "send_count": int(self.phase == "active"),
                 "feedback_text": self.feedback, "confirm_count": int(self.phase == "confirm"),
@@ -134,6 +142,79 @@ class AutoFinishRolePlayTab(RolePlayTab):
             self.progress = 0
             self.pending_transient = int(self.transient_active)
             return self.state(clicked="Send")
+        return result
+
+
+class TextChoiceRolePlayTab(RolePlayTab):
+    """An introduction or retry that shows a text/voice selection first."""
+
+    def __init__(self, *, initial_phase="intro", stalled=False,
+                 active_without_composer=False):
+        super().__init__(ended=initial_phase == "feedback",
+                         feedback=FIXTURE["premature_feedback"] if
+                         initial_phase == "feedback" else "")
+        self.phase = initial_phase
+        self.stalled = stalled
+        self.active_without_composer = active_without_composer
+        self.voice_clicks = 0
+
+    def state(self, **extra):
+        active = self.phase == "active"
+        return super().state(
+            start_count=int(self.phase == "intro"),
+            text_choice_count=int(self.phase == "text_choice"),
+            voice_choice_count=int(self.phase == "text_choice"),
+            composer_count=int(active and not self.active_without_composer),
+            send_count=int(active and not self.active_without_composer),
+            end_count=int(active),
+            **extra,
+        )
+
+    async def evaluate(self, expression):
+        prefix = role_play.ROLE_PLAY_JS + "("
+        request = json.loads(expression[len(prefix):-1])
+        operation = request.get("action", "inspect")
+        if operation == "start":
+            self.actions.append(operation)
+            assert self.phase == "intro"
+            self.phase = "text_choice"
+            return self.state(clicked="Start Role Play")
+        if operation == "use_text_chat":
+            self.actions.append(operation)
+            assert self.phase == "text_choice"
+            if not self.stalled:
+                self.phase = "active"
+            return self.state(clicked="Use text chat")
+        if operation == "practice_again":
+            result = await super().evaluate(expression)
+            self.phase = "text_choice"
+            return self.state(clicked=result["clicked"])
+        if operation in ("fill", "send"):
+            assert self.phase == "active", "No message before text chat is active"
+        return await super().evaluate(expression)
+
+
+class MissingReplyAfterSendTab(RolePlayTab):
+    """A sent reply and task counter both disappear from the next render."""
+
+    def __init__(self):
+        super().__init__(progress=0, advance=False)
+        self.uncertain = False
+
+    async def evaluate(self, expression):
+        prefix = role_play.ROLE_PLAY_JS + "("
+        request = json.loads(expression[len(prefix):-1])
+        operation = request.get("action", "inspect")
+        if operation == "inspect" and self.uncertain:
+            self.actions.append(operation)
+            return self.state(task_total=None, task_complete=None, tasks=[],
+                              conversation_text="", last_user_message="",
+                              user_message_count=0,
+                              last_user_followed_by_coach=False,
+                              transcript_valid=False)
+        result = await super().evaluate(expression)
+        if operation == "send":
+            self.uncertain = True
         return result
 
 
@@ -285,7 +366,7 @@ const url='https://www.coursera.org/learn/example-course/coach/ROLE/lesson';
 let clicks=0;
 const e=text=>({innerText:text,hidden:false,inert:false,parentElement:null,disabled:false,
   getClientRects(){return [1]},getAttribute(){return null}});
-const rolePlayItem=e('Role Play');
+const rolePlayItem=e('Role Play');rolePlayItem.querySelectorAll=()=>[];
 const start=e('Start activity');start.click=()=>clicks++;
 global.location=new URL(url);
 global.document={readyState:'complete',body:e('Role Play Start activity'),
@@ -307,6 +388,93 @@ process.stdout.write(JSON.stringify({kind:before.kind,phase:before.phase,
         self.assertEqual(json.loads(result.stdout), {
             "kind": "role_play", "phase": "intro", "startCount": 1,
             "clicked": "Start Role Play", "clicks": 1})
+
+    def test_dom_text_chat_choice_is_exact_and_never_uses_voice(self):
+        script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
+const url='https://www.coursera.org/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa/coach/T6QZ8/the-insider-threat-investigating-suspected-data-poisoning';
+const state={invalid:null,textClicks:0,voiceClicks:0,sendClicks:0};
+const e=text=>({innerText:text,hidden:false,inert:false,parentElement:null,
+ disabled:false,getClientRects(){return [{}]},getAttribute(){return null}});
+const textButton=e('Use text chat');textButton.click=()=>state.textClicks++;
+const voiceButton=e('Join voice chat');voiceButton.click=()=>state.voiceClicks++;
+const duplicateText=e('Use text chat');duplicateText.click=()=>state.textClicks++;
+const duplicateVoice=e('Join voice chat');duplicateVoice.click=()=>state.voiceClicks++;
+const tasks=['Present evidence','Discuss alternatives','Recommend steps',
+ 'Address threats','Request resources'];
+const rows=tasks.map((task,index)=>e((index+1)+' '+task));
+const panel=e('');
+Object.defineProperty(panel,'innerText',{get(){return 'Tasks '+
+ (state.invalid==='changed_tasks'?'1':'0')+'/5 complete '+
+ rows.map(row=>row.innerText).join(' ')+' Ask for a hint'}});
+panel.querySelectorAll=selector=>selector==='li'?rows:[];
+const root=e('Chief Information Security Officer is ready to begin. Review the tasks and join the chat when ready.');
+root.contains=node=>node===panel;
+root.querySelectorAll=selector=>
+ selector==='[data-testid="use-text-chat-button"]'?
+  (state.invalid==='missing_text'?[]:
+   state.invalid==='duplicate_text'?[textButton,duplicateText]:[textButton]):
+ selector==='[data-testid="join-conversation-button"]'?
+  (state.invalid==='missing_voice'?[]:
+   state.invalid==='duplicate_voice'?[voiceButton,duplicateVoice]:
+   state.invalid==='wrong_voice_label'?[e('Voice only')]:[voiceButton]):[];
+Object.defineProperty(root,'innerText',{get(){return state.invalid==='changed_root'?
+ 'This is an unrelated page':
+ 'Chief Information Security Officer is ready to begin. Review the tasks and join the chat when ready.'}});
+global.location=new URL(url);
+global.document={readyState:'complete',body:e('Role Play Tasks'),
+ querySelector:selector=>selector==='main,[role="main"]'?root:null,
+ querySelectorAll:selector=>selector==='button,[role="button"]'?
+  [textButton,voiceButton]:
+  selector==='[data-testid="learner-role-play-item"]'?[root]:
+  selector==='aside,section,[role="complementary"],div'?[panel]:[]};
+global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+const before=run({url,action:'inspect'});
+const blockedFill=run({url,action:'fill',reply:'A substantive response'.repeat(10),
+ expected_complete:0,expected_total:5});
+const blockedSend=run({url,action:'send',reply:'A substantive response'.repeat(10),
+ expected_complete:0,expected_total:5});
+const chosen=run({url,action:'use_text_chat'});
+const valid={phase:before.phase,kind:before.kind,total:before.task_total,
+ complete:before.task_complete,textCount:before.text_choice_count,
+ voiceCount:before.voice_choice_count,composerCount:before.composer_count,
+ fillBlocked:!!blockedFill.error,sendBlocked:!!blockedSend.error,
+ clicked:chosen.clicked,textClicks:state.textClicks,
+ voiceClicks:state.voiceClicks,sendClicks:state.sendClicks};
+const invalid={};
+for(const kind of ['missing_text','duplicate_text','missing_voice',
+ 'duplicate_voice','wrong_voice_label','changed_tasks','changed_root']){
+ state.invalid=kind;
+ const observed=run({url,action:'inspect'});
+ const attempted=run({url,action:'use_text_chat'});
+ invalid[kind]={phase:observed.phase,rolePlay:observed.role_play,
+  error:attempted.error||null};
+ state.invalid=null;
+}
+const wrongPage=(()=>{global.location=new URL('https://www.coursera.org/learn/other/coach/T6QZ8/lesson');
+ return run({url,action:'use_text_chat'})})();
+process.stdout.write(JSON.stringify({valid,invalid,wrongPage,
+ textClicks:state.textClicks,voiceClicks:state.voiceClicks,
+ sendClicks:state.sendClicks}));
+'''
+        result = subprocess.run(["node", "-"], input=script, text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshots = json.loads(result.stdout)
+        self.assertEqual(snapshots["valid"], {
+            "phase": "text_choice", "kind": "role_play", "total": 5,
+            "complete": 0, "textCount": 1, "voiceCount": 1,
+            "composerCount": 0, "fillBlocked": True,
+            "sendBlocked": True, "clicked": "Use text chat",
+            "textClicks": 1, "voiceClicks": 0, "sendClicks": 0,
+        })
+        for kind, snapshot in snapshots["invalid"].items():
+            with self.subTest(kind=kind):
+                self.assertNotEqual(snapshot["phase"], "text_choice")
+                self.assertIsNotNone(snapshot["error"])
+        self.assertIn("error", snapshots["wrongPage"])
+        self.assertEqual(snapshots["textClicks"], 1)
+        self.assertEqual(snapshots["voiceClicks"], 0)
+        self.assertEqual(snapshots["sendClicks"], 0)
 
     def test_dom_finished_dialogue_with_try_again_is_not_role_play(self):
         script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
@@ -480,6 +648,110 @@ process.stdout.write(JSON.stringify({kind:state.kind,total:state.task_total,
             "kind": "role_play", "total": 5, "complete": 0, "tasks": 5,
             "last": "Request resources: Justify necessary investigation support resources."})
 
+    def test_semantic_task_rows_validate_order_status_and_counter(self):
+        script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
+const url='https://www.coursera.org/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa/coach/RyZW9/after-the-red-team-presenting-security-test-findings-to-leadership';
+const names=[
+ 'Present methodology: Explain testing methods and attack vectors.',
+ 'Report findings: State vulnerabilities with severity ratings.',
+ 'Explain findings: Translate technical details for executives.',
+ 'Recommend remediation: Propose prioritized security improvements.',
+ 'Address questions: Defend testing rigor and confidence.'];
+const state={invalid:null,sendClicks:0};
+const e=text=>({innerText:text,hidden:false,inert:false,parentElement:null,
+ disabled:false,getClientRects(){return [{}]},getAttribute(){return null}});
+const rows=names.map((name,index)=>{
+ const row=e(index===1?'2\n'+name:name);
+ row.getAttribute=key=>key==='aria-label'?
+  (state.invalid==='wrong_status'&&index===0?'Finished task: '+name:
+   state.invalid==='wrong_number'&&index===1?'Task 3: '+name:
+   state.invalid==='wrong_description'&&index===2?
+     'Completed task: Different description':
+   (index===1?'Task 2: ':'Completed task: ')+name):null;
+ const child=e(name);
+ child.getAttribute=key=>key==='data-testid'?
+  (index===1?'todo-task-':'completed-task-')+name:null;
+ row.querySelectorAll=selector=>selector==='span,[data-testid]'?[child]:[];
+ return row;
+});
+const list=e('');
+rows.forEach(row=>row.parentElement=list);
+const extraRow=e('Unexpected task');extraRow.parentElement=list;
+list.querySelectorAll=selector=>selector.includes('listitem')?
+ (state.invalid==='extra_row'?[...rows,extraRow]:
+  state.invalid==='duplicate_row'?[rows[0],rows[1],rows[0],rows[3],rows[4]]:rows):[];
+const panel=e('');
+list.parentElement=panel;
+Object.defineProperty(panel,'innerText',{get(){return rows.map(row=>row.innerText).join(' ')}});
+panel.querySelectorAll=selector=>selector.includes('role="list"')||
+ selector.includes('role=list')?[list]:
+ selector.includes('listitem')?list.querySelectorAll(selector):
+ selector==='li'?[]:[];
+panel.querySelector=selector=>selector.includes('role="list"')||
+ selector.includes('role=list')?list:null;
+const taskTab=e('');
+panel.parentElement=taskTab;
+taskTab.contains=node=>node===panel||node===list||rows.includes(node);
+Object.defineProperty(taskTab,'innerText',{get(){return 'Tasks '+
+  (state.invalid==='counter_mismatch'?'3':'4')+'/5 complete '+panel.innerText}});
+const root=e('Role Play');
+root.contains=node=>node===taskTab||taskTab.contains(node);
+taskTab.parentElement=root;
+Object.defineProperty(root,'innerText',{get(){return 'Role Play '+taskTab.innerText}});
+root.querySelectorAll=selector=>selector==='[data-testid="task-list"]'?
+ [panel]:selector==='[role="tabpanel"]#tabpanel-tasks[aria-labelledby="tab-tasks"]'?
+ [taskTab]:[];
+const end=e('End Role Play');
+const send=e('Send message');send.type='button';send.click=()=>state.sendClicks++;
+const composer=e('');composer.placeholder='Message Chief Information Security Officer';
+composer.value='A substantive reply explaining testing methods and priorities.';
+composer.closest=selector=>selector==='form'?{
+ querySelectorAll:query=>query==='button,[role="button"]'?[send]:[]}:null;
+global.location=new URL(url);
+global.document={readyState:'complete',body:e('Role Play Tasks'),
+ querySelector:selector=>selector==='main,[role="main"]'?root:null,
+ querySelectorAll:selector=>selector==='button,[role="button"]'?[end,send]:
+  selector==='[data-testid="learner-role-play-item"]'?[root]:
+  selector==='[data-testid="task-list"]'?[panel]:
+  selector==='aside,section,[role="complementary"],div'?[panel]:
+  selector==='textarea'?[composer]:[]};
+global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+const valid=run({url,action:'inspect'});
+const invalid={};
+for(const kind of ['counter_mismatch','extra_row','duplicate_row','wrong_status',
+ 'wrong_number','wrong_description']){
+ state.invalid=kind;
+ const observed=run({url,action:'inspect'});
+ const attempted=run({url,action:'send',reply:composer.value,
+  expected_complete:4,expected_total:5});
+ invalid[kind]={total:observed.task_total,complete:observed.task_complete,
+  tasks:observed.tasks,error:attempted.error||null};
+ state.invalid=null;
+}
+process.stdout.write(JSON.stringify({valid:{total:valid.task_total,
+ complete:valid.task_complete,tasks:valid.tasks},invalid,
+ sendClicks:state.sendClicks}));
+'''
+        result = subprocess.run(["node", "-"], input=script, text=True,
+                                capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshots = json.loads(result.stdout)
+        self.assertEqual(snapshots["valid"], {
+            "total": 5, "complete": 4,
+            "tasks": [
+                "Present methodology: Explain testing methods and attack vectors.",
+                "Report findings: State vulnerabilities with severity ratings.",
+                "Explain findings: Translate technical details for executives.",
+                "Recommend remediation: Propose prioritized security improvements.",
+                "Address questions: Defend testing rigor and confidence.",
+            ],
+        })
+        for kind, snapshot in snapshots["invalid"].items():
+            with self.subTest(kind=kind):
+                self.assertNotEqual(snapshot["tasks"], snapshots["valid"]["tasks"])
+                self.assertIsNotNone(snapshot["error"])
+        self.assertEqual(snapshots["sendClicks"], 0)
+
     def test_dom_can_fill_before_live_send_message_button_becomes_enabled(self):
         script = "const run=" + role_play.ROLE_PLAY_JS + ";\n" + r'''
 const url='https://www.coursera.org/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa/coach/T6QZ8/the-insider-threat-investigating-suspected-data-poisoning';
@@ -607,6 +879,55 @@ class RolePlayDraftValidationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RolePlayFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_activity_selects_text_before_sending(self):
+        tab = TextChoiceRolePlayTab(initial_phase="intro")
+        runner = RolePlayRunner(tab)
+        with patch.object(role_play, "_draft_reply", AsyncMock(side_effect=substantive_reply)), \
+             patch.object(role_play.asyncio, "sleep", immediate_sleep):
+            await role_play.run_role_play(runner, ITEM, max_seconds=30)
+        self.assertLess(tab.actions.index("start"), tab.actions.index("use_text_chat"))
+        self.assertLess(tab.actions.index("use_text_chat"), tab.actions.index("fill"))
+        self.assertLess(tab.actions.index("use_text_chat"), tab.actions.index("send"))
+        self.assertEqual(tab.voice_clicks, 0)
+        self.assertEqual(len(tab.messages), len(FIXTURE["tasks"]))
+        self.assertEqual(runner.checkpoint["role_plays"][ITEM["key"]]["phase"],
+                         "completed")
+
+    async def test_resumed_text_choice_and_feedback_retry_select_text(self):
+        for initial_phase in ("text_choice", "feedback"):
+            with self.subTest(initial_phase=initial_phase):
+                tab = TextChoiceRolePlayTab(initial_phase=initial_phase)
+                runner = RolePlayRunner(tab)
+                with patch.object(role_play, "_draft_reply", AsyncMock(side_effect=substantive_reply)), \
+                     patch.object(role_play.asyncio, "sleep", immediate_sleep):
+                    await role_play.run_role_play(runner, ITEM, max_seconds=30)
+                self.assertEqual(tab.actions.count("use_text_chat"), 1)
+                self.assertNotIn("start", tab.actions)
+                if initial_phase == "feedback":
+                    self.assertLess(tab.actions.index("practice_again"),
+                                    tab.actions.index("use_text_chat"))
+                self.assertLess(tab.actions.index("use_text_chat"),
+                                tab.actions.index("send"))
+                self.assertEqual(tab.voice_clicks, 0)
+
+    async def test_text_choice_wait_is_bounded_and_sends_nothing(self):
+        for failure in ("stalled", "active_without_composer"):
+            with self.subTest(failure=failure):
+                tab = TextChoiceRolePlayTab(
+                    initial_phase="text_choice",
+                    stalled=failure == "stalled",
+                    active_without_composer=failure == "active_without_composer",
+                )
+                runner = RolePlayRunner(tab)
+                with patch.object(role_play, "_draft_reply", AsyncMock(side_effect=substantive_reply)) as draft, \
+                     patch.object(role_play.asyncio, "sleep", immediate_sleep):
+                    with self.assertRaisesRegex(engine.StopRun, "bounded wait"):
+                        await role_play.run_role_play(runner, ITEM, max_seconds=5)
+                draft.assert_not_awaited()
+                self.assertNotIn("fill", tab.actions)
+                self.assertNotIn("send", tab.actions)
+                self.assertEqual(tab.voice_clicks, 0)
+
     async def test_incomplete_feedback_under_daily_goal_modal_dismisses_then_retries(self):
         tab = RolePlayTab(ended=True, feedback=FIXTURE["premature_feedback"],
                           progress=0, goal_modal=True)
@@ -697,6 +1018,20 @@ class RolePlayFlowTests(unittest.IsolatedAsyncioTestCase):
                 await role_play.run_role_play(runner, ITEM, max_seconds=5)
         draft.assert_not_awaited()
         self.assertNotIn("send", tab.actions)
+        self.assertNotIn("end", tab.actions)
+
+    async def test_missing_post_send_reply_and_counter_preserve_reservation(self):
+        tab = MissingReplyAfterSendTab()
+        runner = RolePlayRunner(tab)
+        with patch.object(role_play, "_draft_reply", AsyncMock(side_effect=substantive_reply)), \
+             patch.object(role_play.asyncio, "sleep", immediate_sleep):
+            with self.assertRaises(engine.StopRun):
+                await role_play.run_role_play(runner, ITEM, max_seconds=30)
+        ledger = runner.checkpoint["role_plays"][ITEM["key"]]
+        self.assertEqual(ledger["phase"], "message_pending")
+        self.assertTrue(ledger["pending_reply"])
+        self.assertEqual(tab.actions.count("send"), 1)
+        self.assertEqual(len(tab.messages), 1)
         self.assertNotIn("end", tab.actions)
 
     async def test_green_zero_of_five_is_replayed_before_completion(self):

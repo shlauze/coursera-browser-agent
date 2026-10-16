@@ -56,6 +56,12 @@ REFLECTION_JS = r"""(request=>{
   // <main> on some courses, so inspect the whole page under the exact URL.
   const scope=document.body;
   const pageText=clean(document.body.innerText);
+  const authorshipPatterns=[
+    /\bBy (?:clicking|selecting|pressing) (?:the )?Submit(?: button)?,? (?:you|I) (?:confirm|certify|declare|attest)(?: that)? (?:this|the|my|your|all) .{0,100}\b(?:my|your|their) own\b/i,
+    /\b(?:I|you) (?:confirm|certify|declare|attest)(?: that)? (?:this|the|my|your) (?:work|submission|assignment|project|answers?) (?:is|are) (?:entirely )?(?:my|your) own\b/i,
+    /\bSubmitting (?:work|answers?|a submission) created with AI tools may result in\b/i
+  ];
+  const authorshipStatement=authorshipPatterns.map(pattern=>pageText.match(pattern)?.[0]).find(Boolean)||null;
   const title=clean(request.title);
   const heading=[...document.querySelectorAll('h1,h2,[role="heading"]')].filter(visible)
     .map(e=>clean(e.innerText));
@@ -118,7 +124,8 @@ REFLECTION_JS = r"""(request=>{
     notice_checked:noticeChecked,entry_labels:entries.map(e=>clean(e.innerText||e.getAttribute('aria-label'))),
     submit_count:named('Submit').filter(enabled).length,
     confirmation:confirmation?confirmation.text:null,
-    submission_dialog:submissionDialogs.length===1,result_page:resultPage,snapshot_id:snapshotId});
+    submission_dialog:submissionDialogs.length===1,result_page:resultPage,snapshot_id:snapshotId,
+    manual_submission_required:!!authorshipStatement,authorship_statement:authorshipStatement});
   if(!request.action||request.action==='inspect') return state();
   if(request.action==='finish_frozen_modal'){
     // A background Chrome tab can suspend Coursera's entering fullscreen
@@ -148,6 +155,8 @@ REFLECTION_JS = r"""(request=>{
     entries[0].click();return {clicked:clean(entries[0].innerText||entries[0].getAttribute('aria-label')),...state()};
   }
   if(request.action==='confirm_submit'){
+    if(authorshipStatement)
+      return {error:'An authorship attestation requires learner review; no Submit was clicked.',...state()};
     // A modal can mark the underlying attempt aria-hidden while keeping its
     // drafted values in the DOM. Chat composers and autosize clones are not
     // answers. Coursera's response textarea has a distinct id; on variants
@@ -170,6 +179,8 @@ REFLECTION_JS = r"""(request=>{
      unsupported.length||notices.length>1)
     return {error:'The attempt is not an unambiguous text-only reflection form.',...state()};
   if(request.action==='fill'){
+    if(authorshipStatement)
+      return {error:'An authorship attestation requires learner review; no answers were filled.',...state()};
     if(fields.some(f=>f.value)||!Array.isArray(request.answers)||request.answers.length!==fields.length||
        !request.answers.every((x,i)=>x&&x.id==='t'+i&&typeof x.reply==='string'&&
          x.reply.trim()&&x.reply.length<=1200&&(!fields[i].maxLength||x.reply.length<=fields[i].maxLength)))
@@ -184,12 +195,16 @@ REFLECTION_JS = r"""(request=>{
     return {filled:areas.every((e,i)=>e.value===request.answers[i].reply),...state()};
   }
   if(request.action==='acknowledge_notice'){
+    if(authorshipStatement)
+      return {error:'An authorship attestation requires learner review; no checkbox was clicked.',...state()};
     if(!notice||noticeChecked||!enabled(notice)||!request.authorized_notice)
       return {error:'The authorized Honor Code notice is absent, changed or already checked.',...state()};
     notice.click();return {...state(),notice_clicked:true,
       notice_checked:notice.matches('input')?!!notice.checked:notice.getAttribute('aria-checked')==='true'};
   }
   if(request.action==='submit'){
+    if(authorshipStatement)
+      return {error:'An authorship attestation requires learner review; no Submit was clicked.',...state()};
     if(!Array.isArray(request.answers)||request.answers.length!==fields.length||
        !request.answers.every((x,i)=>x&&x.id==='t'+i&&x.reply===fields[i].value)||
        (notice&&!noticeChecked))
@@ -472,6 +487,13 @@ async def _green_verified(runner, item):
     return False
 
 
+def _require_no_authorship_attestation(state):
+    if state.get("manual_submission_required") or state.get("authorship_statement"):
+        raise engine.StopRun(
+            "Coursera asks the learner to attest this is their own work. "
+            "AI-drafted answers cannot be certified automatically; review and submit personally.")
+
+
 async def _await_reflection_result(runner, item, url, title, answers, *, confirmed_once=False):
     result_seen = False
     # Coursera can keep a successful submission in its processing spinner for
@@ -491,6 +513,7 @@ async def _await_reflection_result(runner, item, url, title, answers, *, confirm
                 break
             continue
         if current.get("confirmation") and not confirmed_once:
+            _require_no_authorship_attestation(current)
             confirmation = current["confirmation"]
             _set_pending(runner, item, url, "confirm_dispatch")
             confirmed = await _ui(runner.tab, url, title, "confirm_submit",
@@ -521,6 +544,7 @@ async def _await_reflection_result(runner, item, url, title, answers, *, confirm
 async def _recover_pending_confirmation(runner, item, url, title, state):
     # The first Submit already opened this exact modal. Never create another
     # answer or dispatch the first Submit again after a restart.
+    _require_no_authorship_attestation(state)
     answers = _pending_confirmation_answers(state)
     _set_pending(runner, item, url, "confirm_dispatch")
     confirmed = await _ui(runner.tab, url, title, "confirm_submit",
@@ -615,6 +639,7 @@ async def maybe_complete_reflection(runner, item):
             await asyncio.sleep(1)
             state = await _ui(runner.tab, url, title)
     state = await _await_reflection_form(runner, item, url, title, state, deadline)
+    _require_no_authorship_attestation(state)
     if state.get("confirmation"):
         return await _recover_pending_confirmation(runner, item, url, title, state)
     if state.get("submission_dialog"):
@@ -633,6 +658,7 @@ async def maybe_complete_reflection(runner, item):
     runner.event("reflection_answers_prepared", key=item["key"], question_count=len(answers),
                  prompt_tokens=response.get("prompt_tokens"), output_tokens=response.get("output_tokens"))
     current = await _ui(runner.tab, url, title)
+    _require_no_authorship_attestation(current)
     if current.get("snapshot_id") != state.get("snapshot_id") or current.get("fields") != fields:
         raise engine.StopRun("The optional practice assignment form changed while answers were prepared.")
     filled = await _ui(runner.tab, url, title, "fill", snapshot_id=state["snapshot_id"], answers=answers)

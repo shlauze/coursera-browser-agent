@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import ctypes
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ from my_learning import (MY_LEARNING_URL, MyLearningSelectionChanged,
 from lab_flow import complete_lab
 from plugin_flow import complete_plugin
 from programming_flow import diagnose_programming
+from graded_upload_flow import inspect_graded_file_upload
 from dialogue_flow import run_dialogue
 from role_play_flow import probe_role_play, run_role_play
 from reflection_flow import maybe_complete_reflection, recover_pending_reflection, pending_reflections
@@ -37,6 +39,7 @@ ROOT = Path(__file__).resolve().parent
 CERTIFICATE_RECHECKS = 10
 CERTIFICATE_RETRY_DELAY = 20
 PROGRAMMING_MARK_RECHECK_SECONDS = 8
+OWNED_TABS_FILE = ROOT / "state" / "runner_tabs.json"
 
 
 def _requires_role_play_review(roster):
@@ -642,6 +645,25 @@ class QueueRunner(engine.CourseRunner):
                         if not confirmed_after_timeout:
                             raise
                         self.event("action_timeout_recovered", key=item["key"], lesson_kind=kind)
+                    except engine.StopRun as exc:
+                        self.current_operation = kind
+                        reason = None
+                        if (kind == "assignment" and str(exc).startswith(
+                                "A separate quiz dialog needs manual review:")):
+                            reason = await inspect_graded_file_upload(self.tab, item)
+                        elif kind == "assignment" and str(exc).startswith(
+                                "Coursera asks the learner to attest this is their own work."):
+                            reason = str(exc)
+                        if reason:
+                            record["items"][item["key"]]["manual_required"] = True
+                            record["items"][item["key"]]["reason"] = reason
+                            self.course["message"] = reason
+                            self.store.save()
+                            self.store.event("item_manual_required", item["title"], self.course["id"])
+                            self.event("graded_assignment_manual_required", key=item["key"], reason=reason)
+                            print("GRADED_ASSIGNMENT_MANUAL:", item["title"], flush=True)
+                            continue
+                        raise
                     except Exception:
                         # An action may perform page reads internally. Keep its
                         # mutating context if it fails after the last read.
@@ -678,12 +700,14 @@ class QueueRunner(engine.CourseRunner):
                 # previous workflow reopened its anchor in this situation.
                 rows = {}
             pending = [item["title"] for item in roster if supported(item) and
+                       not record["items"][item["key"]].get("manual_required") and
                        not (rows.get(item["key"], {}).get("status") == "completed" and
                             rows.get(item["key"], {}).get("checked") is True)]
             if pending:
                 await self.open_item(anchor)
                 rows = engine.rows_by_key(await self.snapshot())
                 pending = [item["title"] for item in roster if supported(item) and
+                           not record["items"][item["key"]].get("manual_required") and
                            not (rows.get(item["key"], {}).get("status") == "completed" and
                                 rows.get(item["key"], {}).get("checked") is True)]
                 if pending:
@@ -1358,6 +1382,15 @@ async def run_queue(store, args, tab):
                     programming_reviews = [item.get("reason") for module in runner.checkpoint["modules"].values()
                         for key, item in module.get("items", {}).items()
                         if key.startswith("programming:") and item.get("manual_required") and item.get("reason")]
+                    manual_assignment_reviews = [item.get("reason") for module in runner.checkpoint["modules"].values()
+                        for key, item in module.get("items", {}).items()
+                        if key.startswith("assignment:") and item.get("manual_required") and
+                           isinstance(item.get("reason"), str) and
+                           (item["reason"].startswith("Это оцениваемый проект с загрузкой файла") or
+                            item["reason"].startswith("Coursera asks the learner to attest this is their own work."))]
+                    if (manual_assignment_reviews and
+                            not valid_certificate_url(course.get("certificate_page_url"))):
+                        raise engine.StopRun("Manual work still required: " + manual_assignment_reviews[0])
                     if (programming_reviews and not proof.get("verified") and
                             not valid_certificate_url(course.get("certificate_page_url"))):
                         raise engine.StopRun("Manual work still required: " + programming_reviews[0])
@@ -1536,7 +1569,110 @@ def _wait_for_start_tab(seconds=20):
     raise engine.StopRun("Chrome открылся, но вкладка Coursera не появилась за 20 секунд.")
 
 
-async def _show_my_learning_start_page(*, allow_site_redirect=False):
+def _browser_pages():
+    pages = engine.local_json(engine.CDP_URL + "/json/list")
+    if not isinstance(pages, list):
+        raise engine.StopRun("Chrome did not return a page list for the managed tabs.")
+    return [page for page in pages if isinstance(page, dict) and page.get("type") == "page"
+            and isinstance(page.get("id"), str) and page["id"]]
+
+
+def _owned_tab_state(browser_address):
+    """A target ID alone is never authority after Chrome changes processes."""
+    browser_key = hashlib.sha256(browser_address.encode("utf-8")).hexdigest()
+    try:
+        saved = json.loads(OWNED_TABS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = None
+    if not isinstance(saved, dict) or saved.get("browser_key") != browser_key:
+        return {"browser_key": browser_key}
+    return {"browser_key": browser_key,
+            **{key: saved[key] for key in ("start_target_id", "worker_target_id")
+               if isinstance(saved.get(key), str) and saved[key]}}
+
+
+def _remember_owned_target(browser_address, role, target_id):
+    if role not in {"start", "worker"} or not isinstance(target_id, str) or not target_id:
+        raise ValueError("Invalid owned Chrome target")
+    saved = _owned_tab_state(browser_address)
+    saved[role + "_target_id"] = target_id
+    engine.save_json(OWNED_TABS_FILE, saved)
+
+
+def _owned_page(pages, target_id):
+    matches = [page for page in pages if page.get("id") == target_id]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _reusable_start_url(url):
+    parts = engine.urlsplit(url)
+    if parts.scheme != "https" or parts.hostname not in {"www.coursera.org", "coursera.org"}:
+        return False
+    return parts.path == "/my-learning" or (parts.path == "/" and "authMode=login" in parts.query)
+
+
+def _reusable_worker_url(url):
+    """Only known read-only course surfaces may be replaced on restart.
+
+    In particular, an attempt, Coach chat, programming notebook, or unknown
+    interactive page stays open. A new worker is allocated in that case.
+    """
+    if url == MY_LEARNING_URL:
+        return True
+    parts = engine.urlsplit(url)
+    if parts.scheme != "https" or parts.hostname not in {"www.coursera.org", "coursera.org"}:
+        return False
+    return bool(re.fullmatch(
+        r"/learn/[a-z0-9][a-z0-9-]{0,159}/(?:home(?:/(?:welcome|module/\d+))?|lecture/[^/]+/[^/]+|supplement/[^/]+/[^/]+)/?",
+        parts.path)) and not parts.query and not parts.fragment
+
+
+async def _ensure_owned_worker_page():
+    """Return one persistent worker tab, separate from the startup tab."""
+    metadata = engine.local_json(engine.CDP_URL + "/json/version")
+    address = metadata.get("webSocketDebuggerUrl") if isinstance(metadata, dict) else None
+    if not isinstance(address, str):
+        raise engine.StopRun("Chrome did not expose its managed browser target.")
+    saved = _owned_tab_state(address)
+    pages = _browser_pages()
+    candidate = _owned_page(pages, saved.get("worker_target_id"))
+    if (candidate is None or candidate.get("id") == saved.get("start_target_id") or
+            not _reusable_worker_url(candidate.get("url", "")) or
+            not isinstance(candidate.get("webSocketDebuggerUrl"), str)):
+        candidate = None
+    owner = engine.ChromeTab(address)
+    await owner.connect()
+    try:
+        if candidate is not None:
+            target_id = candidate["id"]
+            if candidate["url"] != MY_LEARNING_URL:
+                worker = engine.ChromeTab(candidate["webSocketDebuggerUrl"])
+                await worker.connect()
+                try:
+                    result = await worker.call("Page.navigate", {"url": MY_LEARNING_URL})
+                    if result.get("errorText"):
+                        raise engine.StopRun("Owned worker navigation failed: " + str(result["errorText"]))
+                finally:
+                    await worker.close()
+        else:
+            result = await owner.call("Target.createTarget", {"url": MY_LEARNING_URL})
+            target_id = result.get("targetId")
+            if not isinstance(target_id, str) or not target_id:
+                raise engine.StopRun("Chrome did not create a queue worker tab.")
+            # Persist immediately so a crash between creation and hydration
+            # cannot create another tab on the next start.
+            _remember_owned_target(address, "worker", target_id)
+        for _ in range(40):
+            page = _owned_page(_browser_pages(), target_id)
+            if page and page.get("url") == MY_LEARNING_URL and isinstance(page.get("webSocketDebuggerUrl"), str):
+                return page
+            await asyncio.sleep(.5)
+        raise engine.StopRun("The owned worker tab did not load My Learning In Progress.")
+    finally:
+        await owner.close()
+
+
+async def _show_my_learning_start_page(*, allow_site_redirect=False, manage_owned=False):
     """Show In Progress without disturbing a pending Submit tab.
 
     Before the login prompt, a Coursera sign-in redirect is allowed. After
@@ -1561,6 +1697,18 @@ async def _show_my_learning_start_page(*, allow_site_redirect=False):
         exact = next((page for page in pages if page.get("url") == MY_LEARNING_URL), None)
         target = exact or next((page for page in pages
                                 if isinstance(page.get("webSocketDebuggerUrl"), str)), None)
+        if manage_owned:
+            all_pages = _browser_pages()
+            saved = _owned_tab_state(address)
+            owned = _owned_page(all_pages, saved.get("start_target_id"))
+            if owned and _reusable_start_url(owned.get("url", "")):
+                target = owned
+            else:
+                # An exact My Learning page is safe to adopt as the reserved
+                # start tab: it is activated but never used as the worker.
+                exact_pages = [page for page in all_pages if page.get("url") == MY_LEARNING_URL]
+                target = exact_pages[0] if len(exact_pages) == 1 else None
+            exact = target if target and target.get("url") == MY_LEARNING_URL else None
         if target is not None:
             target_id = target.get("id")
             if not isinstance(target_id, str) or not target_id:
@@ -1579,6 +1727,8 @@ async def _show_my_learning_start_page(*, allow_site_redirect=False):
             target_id = result.get("targetId")
             if not isinstance(target_id, str) or not target_id:
                 raise engine.StopRun("Chrome did not create a My Learning tab.")
+        if manage_owned:
+            _remember_owned_target(address, "start", target_id)
         await owner.call("Target.activateTarget", {"targetId": target_id})
         for probe in range(40):
             if any(page.get("id") == target_id and page.get("url") == MY_LEARNING_URL
@@ -1614,6 +1764,8 @@ async def session(store, args):
         return 2
     if pending_pages:
         pages = pending_pages
+    elif getattr(args, "owned_tabs", False) and getattr(args, "auto_my_learning", True):
+        pages = [await _ensure_owned_worker_page()]
     elif getattr(args, "auto_my_learning", True):
         pages = learning_pages or _preferred_learning_tabs(course_pages, store)
     else:
@@ -1656,7 +1808,7 @@ def main():
                         help="Сохранять команды панели управления при запуске из панели")
     parser.add_argument("--manual-queue", action="store_false", dest="auto_my_learning",
                         help="Выполнять только courses.txt, без поиска курсов во вкладке In Progress")
-    parser.set_defaults(auto_my_learning=True)
+    parser.set_defaults(auto_my_learning=True, owned_tabs=True)
     args = parser.parse_args()
     if not 1 <= args.minutes <= 1440 or not 1 <= args.max_steps <= 200 or not 0 <= args.quiz_attempts <= 100:
         parser.error("minutes:1..1440, max-steps:1..200, quiz-attempts:0..100 (0 = до прохода)")
@@ -1673,7 +1825,7 @@ def main():
         engine.configure_course(courses[0]["url"], notice=load_notice())
         engine.groq_key()
         engine.ensure_browser(start_url=MY_LEARNING_URL)
-        asyncio.run(_show_my_learning_start_page(allow_site_redirect=True))
+        asyncio.run(_show_my_learning_start_page(allow_site_redirect=True, manage_owned=True))
         if args.monitor:
             subprocess.Popen([sys.executable, str(ROOT / "progress_monitor.py")],
                 cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1683,7 +1835,7 @@ def main():
         print(f"Курсов в списке: {len(courses)}. Далее: My Learning → In Progress, все страницы.")
         if not args.yes and input("Войдите в Coursera, затем нажмите Enter для запуска или q для выхода: ").strip().lower() == "q":
             return 0
-        asyncio.run(_show_my_learning_start_page())
+        asyncio.run(_show_my_learning_start_page(manage_owned=True))
         _wait_for_start_tab()
         set_state = ctypes.windll.kernel32.SetThreadExecutionState
         set_state.argtypes, set_state.restype = [ctypes.c_uint], ctypes.c_uint

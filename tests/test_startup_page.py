@@ -83,8 +83,9 @@ class StartupBrowserPageTests(unittest.TestCase):
             stored = MagicMock()
             stored.__enter__.return_value = SimpleStore()
 
-            async def show_page(*, allow_site_redirect=False):
+            async def show_page(*, allow_site_redirect=False, manage_owned=False):
                 self.assertTrue(allow_site_redirect)
+                self.assertTrue(manage_owned)
                 events.append("show My Learning")
 
             def prompt(_message):
@@ -115,7 +116,8 @@ class StartupBrowserPageTests(unittest.TestCase):
             stored.__enter__.return_value = SimpleStore()
             set_state = Mock(return_value=0)
 
-            async def show_page(*, allow_site_redirect=False):
+            async def show_page(*, allow_site_redirect=False, manage_owned=False):
+                self.assertTrue(manage_owned)
                 events.append("login redirect allowed" if allow_site_redirect else "exact My Learning")
 
             async def session(_store, _args):
