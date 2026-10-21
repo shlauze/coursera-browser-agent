@@ -6,7 +6,7 @@ class ConfirmationRaceTests(unittest.TestCase):
   page=Mock();page.evaluate.side_effect=[{"attestation":True},{"attestation":True},{"attestation":False}]
   self.assertTrue(_confirmation_observed(page,Mock()))
   self.assertEqual(page.wait_for_timeout.call_count,2)
-  for call in page.evaluate.call_args_list:self.assertEqual(call.args[1],{"action":"inspect"})
+  for call in page.evaluate.call_args_list:self.assertEqual(call.args[1],{"action":"inspect", "allow_random_duplicates":False})
  def test_unchecked_confirmation_stays_blocked(self):
   page=Mock();page.evaluate.return_value={"attestation":True}
   self.assertFalse(_confirmation_observed(page,Mock()))

@@ -37,6 +37,44 @@ class _CertificatePage:
 
 
 class RunnerSafetyTests(unittest.TestCase):
+    def test_uncertain_practice_does_not_block_required_or_erase_ledger(self):
+        from dataclasses import replace
+        self.store.set_meta("required_assessments_first", True)
+        practice=replace(self.item, kind="Practice Assignment", title="Practice Quiz")
+        a=self.store.begin_action(self.cid,item_id(practice),"assessment",{"url":practice.url})
+        self.store.set_meta(f"submission:{a}","submitting")
+        with patch("v2.runner.open_course",return_value=Mock(url=practice.url)), patch("v2.runner.scan_outline",return_value=OutlineSnapshot(self.card.title,(practice,),practice.url)):
+            self.runner._reconcile_course(Mock(),[self.card],self.cid)
+        self.assertEqual(self.store.get_action(a)["status"],"pending")
+        self.assertEqual(self.store.get_meta(f"submission:{a}"),"submitting")
+        self.assertFalse(self.runner.deferred)
+
+    def test_uncertain_required_still_blocks_repeat(self):
+        from dataclasses import replace
+        required=replace(self.item,kind="Graded Assignment",title="Practice Quiz")
+        self.store.set_meta("required_assessments_first",True)
+        a=self.store.begin_action(self.cid,item_id(required),"assessment",{"url":required.url})
+        self.store.set_meta(f"submission:{a}","submitting")
+        with patch("v2.runner.open_course",return_value=Mock(url=required.url)), patch("v2.runner.scan_outline",return_value=OutlineSnapshot(self.card.title,(required,),required.url)):
+            with self.assertRaises(RunnerAttention):self.runner._reconcile_course(Mock(),[self.card],self.cid)
+        self.assertEqual(self.store.get_action(a)["status"],"pending")
+
+    def test_ambiguous_item_continues_other_required_without_claiming_completion(self):
+        from dataclasses import replace
+        first=replace(self.item,kind="Graded Assignment",title="Ambiguous")
+        second=replace(first,title="Other",url=first.url+"other")
+        page=Mock(url=first.url)
+        def handler(page,kind,checkpoint,**kw):
+            self.store.set_meta(f"submission:{kw['action_id']}","not_submitted")
+            if len(self.runner.blocked_items)==0:raise HandlerError("Ambiguous answer options")
+            return Mock(message="passed")
+        done=replace(second,completed=True)
+        with patch("v2.runner.open_course",return_value=page),patch("v2.runner.scan_outline",side_effect=[OutlineSnapshot(self.card.title,(first,second),page.url),OutlineSnapshot(self.card.title,(first,second),page.url),OutlineSnapshot(self.card.title,(first,done),page.url)]),patch("v2.runner.open_item",return_value=page),patch("v2.runner.handle",side_effect=handler) as h,patch.object(self.runner,"_verify_item",return_value=True),patch.object(self.runner,"_finish_course") as finish:
+            with self.assertRaisesRegex(RunnerAttention,"await learner input"):self.runner._process_course(page,self.card)
+        self.assertEqual(h.call_count,2);self.assertEqual(self.runner.completed_items,1)
+        finish.assert_not_called()
+        self.assertIsNotNone(self.store.get_meta("item_attention:"+item_id(first)))
+
     def test_optional_exclusion_is_exact_scoped_and_not_completion(self):
         record={"url":self.item.url,"title":self.item.title,"evidence":"Optional Essay Question / Practice Peer-graded Assignment","authorized_skip":True}
         self.store.set_meta("verified_optional:"+self.cid,[record])

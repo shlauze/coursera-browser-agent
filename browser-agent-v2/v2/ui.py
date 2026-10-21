@@ -1,11 +1,13 @@
 """Dismiss only recognized, nonessential Coursera overlays."""
 import re
+from .recovery import read_retry
 
 
 class UnknownOverlay(RuntimeError):
     pass
 
 
+@read_retry
 def dismiss_learning_overlay(page):
     dismissed = False
     for dialog in page.locator('[role="dialog"],[role="alertdialog"],dialog[open],.cds-Modal-container').element_handles():

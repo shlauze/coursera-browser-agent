@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import secrets
 import time
 import urllib.error
 import urllib.request
@@ -329,8 +330,34 @@ class GroqClient:
             "status": "ungraded_draft",
         })
 
+    def _duplicate_choice(self, question):
+        if question["kind"] not in {"single", "select"} or not self.store.get_meta("allow_random_duplicate_options", False):
+            raise GroqError("Duplicate answer texts require explicit random-choice authorization")
+        # Positional choices are reusable only for exactly the same ordered layout.
+        layout = [(o["id"], normalize(o["text"])) for o in question["options"]]
+        key = "random_choice:" + question_key(question)
+        previous = self.store.get_meta(key)
+        context = self._draft_context(question)
+        if previous and previous.get("layout") == [list(x) for x in layout] and previous.get("context") == context:
+            answer = validate_answer(question, previous["answer"])
+            if not self.memory.rejected(question, answer):
+                self.store.record_event("INFO", "RANDOM_CHOICE_REUSED", "Reused saved authorized random choice; no Groq request")
+                return answer
+        candidates = [{"cannot_answer": False, "selected": [o["id"]]} for o in question["options"]]
+        candidates = [a for a in candidates if not self.memory.rejected(question, a)]
+        if not candidates:
+            raise GroqError("All choices have negative feedback; review required")
+        answer = secrets.choice(candidates)
+        self.store.set_meta(key, {"layout": layout, "context": context, "answer": answer})
+        self.store.record_event("WARNING", "RANDOM_CHOICE_AUTHORIZED", "Random answer chosen for duplicate-text question under explicit user authorization; correctness unknown",
+                                {"question_key": question_key(question)})
+        return answer
+
     def answer(self, question):
         self.checkpoint()
+        texts = [normalize(o["text"]) for o in question.get("options", [])]
+        if len(texts) != len(set(texts)):
+            return self._duplicate_choice(question)
         cached = self.memory.confirmed(question)
         if cached:
             self.store.record_event("INFO", "ANSWER_REUSED", "Reused an answer with observed full points for the exact question")

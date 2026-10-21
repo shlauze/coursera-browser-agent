@@ -6,6 +6,7 @@ clicking an unrelated course after a Coursera rerender.
 """
 
 from __future__ import annotations
+from .recovery import read_retry
 
 import re
 import time
@@ -168,6 +169,7 @@ _PAGINATION_JS = r"""() => {
 }"""
 
 
+@read_retry
 def _wait_for_queue(page: Any) -> None:
     page.locator("body").wait_for(state="visible", timeout=30_000)
     if "coursera.org/login" in page.url or "coursera.org/?authMode" in page.url:

@@ -62,3 +62,19 @@ class DraftTests(unittest.TestCase):
   q["max_length"]=2
   with self.assertRaises(GroqError):self.client().answer(q)
   self.assertEqual(self.transport.call_count,2)
+
+class RandomDuplicateTests(DraftTests):
+ def test_explicit_permission_and_restart_without_api(self):
+  self.q['options'][1]['text']='X'
+  with self.assertRaises(GroqError):self.client().answer(self.q)
+  self.store.set_meta('allow_random_duplicate_options',True)
+  first=self.client().answer(self.q)
+  self.assertEqual(first,self.client(Store(self.path)).answer(self.q))
+  self.transport.assert_not_called()
+ def test_negative_feedback_never_repeats_duplicate_text(self):
+  self.q['options'][1]['text']='X'
+  self.store.set_meta('allow_random_duplicate_options',True)
+  first=self.client().answer(self.q)
+  AnswerMemory(self.store).record(self.q,first,earned=0,possible=1)
+  with self.assertRaisesRegex(GroqError,'negative feedback'):self.client().answer(self.q)
+  self.transport.assert_not_called()

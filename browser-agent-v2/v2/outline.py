@@ -11,12 +11,17 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
+from .recovery import read_retry
 from .ui import dismiss_learning_overlay, require_clear_outline
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 
 class OutlineError(RuntimeError):
     """The course outline could not be read unambiguously."""
+
+
+class OutlineNotSettled(OutlineError):
+    retryable_read = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +200,7 @@ def _expand_modules(page: Any) -> None:
     raise OutlineError("More than 100 collapsed modules, or module expansion did not settle")
 
 
+@read_retry
 def scan_outline(page: Any) -> OutlineSnapshot:
     """Expand modules and return their items in exact page order.
 
@@ -207,10 +213,14 @@ def scan_outline(page: Any) -> OutlineSnapshot:
     _expand_modules(page)
     # Expanded module contents arrive independently. Wait for a stable roster
     # rather than declaring the course complete from a partial React render.
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 30
     previous = None
     stable = 0
     while time.monotonic() < deadline:
+        if not page.evaluate("() => !!document.querySelector('[data-v2-outline-root]')"):
+            _find_sidebar(page)
+            _expand_modules(page)
+            previous, stable = None, 0
         data = page.evaluate(_ITEMS_JS)
         signature = [(i.get('url'), i.get('title'), i.get('completed')) for i in data.get('items', [])]
         stable = stable + 1 if signature and signature == previous else 0
@@ -219,7 +229,7 @@ def scan_outline(page: Any) -> OutlineSnapshot:
         previous = signature
         page.wait_for_timeout(250)
     else:
-        raise OutlineError("Course outline did not settle after module expansion")
+        raise OutlineNotSettled("Course outline did not settle after module expansion")
     raw_items = data.get("items") or []
     if not raw_items:
         raise OutlineError(f"Course outline contains no recognized items: {page.url}")

@@ -109,7 +109,7 @@ request => {
       if (new Set(types).size !== 1) return {error:'Mixed choice types in one question',attestation};
       kind = types[0] === 'radio' ? 'single' : 'multiple';
       options = fields.map((e,n) => ({id:`o${n}`,text:label(e)}));
-      if (options.length < 2 || options.some(o => !o.text) || new Set(options.map(o=>norm(o.text))).size !== options.length)
+      if (options.length < 2 || options.some(o => !o.text) || (request.allow_random_duplicates !== true && new Set(options.map(o=>norm(o.text))).size !== options.length))
         return {error:'Ambiguous answer options',attestation};
     } else if (fields.length === 1 && fields[0].tagName === 'SELECT') {
       kind = 'select';

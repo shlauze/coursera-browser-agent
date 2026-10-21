@@ -230,6 +230,7 @@ class Runner:
         self.completed_courses = 0
         self.completed_items = 0
         self.deferred: set[str] = set()
+        self.blocked_items = set()
         self.groq = GroqClient(store, self.checkpoint)
 
     def checkpoint(self) -> None:
@@ -329,6 +330,11 @@ class Runner:
             if item.completed:
                 self.store.resolve_action(action["id"], "confirmed", {"outline": "green mark", "url": opened.url})
                 self.store.record_event("INFO", "ACTION_RECONCILED", f"Previously pending item is complete: {item.title}")
+            elif self._practice_excluded(item):
+                # Preserve the unresolved ledger; exclusion is not a grade or cancellation.
+                self.store.record_event("WARNING", "PRACTICE_PENDING_EXCLUDED",
+                    f"Unresolved practice item retained for review; required work may continue: {item.title}")
+                continue
             elif (action["action_kind"] in {ItemAction.READING.value, ItemAction.VIDEO.value}
                   or (action["action_kind"] in {ItemAction.ASSESSMENT.value, ItemAction.PROGRAMMING_LAB.value, ItemAction.PEER.value}
                       and self.store.get_meta(f"submission:{action['id']}") in {None, "not_submitted", "failed"})):
@@ -400,7 +406,8 @@ class Runner:
                       and is_coursework(item.kind)
                       and not self._optional_excluded(cid, item)
                       and not self._deferred_item(cid, item)
-                      and not self._practice_excluded(item)]
+                      and not self._practice_excluded(item)
+                      and (cid, item.url) not in self.blocked_items]
         if self.store.get_meta("required_assessments_first", False):
             candidates.sort(key=lambda item: not bool(re.search(r"\bgraded\b", item.kind, re.I)))
         return next(iter(candidates), None)
@@ -435,7 +442,7 @@ class Runner:
             _pause_lecture_media(page)
             incomplete = [item for item in outline.items if not item.completed]
             excluded = [item for item in incomplete if not is_coursework(item.kind) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item)]
-            deferred = [item for item in incomplete if self._deferred_item(course_id(card), item) and not self._practice_excluded(item)]
+            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item)]
             unfinished = self._next_coursework(course_id(card), incomplete)
             if not seen and excluded:
                 self.store.record_event("INFO", "MATERIALS_EXCLUDED",
@@ -483,6 +490,13 @@ class Runner:
                 if decision.action in {ItemAction.ASSESSMENT, ItemAction.PROGRAMMING_LAB, ItemAction.PEER} and outcome in {"not_submitted", "failed"}:
                     self.store.resolve_action(action_id, "failed", {"submission_state": outcome})
                 self.store.record_event("ERROR", "ITEM_UNCLEAR", f"{unfinished.title}: {exc}")
+                if isinstance(exc, HandlerError) and str(exc) == "Ambiguous answer options" and outcome == "not_submitted":
+                    self.blocked_items.add((course_id(card), unfinished.url))
+                    self.store.set_meta("item_attention:" + key, {"course_id": course_id(card), "url": unfinished.url,
+                        "title": unfinished.title, "reason": str(exc), "submitted": False})
+                    self.store.record_event("WARNING", "ITEM_REVIEW_REQUIRED", f"Ambiguous item retained for review; continuing other required items: {unfinished.title}")
+                    page.goto(unfinished.url, wait_until="domcontentloaded", timeout=45_000)
+                    continue
                 raise RunnerAttention(f"Result unclear for {unfinished.title}: {exc}") from exc
             self.store.resolve_action(action_id, "confirmed", {"outline": "green mark", "url": page.url})
             self.store.record_event("INFO", "ITEM_CONFIRMED", f"Green mark confirmed: {unfinished.title}")
