@@ -37,6 +37,53 @@ class _CertificatePage:
 
 
 class RunnerSafetyTests(unittest.TestCase):
+    def test_missing_input_block_survives_restart_but_new_source_unblocks(self):
+        self.store.set_meta("item_attention:"+item_id(self.item), {"course_id":self.cid,"url":self.item.url,"reason":"Learner-authored essay required for the personal authorship confirmation"})
+        self.assertTrue(self.runner._input_blocked(self.cid,self.item))
+        self.assertIsNone(self.runner._next_coursework(self.cid,[self.item]))
+        self.store.set_meta("peer_source:"+self.item.url,{"text":"new source"})
+        self.assertFalse(self.runner._input_blocked(self.cid,self.item))
+        self.assertFalse(self.item.completed)
+
+    def test_unsupported_visual_item_waits_without_claiming_completion(self):
+        self.store.set_meta("item_attention:"+item_id(self.item),{"course_id":self.cid,"url":self.item.url,"reason":"Question includes visual content; text-only model cannot answer it"})
+        self.assertTrue(self.runner._input_blocked(self.cid,self.item))
+        self.assertFalse(self.item.completed)
+        self.store.set_meta("retry_item:"+item_id(self.item),True)
+        self.assertFalse(self.runner._input_blocked(self.cid,self.item))
+
+    def test_transient_failure_and_explicit_retry_remain_eligible(self):
+        key="item_attention:"+item_id(self.item)
+        self.store.set_meta(key,{"course_id":self.cid,"url":self.item.url,"reason":"Timeout"})
+        self.assertFalse(self.runner._input_blocked(self.cid,self.item))
+        self.store.set_meta(key,{"course_id":self.cid,"url":self.item.url,"reason":"File assignment needs an explicitly assigned local file"})
+        self.assertTrue(self.runner._input_blocked(self.cid,self.item))
+        self.store.set_meta("retry_item:"+item_id(self.item),True)
+        self.assertFalse(self.runner._input_blocked(self.cid,self.item))
+
+    def test_available_course_precedes_known_input_blocked_course(self):
+        other=CourseCard("Available","Resume",20,1,1)
+        self.store.upsert_course(course_id(other),other.title)
+        self.store.set_meta("course_attention:"+self.cid,self.card.title+": Remaining required items await learner input: Essay")
+        with patch("v2.runner.discover_in_progress",return_value=[self.card,other]),patch.object(self.runner,"_reconcile"),patch.object(self.runner,"_process_course") as process:
+            self.runner.run(Mock(page=Mock()))
+        self.assertEqual(process.call_args_list[0].args[1],other)
+        self.assertEqual(process.call_count,2)
+
+    def test_two_pending_actions_share_one_live_outline(self):
+        from dataclasses import replace
+        second=replace(self.item,title="Second",url=self.item.url+"second")
+        for item in (self.item,second):
+            aid=self.store.begin_action(self.cid,item_id(item),"assessment",{"url":item.url})
+            self.store.set_meta(f"submission:{aid}","submitting")
+        page=Mock(url=self.item.url)
+        with patch("v2.runner.open_course",return_value=page) as opened,patch("v2.runner.scan_outline",return_value=OutlineSnapshot(self.card.title,(self.item,second),page.url)) as scan:
+            result=self.runner._reconcile_course(Mock(),[self.card],self.cid)
+        opened.assert_called_once();scan.assert_called_once()
+        self.assertEqual(result[0],page)
+        self.assertEqual(len(self.store.pending_actions()),2)
+        self.assertIn((self.cid,second.url),self.runner.blocked_items)
+
     def test_uncertain_practice_does_not_block_required_or_erase_ledger(self):
         from dataclasses import replace
         self.store.set_meta("required_assessments_first", True)
@@ -56,7 +103,8 @@ class RunnerSafetyTests(unittest.TestCase):
         a=self.store.begin_action(self.cid,item_id(required),"assessment",{"url":required.url})
         self.store.set_meta(f"submission:{a}","submitting")
         with patch("v2.runner.open_course",return_value=Mock(url=required.url)), patch("v2.runner.scan_outline",return_value=OutlineSnapshot(self.card.title,(required,),required.url)):
-            with self.assertRaises(RunnerAttention):self.runner._reconcile_course(Mock(),[self.card],self.cid)
+            self.runner._reconcile_course(Mock(),[self.card],self.cid)
+            self.assertIn((self.cid,required.url),self.runner.blocked_items)
         self.assertEqual(self.store.get_action(a)["status"],"pending")
 
     def test_ambiguous_item_continues_other_required_without_claiming_completion(self):
@@ -179,8 +227,8 @@ class RunnerSafetyTests(unittest.TestCase):
              patch("v2.runner.scan_outline", return_value=self._outline(completed=False)):
             self.runner._reconcile(Mock(), [self.card])
         self.assertEqual(self.store.get_action(action_id)["status"], "pending")
-        self.assertIn(self.cid, self.runner.deferred)
-        self.assertEqual(self.store.get_course(self.cid)["status"], "attention")
+        self.assertIn((self.cid,self.item.url), self.runner.blocked_items)
+        self.assertNotIn(self.cid,self.runner.deferred)
 
     def test_disappeared_course_pending_action_reconciles_only_matching_certificate(self) -> None:
         action_id = self.store.begin_action(self.cid, item_id(self.item), "assessment")
@@ -299,7 +347,8 @@ class RunnerSafetyTests(unittest.TestCase):
              patch("v2.runner.scan_outline",return_value=self._outline(completed=False)), \
              patch.object(self.runner,"_process_course") as process:
             self.runner.run(Mock(page=Mock()))
-        self.assertEqual(process.call_count,1)
+        self.assertEqual(process.call_count,2)
+        self.assertIn((self.cid,self.item.url),self.runner.blocked_items)
         self.assertEqual(process.call_args.args[1],other)
         self.assertEqual(self.store.get_action(action_id)["status"],"pending")
 
@@ -372,11 +421,12 @@ class RunnerSafetyTests(unittest.TestCase):
         item=ItemRecord("Quiz","Quiz",False,"https://www.coursera.org/learn/example/quiz/test","Module 1",0)
         outline=OutlineSnapshot(self.card.title,(item,),item.url)
         for state in ("not_submitted","submitting"):
+            self.runner.blocked_items.clear()
             def failing_handler(*args,**kwargs):
                 self.store.set_meta(f"submission:{kwargs['action_id']}",state)
                 raise HandlerError("test failure")
             with patch("v2.runner.open_course",return_value=Mock(url=item.url)), \
-                 patch("v2.runner.open_item",return_value=Mock()), \
+                 patch("v2.runner.open_item",return_value=Mock(url=item.url)), \
                  patch("v2.runner.scan_outline",return_value=outline), \
                  patch("v2.runner.handle",side_effect=failing_handler):
                 with self.assertRaises(RunnerAttention): self.runner._process_course(Mock(),self.card)

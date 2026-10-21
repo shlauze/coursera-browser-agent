@@ -305,6 +305,8 @@ class Runner:
         if not pending:
             return
         by_id = {course_id(card): card for card in cards}
+        opened = None
+        outline = None
         for action in pending:
             if (self.store.get_course(action["course_id"]) or {}).get("skipped"):
                 continue
@@ -320,8 +322,9 @@ class Runner:
                         self.store.record_event("INFO", "ACTION_RECONCILED", f"Exact certificate found for {saved['title']}")
                         continue
                 raise RunnerAttention(f"Pending action {action['id']} has no matching In Progress course or exact certificate")
-            opened = open_course(page, card)
-            outline = scan_outline(opened)
+            if opened is None:
+                opened = open_course(page, card)
+                outline = scan_outline(opened)
             saved_url = (action.get("payload") or {}).get("url")
             item = next((entry for entry in outline.items if
                          (entry.url == saved_url if saved_url else item_id(entry) == action["item_id"])), None)
@@ -341,7 +344,10 @@ class Runner:
                 self.store.resolve_action(action["id"], "failed", {"outline": "still incomplete"})
                 self.store.record_event("WARNING", "SAFE_RETRY", f"Will retry unfinished {action['action_kind']}: {item.title}")
             else:
-                raise RunnerAttention(f"Pending {action['action_kind']} result is unclear for {item.title}; review before repeating")
+                self.blocked_items.add((cid, item.url))
+                self.store.record_event("WARNING", "PENDING_ITEM_ISOLATED", f"Uncertain result retained without replay; continuing other required work: {item.title}")
+
+        return (opened, outline) if opened is not None else None
 
     def _verify_item(self, page: Any, expected: ItemRecord) -> bool:
         for attempt in range(8):
@@ -401,16 +407,56 @@ class Runner:
         return bool(self.store.get_meta("required_assessments_first", False)
                     and re.search(r"\bpractice\b", item.kind, re.I))
 
+    def _input_blocked(self, cid, item):
+        saved = self.store.get_meta("item_attention:" + item_id(item), {})
+        if saved.get("course_id") != cid or saved.get("url") != item.url:
+            return False
+        if self.store.get_meta("retry_item:" + item_id(item), False):
+            return False
+        reason = saved.get("reason", "")
+        base = re.sub(r"/(?:submit|give-feedback|attempt|view-feedback)/?$", "", item.url or "")
+        if reason.startswith("Learner-authored essay required"):
+            return not bool(self.store.get_meta("peer_source:" + base))
+        if reason.startswith("Peer review needs the actual peer work") or reason.startswith("Coursera requires the project submission"):
+            peer_state = self.store.get_meta("peer_state:" + base, {})
+            return not self.store.get_meta("peer_source:" + base) and peer_state.get("status") not in {"submitted", "complete"}
+        if reason.startswith("File assignment needs an explicitly assigned local file"):
+            return not bool(self.store.get_meta("file_source:" + base))
+        if reason == "Question includes visual content; text-only model cannot answer it":
+            return True
+        # Transient timeouts and model failures must remain eligible for rechecking.
+        return False
+
     def _next_coursework(self, cid: str, incomplete: list[ItemRecord]) -> ItemRecord | None:
         candidates = [item for item in incomplete if not item.completed
                       and is_coursework(item.kind)
                       and not self._optional_excluded(cid, item)
                       and not self._deferred_item(cid, item)
+                      and not self._input_blocked(cid, item)
                       and not self._practice_excluded(item)
                       and (cid, item.url) not in self.blocked_items]
         if self.store.get_meta("required_assessments_first", False):
             candidates.sort(key=lambda item: not bool(re.search(r"\bgraded\b", item.kind, re.I)))
         return next(iter(candidates), None)
+
+    def _wait_for_overlay(self, page):
+        from .ui import UnknownOverlay, require_clear_outline
+        self.store.set_meta("confirmation_required", {
+            "reason": "Ожидание закрытия окна Coursera. После его исчезновения работа продолжится автоматически.",
+            "url": page.url})
+        self.store.record_event("INFO", "OVERLAY_WAIT", "Waiting for overlay to disappear; manual pause/stop remain available")
+        try:
+            while True:
+                self.checkpoint()
+                try:
+                    require_clear_outline(page)
+                except UnknownOverlay:
+                    page.wait_for_timeout(1000)
+                    continue
+                self.store.record_event("INFO", "OVERLAY_CLEARED", "Overlay disappeared; continuing without clicking or submitting")
+                return
+        finally:
+            self.store.set_meta("confirmation_required", None)
 
     def _process_course(self, queue_page: Any, card: CourseCard) -> None:
         self.checkpoint()
@@ -419,11 +465,18 @@ class Runner:
             self.store.record_event("INFO", "CERTIFIED_COURSE_SKIPPED",
                                     f"Previously verified certificate: {card.title}")
             return
+        self.store.set_meta("current_action_id", None)
+        self.store.set_meta("current_item", "")
         self.store.set_meta("current_course_id", course_id(card))
         self.store.set_meta("course_attention:" + course_id(card), "")
         self.store.update_course_status(course_id(card), "started")
-        self._reconcile_course(queue_page, [card], course_id(card))
-        page = open_course(queue_page, card)
+        reconciled = self._reconcile_course(queue_page, [card], course_id(card))
+        initial_outline = None
+        if isinstance(reconciled, tuple) and len(reconciled) == 2:
+            page, initial_outline = reconciled
+            self.store.record_event("INFO", "COURSE_PAGE_REUSED", "Reused current reconciliation page and outline; no extra queue navigation")
+        else:
+            page = open_course(queue_page, card)
         self._watch_course_page(page)
         _pause_lecture_media(page)
         self.store.record_event("INFO", "COURSE_OPENED", f"Opened {card.title}")
@@ -432,17 +485,15 @@ class Runner:
             self.checkpoint()
             from .ui import UnknownOverlay
             try:
-                outline = scan_outline(page)
+                outline = initial_outline if initial_outline is not None else scan_outline(page)
+                initial_outline = None
             except UnknownOverlay:
-                self.store.set_meta("confirmation_required", {"reason": "Неизвестное модальное окно: проверьте его в Coursera и затем продолжите.", "url": page.url})
-                self.control.request_pause()
-                self.checkpoint()
-                self.store.set_meta("confirmation_required", None)
+                self._wait_for_overlay(page)
                 outline = scan_outline(page)
             _pause_lecture_media(page)
             incomplete = [item for item in outline.items if not item.completed]
             excluded = [item for item in incomplete if not is_coursework(item.kind) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item)]
-            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item)]
+            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item)]
             unfinished = self._next_coursework(course_id(card), incomplete)
             if not seen and excluded:
                 self.store.record_event("INFO", "MATERIALS_EXCLUDED",
@@ -490,11 +541,12 @@ class Runner:
                 if decision.action in {ItemAction.ASSESSMENT, ItemAction.PROGRAMMING_LAB, ItemAction.PEER} and outcome in {"not_submitted", "failed"}:
                     self.store.resolve_action(action_id, "failed", {"submission_state": outcome})
                 self.store.record_event("ERROR", "ITEM_UNCLEAR", f"{unfinished.title}: {exc}")
-                if isinstance(exc, HandlerError) and str(exc) == "Ambiguous answer options" and outcome == "not_submitted":
+                from playwright.sync_api import TimeoutError as PageTimeout
+                if isinstance(exc, (HandlerError, PageTimeout)):
                     self.blocked_items.add((course_id(card), unfinished.url))
                     self.store.set_meta("item_attention:" + key, {"course_id": course_id(card), "url": unfinished.url,
-                        "title": unfinished.title, "reason": str(exc), "submitted": False})
-                    self.store.record_event("WARNING", "ITEM_REVIEW_REQUIRED", f"Ambiguous item retained for review; continuing other required items: {unfinished.title}")
+                        "title": unfinished.title, "reason": str(exc), "submission_state": outcome})
+                    self.store.record_event("WARNING", "ITEM_REVIEW_REQUIRED", f"Item retained for review; continuing other required items: {unfinished.title}")
                     page.goto(unfinished.url, wait_until="domcontentloaded", timeout=45_000)
                     continue
                 raise RunnerAttention(f"Result unclear for {unfinished.title}: {exc}") from exc
@@ -549,11 +601,13 @@ class Runner:
                 if not eligible:
                     if not refreshed:
                         cards = self._cards(page, first_page_only=False)
-                        self._reconcile(page, cards)
                         refreshed = True
                         continue
                     remaining = sum((self.store.get_course(course_id(c)) or {}).get("status") != "complete" for c in cards)
                     return RunSummary(self.completed_courses, self.completed_items, remaining, len(self.deferred))
+                # Courses last seen with only input-blocked work go after candidates
+                # with potentially executable work. They remain in this run's queue.
+                eligible.sort(key=lambda c: str(self.store.get_meta("course_attention:" + course_id(c), "")).split(": ",1)[-1].startswith("Remaining required items await learner input"))
                 card = eligible[0]
                 try:
                     self._process_course(page, card)

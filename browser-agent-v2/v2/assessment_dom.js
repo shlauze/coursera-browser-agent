@@ -79,7 +79,8 @@ request => {
     if (!roots.includes(root)) roots.push(root);
   }
   if (roots.some(a => roots.some(b => a !== b && a.contains(b)))) return {error:'Overlapping question containers',attestation};
-  if ([...scope.querySelectorAll('input[type="file"],[contenteditable="true"]')].some(visible)) return {error:'File upload or rich-text editor needs a dedicated adapter',attestation};
+  if ([...scope.querySelectorAll('[contenteditable="true"]')].some(visible)) return {error:'File upload or rich-text editor needs a dedicated adapter',attestation};
+  if (scope.querySelector('input[type="file"]') && answerInputs.length) return {error:"Mixed file and quiz form needs a dedicated adapter",attestation};
   const questions = [], bindings = [], feedbackQuestions = [];
   for (let i = 0; i < roots.length; i++) {
     const root = roots[i], fields = answerInputs.filter(e => root.contains(e));
@@ -170,7 +171,10 @@ request => {
   const dialogText = norm(scope.innerText);
   const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: ` + timerNotice + String.raw`)? Continue\s*Cancel$`).test(dialogText);
   const startConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + timerNotice + String.raw` Continue\s*Cancel$`).test(dialogText);
-  const result = {start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
+  const fileForm = !location.pathname.endsWith('/view-feedback') && [...scope.querySelectorAll('input[type="file"]')].length > 0;
+  const fileFeedback = location.pathname.endsWith('/view-feedback') && /No uploaded file/.test(pageText) && /How you were graded/.test(pageText)
+    ? {missing_file:true, rubrics:[...pageText.matchAll(/Rubric\s+(\d+)\s+Status:\s*([\d.]+)\s*\/\s*([\d.]+)\s*points/g)].map(m=>({rubric:m[1],earned:Number(m[2]),possible:Number(m[3])}))} : null;
+  const result = {file_form:fileForm,file_feedback:fileFeedback,start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
     pending:/Reviewing your submission|Grading in progress|Submission received/i.test(resultScope),
     confirmation: activeDialogs.length > 0 && /^Ready to submit\? Submit Cancel$/.test(norm(scope.innerText)),
     feedback: norm(resultScope).slice(0,20000)};

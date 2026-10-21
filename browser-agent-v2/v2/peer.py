@@ -32,8 +32,8 @@ def guard_submission(store, base):
 
 
 def review_status(text):
-    counts = re.findall(r'\b(\d+) left to complete\b', text)
-    if 'Submit your project before reviewing classmates.' in text:
+    counts = re.findall(r'\b(\d+)\s+(?:reviews?\s+)?left to complete\b', text, re.I)
+    if re.search(r'submit your (?:project|assignment) before (?:reviewing|you can review)', text, re.I):
         return {'state': 'submission_required', 'remaining': int(counts[0]) if len(counts) == 1 else None}
     if len(counts) == 1:
         return {'state': 'reviews_required', 'remaining': int(counts[0])}
@@ -44,15 +44,32 @@ def handle_peer(page, checkpoint, *, store, action_id):
     base = assignment_base(page.url)
     checkpoint()
     if page.url.rstrip('/').endswith('/give-feedback'):
+        store.set_meta(f'submission:{action_id}', 'not_submitted')
         text = page.locator('body').inner_text()
         state = review_status(text)
         store.set_meta('peer_reviews:' + base, state)
         if state['state'] == 'submission_required':
             raise HandlerError('Coursera requires the project submission before the required peer reviews can be opened')
-        raise HandlerError('Peer review rubric and submission identity must be verified before scoring or sending a review')
+        store.set_meta('peer_review_context:' + base, {
+            'url': page.url, 'state': state,
+            'rubric': store.get_meta('peer_rubric:' + base),
+            'status': 'awaiting_identified_peer_work'})
+        raise HandlerError('Peer review needs the actual peer work and its submission identity; criteria preserved, no scores invented')
+    from .peer_rubrics import parse_requirements
+    requirements=parse_requirements(page.locator('body').inner_text())
+    if requirements['criteria']:
+        store.set_meta('peer_rubric:' + base, requirements)
+        store.record_event('INFO','PEER_RUBRIC_READ',f"Read {len(requirements['criteria'])} criteria; word limit {requirements['word_limit']}")
     guard_submission(store, base)
+    store.set_meta(f"submission:{action_id}", "not_submitted")
     if not page.url.rstrip('/').endswith('/submit'):
-        _click_unique(page, 'My submission')
+        target = page.get_by_role('tab', name='My submission', exact=True).or_(
+            page.get_by_role('button', name='My submission', exact=True)).or_(
+            page.get_by_role('link', name='My submission', exact=True)).locator('visible=true')
+        target.first.wait_for(state='visible', timeout=30000)
+        if target.count() != 1:
+            raise HandlerError('My submission control is not unique')
+        target.click(timeout=10000)
     title = page.get_by_role('textbox', name='Project Title', exact=True)
     editor = page.locator('[data-slate-editor="true"][contenteditable="true"]:visible')
     title.wait_for(state='visible', timeout=30000)
@@ -62,6 +79,9 @@ def handle_peer(page, checkpoint, *, store, action_id):
     prompt = editor.evaluate('(e)=>document.getElementById(e.getAttribute("aria-labelledby"))?.innerText || ""').strip()
     store.set_meta('peer_requirements:' + base, {'prompt': prompt, 'source_key': 'peer_source:' + base})
     source = require_source(store.get_meta('peer_source:' + base), prompt)
+    requirements=store.get_meta('peer_rubric:' + base, {})
+    if requirements.get('word_limit') and len(source['text'].split()) > requirements['word_limit']:
+        raise HandlerError(f"Essay exceeds observed word limit of {requirements['word_limit']}")
     checkpoint()
     # Never overwrite a remote draft with unrelated or newer content.
     existing = editor.inner_text().replace('\ufeff', '').replace('Enter text here', '').strip()

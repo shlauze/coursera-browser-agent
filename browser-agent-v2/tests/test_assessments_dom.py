@@ -29,6 +29,37 @@ class AssessmentDomTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.browser.close();cls.playwright.stop()
 
+    def test_file_feedback_retains_zero_rubric_without_quiz_fields(self):
+        self.page.goto('https://www.coursera.org/learn/example/assignment-submission/abc/test/view-feedback')
+        self.page.set_content('<main>No uploaded file<h2>How you were graded</h2>Rubric 1 Status: 0/5 points Rubric 2 Status: 0/3 points</main>')
+        state=_read_failed_feedback(self.page,inspect(self.page),lambda:None,seconds=2)
+        self.assertTrue(state['file_feedback']['missing_file'])
+        self.assertEqual(len(state['file_feedback']['rubrics']),2)
+        self.assertEqual(state['file_feedback']['rubrics'][0]['earned'],0)
+
+    def test_file_form_recognized_without_invented_question(self):
+        self.page.set_content('<main><input type="file"><button>Submit</button></main>')
+        state=inspect(self.page)
+        self.assertTrue(state['file_form'])
+        self.assertFalse(state['questions'])
+
+    def test_peer_submission_tab_is_supported(self):
+        from v2.peer import handle_peer
+        self.page.goto('https://www.coursera.org/learn/example/peer/abc/test')
+        self.page.set_content('<button role="tab" onclick="document.querySelector(\'#form\').hidden=false">My submission</button><div id="form" hidden><input aria-label="Project Title"><div id="prompt">Essay topic</div><div data-slate-editor="true" contenteditable="true" aria-labelledby="prompt"></div></div>')
+        with self.assertRaisesRegex(HandlerError,'Learner-authored essay'):
+            handle_peer(self.page,lambda:None,store=self.store,action_id=1)
+        self.assertTrue(self.page.get_by_role('textbox',name='Project Title').is_visible())
+
+    def test_peer_submission_tab_waits_for_hydration(self):
+        from v2.peer import handle_peer
+        self.page.goto('https://www.coursera.org/learn/example/peer/abc/test')
+        self.page.set_content('<button role="tab" onclick="document.querySelector(\'#form\').hidden=false">My submission</button><div id="form" hidden><input aria-label="Project Title"><div id="prompt">Essay topic</div><div data-slate-editor="true" contenteditable="true" aria-labelledby="prompt"></div></div>')
+        self.page.evaluate("() => {const tab=document.querySelector('[role=tab]');tab.style.display='none';setTimeout(()=>tab.style.display='',800)}")
+        with self.assertRaisesRegex(HandlerError,'Learner-authored essay'):
+            handle_peer(self.page,lambda:None,store=self.store,action_id=1)
+        self.assertTrue(self.page.get_by_role('textbox',name='Project Title').is_visible())
+
     def test_review_recovers_checked_answer_only(self):
         self.page.goto('https://www.coursera.org/learn/example/assignment-submission/abc/test/view-feedback')
         self.page.set_content('<main><fieldset disabled><legend>1. Which number is even?</legend><label><input type="radio" name="q">2</label><label><input type="radio" name="q" checked>3</label><span class="points">0 / 1 point</span></fieldset></main>')
@@ -446,7 +477,7 @@ class AssessmentDomTests(unittest.TestCase):
         from v2 import assessments
         real_wait=assessments._wait
         def short_wait(page,checkpoint,predicate,**kwargs):
-            return real_wait(page,checkpoint,predicate,seconds=0.6)
+            return real_wait(page,checkpoint,predicate,seconds=3)
         with patch.object(assessments,'_wait',side_effect=short_wait):
             with self.assertRaisesRegex(HandlerError,'timeout'):
                 handle_assessment(self.page,lambda:None,groq=groq,store=self.store,action_id=1)

@@ -142,11 +142,16 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
             current = _wait_entry(page, checkpoint)
         if current.get("passed") and not current.get("questions"):
             return _return_to_outline(page, current, checkpoint)
-        if not current.get("questions"):
+        if not current.get("questions") and not current.get("file_form"):
             if current.get("failed") and attempt == 0:
                 review = _read_failed_feedback(page, current, checkpoint)
+                if review.get("file_feedback"):
+                    store.set_meta(f"file_feedback:{action_id}", review["file_feedback"])
+                    store.record_event("WARNING", "FILE_FEEDBACK_REVIEWED", "Previous submission has no uploaded file; rubric scores retained")
+                    from .file_assignments import require_file_source
+                    require_file_source(store, page.url)
                 rows = review.get("feedback_questions", [])
-                if not rows or any(not _scored_feedback(row) for row in rows):
+                if not review.get("file_feedback") and (not rows or any(not _scored_feedback(row) for row in rows)):
                     raise HandlerError("Previous failed attempt has incomplete scored feedback; retry blocked")
                 _recover_feedback_answers(rows, groq.memory)
                 store.set_meta(f"feedback_review:{action_id}", {"status":"existing_failure_reviewed", "questions":rows})
@@ -161,6 +166,9 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
                 raise HandlerError("No unique Start/Resume control for this assignment")
             act(page, current, action="button", label=names[0])
             current = _await_attempt(page, checkpoint, failed_verified=current.get("failed", False), start_verified=True)
+        if current.get("file_form"):
+            from .file_assignments import upload_and_submit
+            return upload_and_submit(page, checkpoint, store, action_id)
         questions = current["questions"]
         original = current["snapshot"]
         plans = []
@@ -211,7 +219,7 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
 
 
 def _wait_entry(page, checkpoint):
-    ready = lambda s: s.get("retry_confirmation") or s.get("start_confirmation") or s.get("questions") or _entry_names(s) or s.get("passed")
+    ready = lambda s: s.get("retry_confirmation") or s.get("start_confirmation") or s.get("questions") or s.get("file_form") or _entry_names(s) or s.get("passed")
     try:
         return _wait(page, checkpoint, ready, seconds=45)
     except HandlerError as exc:
@@ -229,17 +237,17 @@ def _wait_entry(page, checkpoint):
 
 
 def _await_attempt(page, checkpoint, *, failed_verified=False, start_verified=False, seconds=60):
-    current = _wait(page, checkpoint, lambda s: bool(s.get("questions")) or s.get("retry_confirmation") or s.get("start_confirmation"), seconds=seconds)
+    current = _wait(page, checkpoint, lambda s: (bool(s.get("questions")) or bool(s.get("file_form"))) or s.get("retry_confirmation") or s.get("start_confirmation"), seconds=seconds)
     if current.get("start_confirmation"):
         if not start_verified:
             raise HandlerError("Timed attempt requires a verified Start/Resume flow")
         act(page, current, action="button", label="Continue", start_attempt_verified=True)
-        return _wait(page, checkpoint, lambda s: bool(s.get("questions")), seconds=seconds)
+        return _wait(page, checkpoint, lambda s: (bool(s.get("questions")) or bool(s.get("file_form"))), seconds=seconds)
     if current.get("retry_confirmation"):
         if not failed_verified:
             raise HandlerError("Retry requires a verified failed attempt")
         act(page, current, action="button", label="Continue", failed_attempt_verified=True)
-        current = _wait(page, checkpoint, lambda s: bool(s.get("questions")), seconds=seconds)
+        current = _wait(page, checkpoint, lambda s: (bool(s.get("questions")) or bool(s.get("file_form"))), seconds=seconds)
     return current
 
 
@@ -268,7 +276,7 @@ def _read_failed_feedback(page, current, checkpoint, *, seconds=30):
             raise HandlerError("Assignment failed; full feedback is unavailable, so no automatic retry")
         act(page, current, action="button", label=names[0])
     return _wait(page, checkpoint,
-                 lambda s: bool(s.get("feedback_questions")) and not s.get("questions"),
+                 lambda s: (bool(s.get("feedback_questions")) or bool(s.get("file_feedback"))) and not s.get("questions"),
                  seconds=seconds)
 
 
