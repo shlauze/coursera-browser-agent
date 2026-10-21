@@ -135,6 +135,14 @@ class AssessmentDomTests(unittest.TestCase):
     def timed_dialog(self, extra=""):
         self.page.set_content("""<div role="dialog"><h2>Start new attempt?</h2><p>You have <b>30 minutes</b> to submit up to <b>1 time</b> for this attempt.</p><p>You will have <b>2 attempts left</b> after the timer runs out. After that, you will have to wait <b>24h</b> before you can try again.</p>""" + extra + """<button onclick="window.clicked=true;this.parentElement.outerHTML='<main><fieldset><legend>Which number is even?</legend><label><input type=radio name=q>2</label><label><input type=radio name=q>3</label></fieldset></main>'">Continue</button><button onclick="this.parentElement.remove()">Cancel</button></div>""")
 
+    def test_live_time_wording_with_nbsp_is_recognized(self):
+        self.timed_dialog()
+        self.page.locator('[role=dialog]').evaluate("e => e.innerHTML=e.innerHTML.replace('timer runs out', 'time runs out').replace('out. After', 'out.&nbsp;After')")
+        self.assertTrue(inspect(self.page)['start_confirmation'])
+        result=_await_attempt(self.page,lambda:None,start_verified=True,seconds=3)
+        self.assertTrue(result['questions'])
+        self.assertTrue(self.page.evaluate('window.clicked'))
+
     def test_timed_start_requires_verified_entry(self):
         self.timed_dialog()
         self.assertTrue(inspect(self.page)['start_confirmation'])

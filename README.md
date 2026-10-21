@@ -1,6 +1,6 @@
 # Coursera Browser Agent
 
-## Новая реализация v2 — 0.2.31
+## Новая реализация v2 — 0.2.32
 
 [Код и запуск v2](browser-agent-v2/README.md) · [Настройка для другого пользователя](browser-agent-v2/SETUP_OTHER_USER.md).
 
