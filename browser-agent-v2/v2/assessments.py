@@ -133,6 +133,10 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
     for attempt in range(max_attempts):
         checkpoint()
         current = _wait_entry(page, checkpoint)
+        if current.get("start_confirmation"):
+            # Restore the landing page first to inspect the actual previous result.
+            act(page, current, action="button", label="Cancel")
+            current = _wait_entry(page, checkpoint)
         if current.get("passed") and not current.get("questions"):
             return _return_to_outline(page, current, checkpoint)
         if not current.get("questions"):
@@ -153,7 +157,7 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
             if len(names) != 1:
                 raise HandlerError("No unique Start/Resume control for this assignment")
             act(page, current, action="button", label=names[0])
-            current = _await_attempt(page, checkpoint, failed_verified=current.get("failed", False))
+            current = _await_attempt(page, checkpoint, failed_verified=current.get("failed", False), start_verified=True)
         questions = current["questions"]
         original = current["snapshot"]
         plans = []
@@ -198,13 +202,13 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
         if attempt + 1 == max_attempts or len(retries) != 1:
             raise HandlerError("Assignment failed; no verified retry flow is available within the attempt budget")
         act(page, feedback, action="button", label=retries[0])
-        _await_attempt(page, checkpoint, failed_verified=True)
+        _await_attempt(page, checkpoint, failed_verified=True, start_verified=True)
         store.set_meta(submission_key, "not_submitted")
     raise HandlerError("Assignment attempt budget exhausted")
 
 
 def _wait_entry(page, checkpoint):
-    ready = lambda s: s.get("questions") or _entry_names(s) or s.get("passed")
+    ready = lambda s: s.get("start_confirmation") or s.get("questions") or _entry_names(s) or s.get("passed")
     try:
         return _wait(page, checkpoint, ready, seconds=45)
     except HandlerError as exc:
@@ -221,8 +225,13 @@ def _wait_entry(page, checkpoint):
         return _wait(page, checkpoint, ready, seconds=90)
 
 
-def _await_attempt(page, checkpoint, *, failed_verified=False, seconds=60):
-    current = _wait(page, checkpoint, lambda s: bool(s.get("questions")) or s.get("retry_confirmation"), seconds=seconds)
+def _await_attempt(page, checkpoint, *, failed_verified=False, start_verified=False, seconds=60):
+    current = _wait(page, checkpoint, lambda s: bool(s.get("questions")) or s.get("retry_confirmation") or s.get("start_confirmation"), seconds=seconds)
+    if current.get("start_confirmation"):
+        if not start_verified:
+            raise HandlerError("Timed attempt requires a verified Start/Resume flow")
+        act(page, current, action="button", label="Continue", start_attempt_verified=True)
+        return _wait(page, checkpoint, lambda s: bool(s.get("questions")), seconds=seconds)
     if current.get("retry_confirmation"):
         if not failed_verified:
             raise HandlerError("Retry requires a verified failed attempt")

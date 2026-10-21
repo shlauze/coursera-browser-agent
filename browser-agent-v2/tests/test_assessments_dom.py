@@ -132,6 +132,42 @@ class AssessmentDomTests(unittest.TestCase):
             _wait_submit(self.page,lambda:None,state['snapshot'],[(state['questions'][0],{'selected':['o0']})],seconds=1)
         self.assertIsNone(self.page.evaluate('window.submits'))
 
+    def timed_dialog(self, extra=""):
+        self.page.set_content("""<div role="dialog"><h2>Start new attempt?</h2><p>You have <b>30 minutes</b> to submit up to <b>1 time</b> for this attempt.</p><p>You will have <b>2 attempts left</b> after the timer runs out. After that, you will have to wait <b>24h</b> before you can try again.</p>""" + extra + """<button onclick="window.clicked=true;this.parentElement.outerHTML='<main><fieldset><legend>Which number is even?</legend><label><input type=radio name=q>2</label><label><input type=radio name=q>3</label></fieldset></main>'">Continue</button><button onclick="this.parentElement.remove()">Cancel</button></div>""")
+
+    def test_timed_start_requires_verified_entry(self):
+        self.timed_dialog()
+        self.assertTrue(inspect(self.page)['start_confirmation'])
+        with self.assertRaises(HandlerError):
+            _await_attempt(self.page,lambda:None,seconds=2)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+        state=_await_attempt(self.page,lambda:None,start_verified=True,seconds=3)
+        self.assertTrue(state['questions'])
+        self.assertTrue(self.page.evaluate('window.clicked'))
+
+    def test_timed_unknown_extra_terms_never_authorize_continue(self):
+        self.timed_dialog('<p>I agree to new terms and payment.</p>')
+        state=inspect(self.page)
+        self.assertFalse(state['start_confirmation'])
+        with self.assertRaises(HandlerError):
+            act(self.page,state,action='button',label='Continue',start_attempt_verified=True)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+
+    def test_timed_duplicate_continue_is_rejected(self):
+        self.timed_dialog('<button>Continue</button>')
+        with self.assertRaises(HandlerError):
+            act(self.page,inspect(self.page),action='button',label='Continue',start_attempt_verified=True)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+
+    def test_existing_timed_dialog_is_cancelled_before_result_read(self):
+        from v2.assessments import _handle_assessment
+        self.timed_dialog()
+        with patch('v2.assessments._wait_entry',side_effect=[inspect(self.page),HandlerError('landing inspected')]):
+            with self.assertRaisesRegex(HandlerError,'landing inspected'):
+                _handle_assessment(self.page,lambda:None,groq=Mock(),store=self.store,action_id=1)
+        self.assertEqual(self.page.locator('[role=dialog]').count(),0)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+
     def test_verified_retry_dialog(self):
         self.page.set_content("""<div role="dialog">Start new attempt?<p>When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher.</p><button onclick="this.parentElement.outerHTML='<main><fieldset><legend>Which number is even?</legend><label><input type=radio name=q>2</label><label><input type=radio name=q>3</label></fieldset></main>'">Continue</button> <button>Cancel</button></div>""")
         with self.assertRaisesRegex(HandlerError,'verified failed'):

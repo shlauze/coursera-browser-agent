@@ -165,7 +165,8 @@ request => {
     return {id:q.id,text:fields[0].value};
   });
   const retryConfirmation = activeDialogs.length === 1 && /^Start new attempt\? When you submit a new attempt it will replace your previous submission\. This new attempt will only replace your previous grade if it[’']s higher\. Continue Cancel$/.test(norm(scope.innerText));
-  const result = {retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
+  const startConfirmation = activeDialogs.length === 1 && /^Start new attempt\? You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the timer runs out\. After that, you will have to wait [1-9]\d*\s*(?:h|hours?) before you can try again\. Continue\s*Cancel$/.test(norm(scope.innerText));
+  const result = {start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
     pending:/Reviewing your submission|Grading in progress|Submission received/i.test(resultScope),
     confirmation: activeDialogs.length > 0 && /^Ready to submit\? Submit Cancel$/.test(norm(scope.innerText)),
     feedback: norm(resultScope).slice(0,20000)};
@@ -196,9 +197,10 @@ request => {
     return {ok:true};
   }
   if (request.action === 'button') {
-    const allow = /^(Start assignment|Resume assignment|Start quiz|Resume quiz|Start attempt|Resume attempt|Retry|Retry assignment|Try again|View feedback|Review feedback|View submission|Feedback|Continue|Submit|Back|Go to next item)$/i;
+    const allow = /^(Start assignment|Resume assignment|Start quiz|Resume quiz|Start attempt|Resume attempt|Retry|Retry assignment|Try again|View feedback|Review feedback|View submission|Feedback|Continue|Cancel|Submit|Back|Go to next item)$/i;
     if (!allow.test(request.label)) return {error:'Unsupported assignment control',...result};
-    if (request.label === 'Continue' && (!retryConfirmation || request.failed_attempt_verified !== true)) return {error:'Unverified retry confirmation',...result};
+    if (request.label === 'Cancel' && !startConfirmation) return {error:'Unknown start confirmation',...result};
+    if (request.label === 'Continue' && !((retryConfirmation && request.failed_attempt_verified === true) || (startConfirmation && request.start_attempt_verified === true))) return {error:'Unverified retry confirmation',...result};
     const found = buttonEls.filter((e,i)=>buttons[i]===request.label);
     if (found.length !== 1) return {error:'Assignment control is missing or ambiguous',...result};
     if (request.label === 'Submit' && !questions.length && !result.confirmation) return {error:'Unknown submission confirmation',...result};
