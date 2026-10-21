@@ -164,8 +164,12 @@ request => {
     if (['single','multiple'].includes(q.kind)) return {id:q.id,selected:fields.flatMap((e,n)=>(e.matches('input')?e.checked:e.getAttribute('aria-checked')==='true')?[`o${n}`]:[])};
     return {id:q.id,text:fields[0].value};
   });
-  const retryConfirmation = activeDialogs.length === 1 && /^Start new attempt\? When you submit a new attempt it will replace your previous submission\. This new attempt will only replace your previous grade if it[’']s higher\. Continue Cancel$/.test(norm(scope.innerText));
-  const startConfirmation = activeDialogs.length === 1 && /^Start new attempt\? You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the time(?:r)? runs out\. After that, you will have to wait [1-9]\d*\s*(?:h|hours?) before you can try again\. Continue\s*Cancel$/.test(norm(scope.innerText));
+  const replacementNotice = String.raw`When you submit a new attempt it will replace your previous submission\. This new attempt will only replace your previous grade if it[’']s higher\.`;
+  const duration = String.raw`(?:\d+\s*(?:h|hours?)(?:\s*\d+\s*(?:m|minutes?))?|\d+\s*(?:m|minutes?))`;
+  const timerNotice = String.raw`You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the time(?:r)? runs out\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
+  const dialogText = norm(scope.innerText);
+  const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: ` + timerNotice + String.raw`)? Continue\s*Cancel$`).test(dialogText);
+  const startConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + timerNotice + String.raw` Continue\s*Cancel$`).test(dialogText);
   const result = {start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
     pending:/Reviewing your submission|Grading in progress|Submission received/i.test(resultScope),
     confirmation: activeDialogs.length > 0 && /^Ready to submit\? Submit Cancel$/.test(norm(scope.innerText)),
@@ -199,7 +203,7 @@ request => {
   if (request.action === 'button') {
     const allow = /^(Start assignment|Resume assignment|Start quiz|Resume quiz|Start attempt|Resume attempt|Retry|Retry assignment|Try again|View feedback|Review feedback|View submission|Feedback|Continue|Cancel|Submit|Back|Go to next item)$/i;
     if (!allow.test(request.label)) return {error:'Unsupported assignment control',...result};
-    if (request.label === 'Cancel' && !startConfirmation) return {error:'Unknown start confirmation',...result};
+    if (request.label === 'Cancel' && !startConfirmation && !retryConfirmation) return {error:'Unknown start confirmation',...result};
     if (request.label === 'Continue' && !((retryConfirmation && request.failed_attempt_verified === true) || (startConfirmation && request.start_attempt_verified === true))) return {error:'Unverified retry confirmation',...result};
     const found = buttonEls.filter((e,i)=>buttons[i]===request.label);
     if (found.length !== 1) return {error:'Assignment control is missing or ambiguous',...result};

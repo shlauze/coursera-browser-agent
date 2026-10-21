@@ -133,7 +133,7 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
     for attempt in range(max_attempts):
         checkpoint()
         current = _wait_entry(page, checkpoint)
-        if current.get("start_confirmation"):
+        if current.get("start_confirmation") or current.get("retry_confirmation"):
             # Restore the landing page first to inspect the actual previous result.
             act(page, current, action="button", label="Cancel")
             current = _wait_entry(page, checkpoint)
@@ -208,7 +208,7 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
 
 
 def _wait_entry(page, checkpoint):
-    ready = lambda s: s.get("start_confirmation") or s.get("questions") or _entry_names(s) or s.get("passed")
+    ready = lambda s: s.get("retry_confirmation") or s.get("start_confirmation") or s.get("questions") or _entry_names(s) or s.get("passed")
     try:
         return _wait(page, checkpoint, ready, seconds=45)
     except HandlerError as exc:

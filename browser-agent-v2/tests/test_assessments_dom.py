@@ -176,6 +176,30 @@ class AssessmentDomTests(unittest.TestCase):
         self.assertEqual(self.page.locator('[role=dialog]').count(),0)
         self.assertIsNone(self.page.evaluate('window.clicked'))
 
+    def test_combined_retry_requires_feedback_even_with_start_permission(self):
+        for duration in ['24h','23h 59m','1h 2m','59m']:
+            self.timed_dialog()
+            self.page.locator('[role=dialog]').evaluate("(e,d)=>{e.innerHTML=e.innerHTML.replace('</h2>', '</h2><p>When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher.</p>').replace('24h',d);}",duration)
+            state=inspect(self.page)
+            self.assertTrue(state['retry_confirmation'],duration)
+            self.assertFalse(state['start_confirmation'])
+            with self.assertRaises(HandlerError):
+                _await_attempt(self.page,lambda:None,start_verified=True,seconds=2)
+            self.assertIsNone(self.page.evaluate('window.clicked'))
+            state=_await_attempt(self.page,lambda:None,failed_verified=True,seconds=3)
+            self.assertTrue(state['questions'])
+            self.page.evaluate('window.clicked=undefined')
+
+    def test_existing_retry_dialog_cancelled_before_feedback_reread(self):
+        from v2.assessments import _handle_assessment
+        self.timed_dialog()
+        self.page.locator('[role=dialog]').evaluate("e=>e.innerHTML=e.innerHTML.replace('</h2>', '</h2><p>When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher.</p>')")
+        with patch('v2.assessments._wait_entry',side_effect=[inspect(self.page),HandlerError('reread result')]):
+            with self.assertRaisesRegex(HandlerError,'reread result'):
+                _handle_assessment(self.page,lambda:None,groq=Mock(),store=self.store,action_id=1)
+        self.assertEqual(self.page.locator('[role=dialog]').count(),0)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+
     def test_verified_retry_dialog(self):
         self.page.set_content("""<div role="dialog">Start new attempt?<p>When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher.</p><button onclick="this.parentElement.outerHTML='<main><fieldset><legend>Which number is even?</legend><label><input type=radio name=q>2</label><label><input type=radio name=q>3</label></fieldset></main>'">Continue</button> <button>Cancel</button></div>""")
         with self.assertRaisesRegex(HandlerError,'verified failed'):
