@@ -1,0 +1,18 @@
+{
+  "plugin_flow.py": {
+    "source_sha256": "df7ce35b0f9dd104a4fe4ba3ff7a67cf7324094b065f3489e19e5355a432e5fe",
+    "source": "browser-agent/plugin_flow.py"
+  },
+  "scorm_flow.py": {
+    "source_sha256": "46b5eab265dadb4327fa40b46a6a23f85c82d3b65f7d64914d55c8a7c4349f0b",
+    "source": "browser-agent/scorm_flow.py"
+  },
+  "rise_scorm_flow.py": {
+    "source_sha256": "6c3b6ca447bd0d89993bda3bd0d802cb53487e94e9404fca185a0464a48ce1e9",
+    "source": "browser-agent/rise_scorm_flow.py"
+  },
+  "rise_best_practices.py": {
+    "source_sha256": "739fa09a9207a68b928253ee95e6962c0ffd50983ec00dece641f0f87f2671cb",
+    "source": "browser-agent/rise_best_practices.py"
+  }
+}

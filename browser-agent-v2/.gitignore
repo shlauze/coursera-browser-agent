@@ -1,0 +1,17 @@
+.venv/
+profile/
+data/
+logs/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local backups and credentials must never be published
+backups/
+.env
+.env.*
+!.env.example
+*.dpapi
+*.sqlite3*
+*.db
+*.log

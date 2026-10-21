@@ -1,0 +1,4 @@
+-r requirements.txt
+# Optional local integration fixture, never needed on the Coursera lab server.
+nbclassic>=1.3,<2
+ipykernel>=7,<8

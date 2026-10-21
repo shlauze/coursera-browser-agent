@@ -1,0 +1,344 @@
+"""Bounded classic-Jupyter execution. Generated code runs only in the lab kernel."""
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import time
+import uuid
+from urllib.parse import urlsplit
+
+from .handlers import HandlerError, HandlerResult, _click_one_of
+
+BRIDGE = Path(__file__).with_name('notebook_bridge.js').read_text(encoding='utf-8')
+PLACEHOLDER = re.compile(r'YOUR CODE HERE|START CODE HERE|BEGIN SOLUTION|raise\s+NotImplementedError|#\s*TODO\b', re.I)
+
+
+def source(cell):
+    value = cell.get('source', '')
+    return ''.join(value) if isinstance(value, list) else value
+
+
+def editable(cell):
+    meta = cell.get('metadata', {})
+    grader = meta.get('nbgrader', {})
+    return (cell.get('cell_type') == 'code' and meta.get('editable') is not False
+            and not grader.get('locked') and not grader.get('grade')
+            and (grader.get('solution') is True or bool(PLACEHOLDER.search(source(cell)))))
+
+
+def cell_identity(cell):
+    meta = {k: v for k, v in cell.get('metadata', {}).items()
+            if k not in {'trusted', 'collapsed', 'scrolled', 'execution', 'ExecuteTime'}}
+    return {'id': cell.get('id'), 'cell_type': cell['cell_type'], 'metadata': meta}
+
+
+def solution_manifest(document, previous=None):
+    """Remember designated solution cells after their placeholder comments disappear."""
+    cells = document['cells']
+    if previous:
+        if len(cells) != len(previous['cells']):
+            raise HandlerError('Notebook structure differs from the saved solution manifest')
+        for index, cell in enumerate(cells):
+            saved = previous['cells'][index]
+            if cell_identity(cell) != cell_identity(saved) or (
+                str(index) not in previous['solutions'] and source(cell) != source(saved)
+            ):
+                raise HandlerError('Notebook instructor cells or permissions changed since the saved manifest')
+        return {int(i): c for i, c in previous['solutions'].items()}, previous
+    originals = {i: c for i, c in enumerate(cells) if editable(c)}
+    manifest = {'cells': [{**cell_identity(c), 'source': source(c)} for c in cells],
+                'solutions': {str(i): {**cell_identity(c), 'source': source(c)} for i, c in originals.items()}}
+    return originals, manifest
+
+
+def validate_code(original, code):
+    if not isinstance(code, str) or not code.strip() or len(code) > 40000:
+        raise HandlerError('Generated cell source is empty or too large')
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        raise HandlerError(f'Generated Python has a syntax error on line {exc.lineno}') from exc
+    # A conservative sanity check, not a sandbox. Execution remains remote.
+    forbidden = {'eval', 'exec', '__import__', 'compile', 'input', 'breakpoint'}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
+            if name in forbidden or name in {'system', 'popen', 'rmtree', 'unlink', 'remove', 'exit', 'kill'}:
+                raise HandlerError('Generated code contains an unsupported interactive or destructive operation')
+    # Keep instructor scaffolding outside explicit answer delimiters byte-for-byte.
+    pattern = re.compile(r'(?m)^[^\n]*(?:START CODE HERE|BEGIN SOLUTION)[^\n]*\n.*?^[^\n]*(?:END CODE HERE|END SOLUTION)[^\n]*$', re.S)
+    regions = list(pattern.finditer(original))
+    if regions:
+        replacements = list(pattern.finditer(code))
+        if len(replacements) != len(regions):
+            raise HandlerError('Solution delimiters were changed')
+        def outside(text, matches):
+            parts, pos = [], 0
+            for match in matches:
+                block = match.group()
+                parts.append(text[pos:match.start()] + block.split('\n', 1)[0] + '\n' + block.rsplit('\n', 1)[-1])
+                pos = match.end()
+            return parts + [text[pos:]]
+        if outside(original, regions) != outside(code, replacements):
+            raise HandlerError('Instructor code outside the solution region was changed')
+    try:
+        prior = ast.parse(original)
+    except SyntaxError:
+        prior = None
+    if prior:
+        def signatures(root):
+            return {(type(n).__name__, n.name, ast.dump(n.args)) for n in ast.walk(root)
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        if not signatures(prior).issubset(signatures(tree)):
+            raise HandlerError('An existing function signature was changed')
+    return code
+
+
+class NotebookExecutor:
+    def __init__(self, frame, groq, store, action_id, checkpoint, *, cell_timeout=900,
+                 total_timeout=3600, max_repairs=3):
+        self.frame, self.groq, self.store = frame, groq, store
+        self.action_id, self.checkpoint = action_id, checkpoint
+        self.cell_timeout, self.total_timeout, self.max_repairs = cell_timeout, total_timeout, max_repairs
+        self.path = None
+        self.deadline = time.monotonic() + total_timeout
+        self.directory = store.path.parent / 'labs' / str(action_id)
+        self.directory.mkdir(parents=True, exist_ok=True)
+
+    def call(self, action, **values):
+        result = self.frame.evaluate(BRIDGE, {'action': action, 'path': self.path, **values})
+        if result.get('error'):
+            raise HandlerError(result['error'])
+        return result
+
+    def check(self):
+        self.checkpoint()
+        if time.monotonic() >= self.deadline:
+            raise HandlerError('Lab execution time budget exhausted')
+
+    def unchanged_snapshot(self, prior):
+        current = self.call('snapshot')
+        if current['signature'] != prior['signature']:
+            raise HandlerError('Notebook source or metadata changed during execution')
+        return current
+
+    def artifact(self, name, value, *, exclusive=False):
+        path = self.directory / name
+        with path.open('x' if exclusive else 'w', encoding='utf-8') as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return path
+
+    def patch(self, snapshot, originals, *, target=None, failure=None):
+        self.check()
+        context = {'notebook': [{'index': i, 'type': c['cell_type'], 'source': source(c)}
+                                for i, c in enumerate(snapshot['document']['cells'])],
+                   'editable_cells': sorted(originals), 'target': target, 'failure': failure,
+                   'grader_feedback': self.store.get_meta(f'feedback:{self.action_id}') or ''}
+        if len(json.dumps(context)) > 120000:
+            raise HandlerError('Notebook context exceeds the supported Groq request size')
+        result = self.groq.notebook_patch(context)
+        index = result.get('index')
+        if type(index) is not int or index not in originals or (target is not None and index != target):
+            raise HandlerError('Model selected a protected or unrelated cell')
+        code = validate_code(source(originals[index]), result.get('code'))
+        self.check()
+        self.call('edit', signature=snapshot['signature'], index=index, code=code)
+        self.call('save')
+        self.store.record_event('INFO', 'LAB_CELL_UPDATED', f'Lab solution cell {index + 1} updated and saved')
+        return self.call('snapshot')
+
+    def run_cell(self, snapshot, index):
+        token = uuid.uuid4().hex
+        key = self.execution_key
+        self.store.set_meta(key, {'status': 'starting', 'path': self.path, 'index': index, 'token': token})
+        self.call('run', signature=snapshot['signature'], index=index, token=token)
+        deadline = min(self.deadline, time.monotonic() + self.cell_timeout)
+        try:
+            while time.monotonic() < deadline:
+                self.check()
+                result = self.call('poll', token=token)
+                if result.get('reply') and result.get('idle') and result.get('kernel') == 'idle':
+                    self.store.set_meta(key, {'status': 'finished', 'path': self.path, 'index': index})
+                    return result
+                self.frame.page.wait_for_timeout(500)
+            raise HandlerError(f'Lab cell {index + 1} exceeded its execution time limit')
+        except BaseException:
+            # Interrupt only our own tracked execution; never an unrelated busy kernel.
+            try:
+                self.call('interrupt', token=token)
+            except Exception:
+                pass
+            self.store.set_meta(key, {'status': 'uncertain', 'path': self.path, 'index': index, 'token': token})
+            raise
+
+    def execute(self):
+        self.check()
+        snapshot = self.call('snapshot')
+        self.path = snapshot['path']
+        action = self.store.get_action(self.action_id) or {}
+        identity = str(action.get('course_id', self.action_id)) + ':' + self.path
+        self.execution_key = 'lab_execution:' + hashlib.sha256(identity.encode()).hexdigest()
+        if snapshot['kernel'] != 'idle':
+            raise HandlerError('Lab kernel is not idle; existing work will not be executed twice')
+        language = snapshot['document'].get('metadata', {}).get('language_info', {}).get('name', '')
+        if language.lower() != 'python':
+            raise HandlerError('Only Python classic Jupyter labs are currently supported')
+        pending = self.store.get_meta(self.execution_key)
+        if pending and pending.get('status') != 'finished':
+            raise HandlerError('A previous lab execution is unresolved; inspect its saved report')
+        original = snapshot['document']
+        manifest_key = self.execution_key.replace('lab_execution:', 'lab_manifest:', 1)
+        originals, manifest = solution_manifest(original, self.store.get_meta(manifest_key))
+        if not originals:
+            raise HandlerError('Notebook has no explicitly editable solution cells')
+        self.artifact('original-' + uuid.uuid4().hex + '.ipynb', original, exclusive=True)
+        self.store.set_meta(manifest_key, manifest)
+        self.store.record_event('INFO', 'LAB_BACKUP', 'Original notebook backed up before editing')
+        for index, cell in originals.items():
+            if PLACEHOLDER.search(source(snapshot['document']['cells'][index])):
+                snapshot = self.patch(snapshot, originals, target=index)
+        for attempt in range(self.max_repairs + 1):
+            self.check()
+            self.call('restart', signature=snapshot['signature'])
+            ready_deadline = min(self.deadline, time.monotonic() + 60)
+            while time.monotonic() < ready_deadline:
+                self.check()
+                snapshot = self.unchanged_snapshot(snapshot)
+                if snapshot['kernel'] == 'idle':
+                    break
+                self.frame.page.wait_for_timeout(500)
+            else:
+                raise HandlerError('Lab kernel did not become ready after restart')
+            failure = None
+            results = []
+            for index, cell in enumerate(snapshot['document']['cells']):
+                if cell['cell_type'] != 'code' or not source(cell).strip():
+                    continue
+                result = self.run_cell(snapshot, index)
+                results.append({'index': index, **result})
+                self.artifact('execution.json', results)
+                if result['reply'].get('status') != 'ok':
+                    failure = {'index': index, 'reply': result['reply'], 'outputs': result.get('outputs', [])}
+                    break
+                snapshot = self.unchanged_snapshot(snapshot)
+            self.call('save')
+            snapshot = self.unchanged_snapshot(snapshot)
+            self.artifact('working.ipynb', snapshot['document'])
+            if failure is None:
+                report = {'status': 'executed', 'path': self.path, 'cells_run': len(results), 'repairs': attempt,
+                          'source_sha256': hashlib.sha256(snapshot['signature'].encode()).hexdigest()}
+                self.store.set_meta(f'lab_report:{self.action_id}', report)
+                self.store.record_event('INFO', 'LAB_EXECUTED', f'Executed {len(results)} code cells; saved notebook verified')
+                return report
+            self.store.set_meta(f'lab_report:{self.action_id}', {'status': 'failed', 'failure': failure})
+            if attempt == self.max_repairs:
+                raise HandlerError('Lab repair budget exhausted; notebook and execution feedback saved')
+            self.store.record_event('WARNING', 'LAB_REPAIR', f'Repair {attempt + 1}: error in cell {failure["index"] + 1}')
+            snapshot = self.patch(snapshot, originals, failure=failure)
+
+
+def find_notebook(pages):
+    matches = []
+    for page in pages:
+        if page.is_closed():
+            continue
+        for frame in page.frames:
+            try:
+                if frame.evaluate('() => !!(globalThis.Jupyter?.notebook?._fully_loaded && Jupyter.notebook.kernel?.is_connected())'):
+                    matches.append((page, frame))
+            except Exception:
+                continue
+    if len(matches) > 1:
+        raise HandlerError('Multiple notebook editors opened; unable to select the assignment safely')
+    return matches[0] if matches else None
+
+
+def wait_for_course_mark(page, expected_url, checkpoint, *, checks=24, interval_ms=5000):
+    from .outline import scan_outline, OutlineError
+    for attempt in range(checks):
+        checkpoint()
+        try:
+            matches = [item for item in scan_outline(page).items
+                       if item.url and urlsplit(item.url).path.rstrip('/') == urlsplit(expected_url).path.rstrip('/')]
+            if len(matches) == 1 and matches[0].completed:
+                return
+        except OutlineError:
+            pass  # The course UI may still be rendering after returning from the lab.
+        if attempt + 1 < checks:
+            for delay in range(0, interval_ms, 500):
+                checkpoint()
+                page.wait_for_timeout(min(500, interval_ms - delay))
+            page.reload(wait_until='domcontentloaded', timeout=30000)
+    raise HandlerError('Lab submitted but Coursera has not confirmed completion; no automatic resubmission')
+
+
+def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
+    if groq is None or store is None or action_id is None:
+        raise HandlerError('Lab executor requires Groq and durable action state')
+    if store.get_meta(f'submission:{action_id}') in {'submitting', 'submitted'}:
+        raise HandlerError('Lab submission is awaiting reconciliation; will not submit again')
+    store.set_meta(f'submission:{action_id}', 'not_submitted')
+    checkpoint()
+    before = set(page.context.pages)
+    return_url = page.url
+    origin = urlsplit(page.url)
+    assignment_path = re.sub(r'/(?:lab|submission)/?$', '', origin.path).rstrip('/')
+    if origin.path.rstrip('/').endswith('/lab'):
+        return_url = origin._replace(path=assignment_path, query='', fragment='').geturl()
+    _click_one_of(page, ('Launch lab', 'Resume lab'), optional=True)
+    deadline = time.monotonic() + 120
+    match = None
+    while time.monotonic() < deadline:
+        checkpoint()
+        # Only the originating page and tabs created by this launch are eligible.
+        candidates = [page] + [p for p in page.context.pages if p is not page and (
+            p not in before or (urlsplit(p.url).netloc == origin.netloc
+                                and urlsplit(p.url).path == assignment_path + '/lab'))]
+        match = find_notebook(candidates)
+        if match:
+            break
+        page.wait_for_timeout(500)
+    if not match:
+        raise HandlerError('No supported classic Jupyter editor loaded within 120 seconds')
+    lab, frame = match
+    executor = NotebookExecutor(frame, groq, store, action_id, checkpoint)
+    report = executor.execute()
+    checkpoint()
+    current = executor.call('snapshot')
+    if hashlib.sha256(current['signature'].encode()).hexdigest() != report['source_sha256']:
+        raise HandlerError('Notebook changed after validation; submission cancelled')
+    executor.call('save', signature=current['signature'])
+    # Submission is distinct from local execution success. The runner checks the
+    # actual Coursera outline afterward and retains ambiguous submission intent.
+    text = lab.locator('body').inner_text(timeout=10000)
+    if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
+        raise HandlerError('Notebook prepared; personal authorship confirmation requires the learner')
+    button = lab.get_by_role('button', name=re.compile(r'^Submit assignment$', re.I))
+    if button.count() != 1 or not button.is_enabled():
+        raise HandlerError('Notebook prepared; no unique enabled Submit assignment control')
+    store.set_meta(f'submission:{action_id}', 'submitting')
+    button.click(timeout=10000)
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        checkpoint()
+        text = lab.locator('body').inner_text(timeout=10000)
+        if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
+            raise HandlerError('Submission dialog requires personal authorship confirmation')
+        if re.search(r'(?:successfully submitted|submission received|assignment submitted)', text, re.I):
+            store.set_meta(f'submission:{action_id}', 'submitted')
+            page.bring_to_front()
+            page.goto(return_url, wait_until='domcontentloaded', timeout=30000)
+            action = store.get_action(action_id)
+            if action and (action.get('payload') or {}).get('url'):
+                store.record_event('INFO', 'LAB_GRADING_WAIT', 'Lab submitted; waiting for the Coursera completion mark')
+                wait_for_course_mark(page, action['payload']['url'], checkpoint)
+                store.set_meta(f'submission:{action_id}', 'passed')
+            return HandlerResult('Notebook executed, saved and submitted; awaiting Coursera outline verification')
+        lab.wait_for_timeout(500)
+    raise HandlerError('Lab submission result is unclear; intent saved without a duplicate submission')
