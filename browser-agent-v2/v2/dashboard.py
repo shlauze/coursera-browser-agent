@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 from .control import Control, ControlError
 from .store import Store
 from . import __version__
+from .token_usage import usage_summary, usage_html
 
 
 _CSS = """
@@ -132,7 +133,7 @@ class Dashboard:
             def do_GET(self) -> None:
                 path = urlsplit(self.path).path
                 if path == "/api/status":
-                    self._json(200, {**dashboard.store.snapshot(), "version": __version__, "runtime": runtime_status(dashboard.store)})
+                    self._json(200, {**dashboard.store.snapshot(), "version": __version__, "runtime": runtime_status(dashboard.store), "groq_usage": usage_summary(dashboard.store)})
                 elif path == "/":
                     query = parse_qs(urlsplit(self.path).query)
                     notice = query.get("notice", [""])[0][:200]
@@ -215,6 +216,7 @@ class Dashboard:
         snapshot = self.store.snapshot()
         state = snapshot["control_state"]
         runtime = runtime_html(runtime_status(self.store))
+        usage = usage_html(usage_summary(self.store))
         labels = {
             "running": "Работает", "paused": "Пауза",
             "stop_requested": "Останавливается", "stopped": "Остановлен",
@@ -277,7 +279,7 @@ class Dashboard:
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="8">
 <title>Coursera Agent · Панель управления</title><style>{_CSS}</style></head><body>
 <header><h1>Coursera Agent</h1><p>Локальная панель управления · v2 {__version__}</p><p>Режим: тесты, задания и лабораторные. Видео и лекции пропускаются.</p></header>
-<main>{notice_html}{confirmation_html}{runtime}<div class="grid"><section class="panel"><h2>Состояние</h2>
+<main>{notice_html}{confirmation_html}{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
 <span class="status {escape(state)}">{escape(labels.get(state,state))}</span>
 <div class="buttons">{''.join(controls)}</div></section>
 <section class="panel"><h2>Ожидающие действия</h2>{pending_html}</section></div>

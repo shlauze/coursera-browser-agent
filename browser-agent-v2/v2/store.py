@@ -95,6 +95,18 @@ class Store:
                     key TEXT PRIMARY KEY,
                     value_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS groq_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    observed_at TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    course_id TEXT,
+                    action_id INTEGER,
+                    model TEXT NOT NULL,
+                    http_status INTEGER NOT NULL,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    total_tokens INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS courses (
                     course_id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,

@@ -220,7 +220,12 @@ class GroqClient:
         while True:
             self._cooldown()
             self.checkpoint()
+            # Capture attribution before the request; record even invalid/truncated responses.
+            course_id = self.store.get_meta("current_course_id")
+            action_id = self.store.get_meta("current_action_id")
             status, headers, body = self.transport(key, payload)
+            from .token_usage import record_usage
+            record_usage(self.store, body, status, payload.get("model", self.model), course_id, action_id)
             headers = {k.lower(): v for k, v in headers.items()}
             limits = {k: str(v)[:80] for k, v in headers.items()
                       if k in {"x-ratelimit-limit-requests", "x-ratelimit-remaining-requests",
