@@ -77,6 +77,7 @@ class UsageTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;",usage_html(data))
         html=Dashboard(self.s,Control(self.s))._render()
         self.assertIn("Расход токенов Groq",html)
-        self.assertIn("0.2.40",html)
+        from v2 import __version__
+        self.assertIn(__version__,html)
 
 if __name__ == "__main__": unittest.main()

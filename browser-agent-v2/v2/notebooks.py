@@ -11,7 +11,7 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
-from .handlers import HandlerError, HandlerResult, _click_one_of
+from .handlers import HandlerError, HandlerResult, _click_one_of, _named_control
 
 BRIDGE = Path(__file__).with_name('notebook_bridge.js').read_text(encoding='utf-8')
 PLACEHOLDER = re.compile(r'YOUR CODE HERE|START CODE HERE|BEGIN SOLUTION|raise\s+NotImplementedError|#\s*TODO\b', re.I)
@@ -177,9 +177,27 @@ class NotebookExecutor:
             self.store.set_meta(key, {'status': 'uncertain', 'path': self.path, 'index': index, 'token': token})
             raise
 
+    def ready_snapshot(self, timeout=60):
+        snapshot = self.call('snapshot')
+        deadline = min(self.deadline, time.monotonic() + timeout)
+        announced = False
+        while snapshot['kernel'] != 'idle':
+            self.check()
+            if time.monotonic() >= deadline:
+                raise HandlerError('Lab kernel did not become idle within readiness timeout; no execution started')
+            if not announced:
+                self.store.record_event('INFO', 'LAB_KERNEL_WAIT', 'Waiting for kernel readiness without running or interrupting cells')
+                announced = True
+            self.frame.page.wait_for_timeout(500)
+            current = self.call('snapshot')
+            if current['path'] != snapshot['path'] or current['signature'] != snapshot['signature']:
+                raise HandlerError('Notebook changed while waiting for kernel readiness')
+            snapshot = current
+        return snapshot
+
     def execute(self):
         self.check()
-        snapshot = self.call('snapshot')
+        snapshot = self.ready_snapshot()
         self.path = snapshot['path']
         action = self.store.get_action(self.action_id) or {}
         identity = str(action.get('course_id', self.action_id)) + ':' + self.path
@@ -278,6 +296,39 @@ def wait_for_course_mark(page, expected_url, checkpoint, *, checks=24, interval_
     raise HandlerError('Lab submitted but Coursera has not confirmed completion; no automatic resubmission')
 
 
+def wait_for_notebook(page, checkpoint, store, before, origin, assignment_path):
+    # A slow React assignment page may expose Launch lab well after two seconds.
+    # Do not wait for an editor unless launch actually happened or /lab is open.
+    launched = origin.path.rstrip('/').endswith('/lab')
+    deadline = time.monotonic() + (120 if launched else 30)
+    while time.monotonic() < deadline:
+        checkpoint()
+        candidates = [page] + [p for p in page.context.pages if p is not page and (
+            p not in before or (urlsplit(p.url).netloc == origin.netloc
+                                and urlsplit(p.url).path == assignment_path + '/lab'))]
+        match = find_notebook(candidates)
+        if match:
+            store.record_event('INFO', 'LAB_EDITOR_READY', 'Classic Jupyter editor and connected kernel detected')
+            return match
+        if not launched:
+            controls = [_named_control(page, name) for name in ('Launch lab', 'Resume lab')]
+            count = sum(control.count() for control in controls)
+            if count > 1:
+                raise HandlerError('Multiple lab launch controls; assignment selection is ambiguous')
+            if count == 1:
+                control = next(control for control in controls if control.count())
+                if control.is_enabled():
+                    checkpoint()
+                    control.click(timeout=10000)
+                    launched = True
+                    deadline = time.monotonic() + 120
+                    store.record_event('INFO', 'LAB_LAUNCHED', 'Launch lab clicked once; waiting for Jupyter and kernel')
+        page.wait_for_timeout(500)
+    if not launched:
+        raise HandlerError('Lab launch control did not become available within 30 seconds; editor was not opened')
+    raise HandlerError('Lab launched but no supported classic Jupyter editor with connected kernel loaded within 120 seconds')
+
+
 def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
     if groq is None or store is None or action_id is None:
         raise HandlerError('Lab executor requires Groq and durable action state')
@@ -291,21 +342,7 @@ def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
     assignment_path = re.sub(r'/(?:lab|submission)/?$', '', origin.path).rstrip('/')
     if origin.path.rstrip('/').endswith('/lab'):
         return_url = origin._replace(path=assignment_path, query='', fragment='').geturl()
-    _click_one_of(page, ('Launch lab', 'Resume lab'), optional=True)
-    deadline = time.monotonic() + 120
-    match = None
-    while time.monotonic() < deadline:
-        checkpoint()
-        # Only the originating page and tabs created by this launch are eligible.
-        candidates = [page] + [p for p in page.context.pages if p is not page and (
-            p not in before or (urlsplit(p.url).netloc == origin.netloc
-                                and urlsplit(p.url).path == assignment_path + '/lab'))]
-        match = find_notebook(candidates)
-        if match:
-            break
-        page.wait_for_timeout(500)
-    if not match:
-        raise HandlerError('No supported classic Jupyter editor loaded within 120 seconds')
+    match = wait_for_notebook(page, checkpoint, store, before, origin, assignment_path)
     lab, frame = match
     executor = NotebookExecutor(frame, groq, store, action_id, checkpoint)
     report = executor.execute()
