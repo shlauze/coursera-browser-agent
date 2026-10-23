@@ -19,12 +19,25 @@ import uuid
 from unittest.mock import Mock, patch
 
 from v2.handlers import HandlerError, handle
-from v2.notebooks import BRIDGE, NotebookExecutor, editable, validate_code, handle_programming_lab, solution_manifest, wait_for_course_mark, needs_solution
+from v2.notebooks import BRIDGE, NotebookExecutor, editable, validate_code, handle_programming_lab, solution_manifest, wait_for_course_mark, needs_solution, apply_solution_regions
 from v2.policy import ItemAction
 from v2.store import Store
 
 
 class NotebookPolicyTests(unittest.TestCase):
+    def test_region_assembly_preserves_scaffolding_and_all_regions(self):
+        original = ('def solve(x):\n    y = x\n    # YOUR CODE STARTS HERE\n\n    # YOUR CODE ENDS HERE\n'
+                    '    assert y > 0\n    # YOUR CODE STARTS HERE\n\n    # YOUR CODE ENDS HERE\n    return y\n')
+        replacements = [{'number': 1, 'code': 'y += 1'}, {'number': 0, 'code': 'y *= 2'}]
+        result = apply_solution_regions(original, replacements)
+        self.assertIn('    assert y > 0\n', result)
+        self.assertIn('    y *= 2\n    # YOUR CODE ENDS HERE', result)
+        self.assertFalse(needs_solution(result))
+        for invalid in (replacements[:1], [replacements[0], replacements[0]],
+                        [{'number': 0, 'code': 'pass'}, {'number': 9, 'code': 'y=1'}]):
+            with self.assertRaises(HandlerError):
+                apply_solution_regions(original, invalid)
+
     def test_coursera_starts_ends_regions_are_prepared_and_protected(self):
         original = 'def solve(x):\n    # YOUR CODE STARTS HERE\n    \n    # YOUR CODE ENDS HERE\n    return result\n'
         self.assertTrue(editable({'cell_type': 'code', 'source': original}))
@@ -218,7 +231,8 @@ class RealNotebookTests(unittest.TestCase):
         (self.root / 'four.ipynb').write_text(json.dumps(document), encoding='utf-8')
         self.page.goto(self.url + '/notebooks/four.ipynb?token=' + self.token)
         self.page.wait_for_function('() => !!globalThis.Jupyter?.notebook?._fully_loaded && Jupyter.notebook.kernel?.is_connected()', timeout=30000)
-        self.groq.notebook_patch.side_effect = [{'index': i, 'code': code} for i, code in enumerate(solutions)]
+        self.groq.notebook_patch.side_effect = [
+            {'index': i, 'regions': [{'number': 0, 'code': f'result = x + {i}'}]} for i in range(4)]
         executor = NotebookExecutor(self.frame, self.groq, self.store, 2, lambda: None,
                                     cell_timeout=20, total_timeout=120, max_repairs=0)
         self.assertEqual(executor.execute()['repairs'], 0)

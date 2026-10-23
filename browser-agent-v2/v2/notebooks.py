@@ -44,6 +44,30 @@ def needs_solution(code):
     return False
 
 
+def apply_solution_regions(original, replacements):
+    regions = list(SOLUTION_REGIONS.finditer(original))
+    if not regions or not isinstance(replacements, list) or len(replacements) != len(regions):
+        raise HandlerError('Model must supply every solution region exactly once')
+    mapped = {}
+    for replacement in replacements:
+        if not isinstance(replacement, dict):
+            raise HandlerError('Invalid solution region replacement')
+        number, code = replacement.get('number'), replacement.get('code')
+        if (type(number) is not int or number not in range(len(regions)) or number in mapped
+                or not isinstance(code, str) or not code.strip() or len(code) > 40000):
+            raise HandlerError('Invalid or duplicate solution region replacement')
+        if PLACEHOLDER.search(code):
+            raise HandlerError('Solution region still contains a placeholder or delimiter')
+        mapped[number] = code
+    result = original
+    for number in reversed(range(len(regions))):
+        region = regions[number]
+        indent = re.match(r'[ \t]*', region.group().splitlines()[0]).group()
+        body = textwrap.indent(textwrap.dedent(mapped[number]).strip(), indent) + '\n'
+        result = result[:region.start('body')] + body + result[region.end('body'):]
+    return validate_code(original, result)
+
+
 def source(cell):
     value = cell.get('source', '')
     return ''.join(value) if isinstance(value, list) else value
@@ -167,13 +191,20 @@ class NotebookExecutor:
                                 for i, c in enumerate(snapshot['document']['cells'])],
                    'editable_cells': sorted(originals), 'target': target, 'failure': failure,
                    'grader_feedback': self.store.get_meta(f'feedback:{self.action_id}') or ''}
+        context['solution_regions'] = {
+            str(i): [{'number': n, 'source': region.group('body')} for n, region in enumerate(regions)]
+            for i in originals
+            if (regions := list(SOLUTION_REGIONS.finditer(source(snapshot['document']['cells'][i]))))}
         if len(json.dumps(context)) > 120000:
             raise HandlerError('Notebook context exceeds the supported Groq request size')
         result = self.groq.notebook_patch(context)
         index = result.get('index')
         if type(index) is not int or index not in originals or (target is not None and index != target):
             raise HandlerError('Model selected a protected or unrelated cell')
-        code = validate_code(source(originals[index]), result.get('code'))
+        proposed = result.get('code')
+        if 'regions' in result:
+            proposed = apply_solution_regions(source(snapshot['document']['cells'][index]), result['regions'])
+        code = validate_code(source(originals[index]), proposed)
         self.check()
         self.call('edit', signature=snapshot['signature'], index=index, code=code)
         self.call('save')

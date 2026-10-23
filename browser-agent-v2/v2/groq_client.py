@@ -391,6 +391,9 @@ class GroqClient:
         if focused != context:
             self.store.record_event('INFO', 'LAB_CONTEXT_FOCUSED', 'Request limited to target/failure dependencies and instructions; notebook unchanged')
         context = focused
+        region_map = context.get('solution_regions', {})
+        selected = [context['target']] if context.get('target') is not None else context.get('editable_cells', [])
+        region_mode = bool(selected) and all(str(i) in region_map for i in selected)
         payload = {
             "model": self.model, "temperature": 0.1, "max_completion_tokens": 2048,
             "response_format": self._format("notebook_patch", {
@@ -408,6 +411,18 @@ class GroqClient:
                  "For repairs use the observed traceback and dependencies, not guesses about grader internals. "
                  "Set cannot_complete:true if the supplied information is insufficient."},
                 {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]}
+        if region_mode:
+            payload['response_format'] = self._format('notebook_regions', {
+                'cannot_complete': {'type': 'boolean'}, 'index': {'type': 'integer'},
+                'regions': {'type': 'array', 'items': {'type': 'object',
+                    'properties': {'number': {'type': 'integer'}, 'code': {'type': 'string'}},
+                    'required': ['number', 'code'], 'additionalProperties': False}}})
+            payload['messages'][0]['content'] = payload['messages'][0]['content'].replace(
+                'code (full replacement source)', 'regions (array of number and code for each listed solution region)')
+            payload['messages'][0]['content'] += (
+                ' Return ONLY the body of each numbered region, without delimiter comments or surrounding function. '
+                'Supply every region of the selected cell exactly once, with Python indentation relative to the region. '
+                'The caller will preserve all code outside the regions verbatim.')
         try:
             result = self._request(payload)
         except RequestTooLarge:

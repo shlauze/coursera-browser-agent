@@ -11,6 +11,20 @@ from v2.handlers import HandlerError
 from v2.store import Store
 
 class LabFixTests(unittest.TestCase):
+ def test_region_request_uses_structured_region_schema(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   store=Store(Path(tmp)/'state.db');payloads=[]
+   response={'cannot_complete':False,'index':1,'regions':[{'number':0,'code':'x=1'}]}
+   def transport(key,payload):
+    payloads.append(payload)
+    return 200,{}, {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(response)}}]}
+   context={'notebook':[{'index':1,'type':'code','source':'# YOUR CODE STARTS HERE\n\n# YOUR CODE ENDS HERE'}],
+            'editable_cells':[1],'target':1,'solution_regions':{'1':[{'number':0,'source':'\n'}]}}
+   result=GroqClient(store,key_loader=lambda:'test',transport=transport).notebook_patch(context)
+   self.assertEqual(result,response)
+   properties=payloads[0]['response_format']['json_schema']['schema']['properties']
+   self.assertIn('regions',properties)
+   self.assertNotIn('code',properties)
  def test_submission_button_inside_iframe(self):
   self.check_submission_message('Assignment submitted')
  def test_workspace_success_inside_iframe_is_not_automatically_a_grade(self):
