@@ -47,6 +47,16 @@ class NotebookReadTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate('reads'),3)
         self.assertEqual(self.page.evaluate('saves'),0)
 
+    def test_busy_run_reports_explicit_non_execution_before_touching_cell(self):
+        self.page.evaluate('''() => {
+            globalThis.executions = 0;
+            Jupyter.notebook.get_cells = () => [{execute: () => executions++}];
+            globalThis.fetch = async () => new Response(JSON.stringify({id:'kernel1',execution_state:'busy'}),{status:200});
+        }''')
+        result = self.page.evaluate(BRIDGE, {'action':'run','index':0,'token':'fixture'})
+        self.assertIs(result['execution_started'], False)
+        self.assertEqual(self.page.evaluate('executions'), 0)
+
     def test_save_verification_retries_get_but_saves_once(self):
         self.page.evaluate("failureKind='server'")
         self.assertEqual(self.page.evaluate(BRIDGE,{'action':'save'}),{'ok':True})

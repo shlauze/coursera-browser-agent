@@ -96,7 +96,7 @@ async request => {
     return {ok: true};
   }
   if (request.action === 'run') {
-    if (await kernelState() !== 'idle') return {error: 'Kernel is already busy; will not duplicate execution'};
+    if (await kernelState() !== 'idle') return {error: 'Kernel is already busy; will not duplicate execution', execution_started: false};
     if (request.signature !== signature()) return {error: 'Notebook changed while waiting for kernel'};
     const previous = globalThis[stateKey];
     if (previous && (!previous.reply || !previous.idle)) return {error: 'Previous execution is unresolved'};

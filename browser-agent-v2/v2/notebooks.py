@@ -150,6 +150,10 @@ def validate_code(original, code):
     return code
 
 
+class KernelBusyBeforeExecution(HandlerError):
+    """The bridge explicitly confirmed no execute request was sent."""
+
+
 class NotebookExecutor:
     def __init__(self, frame, groq, store, action_id, checkpoint, *, cell_timeout=900,
                  total_timeout=3600, max_repairs=3):
@@ -164,6 +168,8 @@ class NotebookExecutor:
     def call(self, action, **values):
         result = self.frame.evaluate(BRIDGE, {'action': action, 'path': self.path, **values})
         if result.get('error'):
+            if action == 'run' and result.get('execution_started') is False:
+                raise KernelBusyBeforeExecution(result['error'])
             raise HandlerError(result['error'])
         return result
 
@@ -222,8 +228,26 @@ class NotebookExecutor:
     def run_cell(self, snapshot, index):
         token = uuid.uuid4().hex
         key = self.execution_key
-        self.store.set_meta(key, {'status': 'starting', 'path': self.path, 'index': index, 'token': token})
-        self.call('run', signature=snapshot['signature'], index=index, token=token)
+        start_deadline = min(self.deadline, time.monotonic() + 60)
+        announced = False
+        while True:
+            self.check()
+            self.store.set_meta(key, {'status': 'starting', 'path': self.path, 'index': index, 'token': token})
+            try:
+                self.call('run', signature=snapshot['signature'], index=index, token=token)
+                break
+            except KernelBusyBeforeExecution:
+                # Only this explicit bridge preflight rejection proves no code ran.
+                # Transport errors or missing replies retain 'starting' for review.
+                self.store.set_meta(key, {'status': 'not_started', 'path': self.path, 'index': index,
+                                         'token': token, 'reason': 'kernel_busy_before_execute'})
+                if time.monotonic() >= start_deadline:
+                    raise HandlerError('Kernel remained busy before execution; no cell was started')
+                if not announced:
+                    self.store.record_event('INFO', 'LAB_KERNEL_START_WAIT',
+                                            'Kernel busy before execute; waiting without sending code')
+                    announced = True
+                self.frame.page.wait_for_timeout(500)
         deadline = min(self.deadline, time.monotonic() + self.cell_timeout)
         try:
             while time.monotonic() < deadline:
@@ -274,7 +298,7 @@ class NotebookExecutor:
         if language.lower() != 'python':
             raise HandlerError('Only Python classic Jupyter labs are currently supported')
         pending = self.store.get_meta(self.execution_key)
-        if pending and pending.get('status') != 'finished':
+        if pending and pending.get('status') not in {'finished', 'not_started'}:
             raise HandlerError('A previous lab execution is unresolved; inspect its saved report')
         original = snapshot['document']
         manifest_key = self.execution_key.replace('lab_execution:', 'lab_manifest:', 1)
