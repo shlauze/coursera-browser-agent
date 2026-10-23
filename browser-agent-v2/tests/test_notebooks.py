@@ -19,12 +19,33 @@ import uuid
 from unittest.mock import Mock, patch
 
 from v2.handlers import HandlerError, handle
-from v2.notebooks import BRIDGE, NotebookExecutor, editable, validate_code, handle_programming_lab, solution_manifest, wait_for_course_mark
+from v2.notebooks import BRIDGE, NotebookExecutor, editable, validate_code, handle_programming_lab, solution_manifest, wait_for_course_mark, needs_solution
 from v2.policy import ItemAction
 from v2.store import Store
 
 
 class NotebookPolicyTests(unittest.TestCase):
+    def test_coursera_starts_ends_regions_are_prepared_and_protected(self):
+        original = 'def solve(x):\n    # YOUR CODE STARTS HERE\n    \n    # YOUR CODE ENDS HERE\n    return result\n'
+        self.assertTrue(editable({'cell_type': 'code', 'source': original}))
+        self.assertTrue(needs_solution(original))
+        good = original.replace('    \n', '    result = x * 2\n')
+        self.assertFalse(needs_solution(good))
+        self.assertEqual(validate_code(original, good), good)
+        with self.assertRaises(HandlerError):
+            validate_code(original, good.replace('return result', 'return 999'))
+
+    def test_any_empty_region_triggers_preparation(self):
+        one = '# YOUR CODE STARTS HERE\nx = 1\n# YOUR CODE ENDS HERE\n'
+        two = '# YOUR CODE STARTS HERE\n# explanation only\n# YOUR CODE ENDS HERE\n'
+        self.assertTrue(needs_solution(one + two))
+        self.assertFalse(needs_solution(one + one))
+
+    def test_placeholder_values_are_detected_in_solution_regions(self):
+        for body in ('x = None', 'pass', '...', 'raise NotImplementedError'):
+            self.assertTrue(needs_solution('# START CODE HERE\n' + body + '\n# END CODE HERE'))
+        self.assertFalse(needs_solution('# START CODE HERE\nx = 42\n# END CODE HERE'))
+
     def test_delayed_course_mark_is_waited_for_without_resubmitting(self):
         url = 'https://www.coursera.org/learn/test/programming/id/lab-example'
         page = Mock()
@@ -180,6 +201,35 @@ class RealNotebookTests(unittest.TestCase):
         self.assertIn('NotImplementedError', original['cells'][1]['source'])
         self.assertEqual(saved['cells'][2]['execution_count'], 2)
         self.assertTrue((executor.directory / 'execution.json').exists())
+
+    def test_four_empty_solutions_prepared_without_repair_budget_or_repeat_requests(self):
+        document = json.loads(json.dumps(self.original))
+        document['cells'] = []
+        solutions = []
+        for i in range(4):
+            empty = f'def solve{i}(x):\n    # YOUR CODE STARTS HERE\n    \n    # YOUR CODE ENDS HERE\n    return result\n'
+            solutions.append(empty.replace('    \n', f'    result = x + {i}\n'))
+            document['cells'].append({'id': f'solution{i}', 'cell_type': 'code', 'metadata': {},
+                                      'source': empty, 'outputs': [], 'execution_count': None})
+        checks = '\n'.join(f'assert solve{i}(10) == {10 + i}' for i in range(4))
+        document['cells'].append({'id': 'checks', 'cell_type': 'code',
+                                  'metadata': {'nbgrader': {'grade': True, 'locked': True}},
+                                  'source': checks, 'outputs': [], 'execution_count': None})
+        (self.root / 'four.ipynb').write_text(json.dumps(document), encoding='utf-8')
+        self.page.goto(self.url + '/notebooks/four.ipynb?token=' + self.token)
+        self.page.wait_for_function('() => !!globalThis.Jupyter?.notebook?._fully_loaded && Jupyter.notebook.kernel?.is_connected()', timeout=30000)
+        self.groq.notebook_patch.side_effect = [{'index': i, 'code': code} for i, code in enumerate(solutions)]
+        executor = NotebookExecutor(self.frame, self.groq, self.store, 2, lambda: None,
+                                    cell_timeout=20, total_timeout=120, max_repairs=0)
+        self.assertEqual(executor.execute()['repairs'], 0)
+        self.assertEqual(self.groq.notebook_patch.call_count, 4)
+        again = NotebookExecutor(self.frame, self.groq, self.store, 2, lambda: None,
+                                 cell_timeout=20, total_timeout=120, max_repairs=0)
+        self.assertEqual(again.execute()['repairs'], 0)
+        self.assertEqual(self.groq.notebook_patch.call_count, 4)
+        saved = json.loads((self.root / 'four.ipynb').read_text(encoding='utf-8'))
+        self.assertEqual(''.join(saved['cells'][-1]['source']), checks)
+        self.assertEqual(saved['cells'][-1]['execution_count'], 5)
 
     def test_stale_snapshot_cannot_overwrite_user_edit(self):
         snapshot = self.frame.evaluate(BRIDGE, {'action': 'snapshot'})

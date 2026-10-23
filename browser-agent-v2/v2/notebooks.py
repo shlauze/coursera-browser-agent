@@ -8,13 +8,40 @@ import os
 from pathlib import Path
 import re
 import time
+import textwrap
 import uuid
 from urllib.parse import urlsplit
 
 from .handlers import HandlerError, HandlerResult, _click_one_of, _named_control
 
 BRIDGE = Path(__file__).with_name('notebook_bridge.js').read_text(encoding='utf-8')
-PLACEHOLDER = re.compile(r'YOUR CODE HERE|START CODE HERE|BEGIN SOLUTION|raise\s+NotImplementedError|#\s*TODO\b', re.I)
+PLACEHOLDER = re.compile(r'YOUR CODE HERE|YOUR CODE STARTS HERE|START CODE HERE|START SOLUTION HERE|BEGIN SOLUTION|raise\s+NotImplementedError|#\s*TODO\b', re.I)
+SOLUTION_REGIONS = re.compile(
+    r'(?m)^[^\n]*(?:START CODE HERE|START SOLUTION HERE|BEGIN SOLUTION|YOUR CODE STARTS HERE)[^\n]*\n'
+    r'(?P<body>.*?)^[^\n]*(?:END CODE HERE|END SOLUTION HERE|END SOLUTION|YOUR CODE ENDS HERE)[^\n]*$', re.S)
+
+
+def needs_solution(code):
+    """A preserved answer delimiter does not mean an answer is still missing."""
+    regions = list(SOLUTION_REGIONS.finditer(code))
+    if not regions:
+        return bool(PLACEHOLDER.search(code))
+    for region in regions:
+        body = textwrap.dedent(region.group('body'))
+        try:
+            tree = ast.parse(body)
+        except SyntaxError:
+            return True
+        if not tree.body or re.search(r'raise\s+NotImplementedError|#\s*TODO\b', body, re.I):
+            return True
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Pass):
+                return True
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and node.value.value is Ellipsis:
+                return True
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant) and node.value.value is None:
+                return True
+    return False
 
 
 def source(cell):
@@ -70,7 +97,7 @@ def validate_code(original, code):
             if name in forbidden or name in {'system', 'popen', 'rmtree', 'unlink', 'remove', 'exit', 'kill'}:
                 raise HandlerError('Generated code contains an unsupported interactive or destructive operation')
     # Keep instructor scaffolding outside explicit answer delimiters byte-for-byte.
-    pattern = re.compile(r'(?m)^[^\n]*(?:START CODE HERE|BEGIN SOLUTION)[^\n]*\n.*?^[^\n]*(?:END CODE HERE|END SOLUTION)[^\n]*$', re.S)
+    pattern = SOLUTION_REGIONS
     regions = list(pattern.finditer(original))
     if regions:
         replacements = list(pattern.finditer(code))
@@ -219,7 +246,7 @@ class NotebookExecutor:
         self.store.set_meta(manifest_key, manifest)
         self.store.record_event('INFO', 'LAB_BACKUP', 'Original notebook backed up before editing')
         for index, cell in originals.items():
-            if PLACEHOLDER.search(source(snapshot['document']['cells'][index])):
+            if needs_solution(source(snapshot['document']['cells'][index])):
                 snapshot = self.patch(snapshot, originals, target=index)
         for attempt in range(self.max_repairs + 1):
             self.check()
