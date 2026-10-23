@@ -19,6 +19,8 @@ import time
 import urllib.error
 import urllib.request
 
+from .notebook_regions import solution_indent
+
 
 class GroqError(RuntimeError):
     pass
@@ -206,6 +208,23 @@ def compact_notebook_context(context):
     return result
 
 
+def notebook_analysis_source(source):
+    """Make empty answer suites parseable ONLY for dependency discovery.
+
+    The resulting pass statements are never sent to the model or applied to a
+    notebook; the request retains the original cell and its instructions.
+    """
+    pattern = re.compile(
+        r'(?m)(?P<header>^[ \t]*#[^\n]*(?:YOUR CODE STARTS HERE|START CODE HERE|START SOLUTION HERE|BEGIN SOLUTION)[^\n]*\n)'
+        r'(?P<body>.*?)(?P<end>^[ \t]*#[^\n]*(?:YOUR CODE ENDS HERE|END CODE HERE|END SOLUTION)[^\n]*$)', re.S)
+    def empty_suite(match):
+        if any(line.strip() and not line.lstrip().startswith('#') for line in match.group('body').splitlines()):
+            return match.group()
+        indent = solution_indent(source[:match.start()], match.group('header'))
+        return match.group('header') + indent + 'pass\n' + match.group('end')
+    return pattern.sub(empty_suite, source)
+
+
 def focused_notebook_context(context):
     """Limit a repair to the failing cell and its transitive code dependencies.
 
@@ -228,6 +247,7 @@ def focused_notebook_context(context):
         # IPython line magics are context, not Python syntax.
         source = '\n'.join(line for line in cell['source'].splitlines()
                            if not line.lstrip().startswith('%'))
+        source = notebook_analysis_source(source)
         try:
             tree = ast.parse(source)
             symbols = symtable.symtable(source, '<notebook>', 'exec')

@@ -11,6 +11,25 @@ from v2.handlers import HandlerError
 from v2.store import Store
 
 class LabFixTests(unittest.TestCase):
+ def test_unrelated_empty_loop_suites_do_not_expand_context(self):
+  empty='def unrelated(values):\n for value in values:\n # YOUR CODE STARTS HERE\n\n # YOUR CODE ENDS HERE\n return values'
+  context={'notebook':[{'index':0,'type':'code','source':'import math'},
+    {'index':1,'type':'markdown','source':'Instructions for target'},
+    {'index':2,'type':'code','source':'def target(x):\n return math.floor(x)'},
+    {'index':3,'type':'markdown','source':'Other exercise instructions'},
+    {'index':4,'type':'code','source':empty}], 'editable_cells':[2,4],'target':2}
+  result=focused_notebook_context(context)
+  self.assertEqual([c['index'] for c in result['notebook']],[0,1,2])
+  self.assertEqual(context['notebook'][4]['source'],empty)
+  context['target']=4
+  selected=focused_notebook_context(context)
+  self.assertEqual(next(c['source'] for c in selected['notebook'] if c['index']==4),empty)
+ def test_referenced_empty_helper_remains_in_context(self):
+  helper='def helper(values):\n for value in values:\n  # YOUR CODE STARTS HERE\n\n  # YOUR CODE ENDS HERE\n return values'
+  context={'notebook':[{'index':0,'type':'code','source':helper},
+                      {'index':1,'type':'code','source':'def target(x):\n return helper(x)'}],
+           'editable_cells':[0,1],'target':1}
+  self.assertEqual([c['index'] for c in focused_notebook_context(context)['notebook']],[0,1])
  def test_truncated_lab_response_grows_once_and_remembers_budget(self):
   with tempfile.TemporaryDirectory() as tmp:
    store=Store(Path(tmp)/'state.db');budgets=[]

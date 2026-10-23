@@ -25,6 +25,12 @@ from v2.store import Store
 
 
 class NotebookPolicyTests(unittest.TestCase):
+    def test_marker_aligned_with_empty_loop_does_not_control_code_indent(self):
+        original = 'def solve(values):\n    for value in values:\n    # YOUR CODE STARTS HERE\n\n    # YOUR CODE ENDS HERE\n    return values\n'
+        result = apply_solution_regions(original, [{'number':0, 'code':'value += 1'}])
+        self.assertIn('        value += 1\n', result)
+        self.assertEqual(validate_code(original, result), result)
+
     def test_region_assembly_preserves_scaffolding_and_all_regions(self):
         original = ('def solve(x):\n    y = x\n    # YOUR CODE STARTS HERE\n\n    # YOUR CODE ENDS HERE\n'
                     '    assert y > 0\n    # YOUR CODE STARTS HERE\n\n    # YOUR CODE ENDS HERE\n    return y\n')

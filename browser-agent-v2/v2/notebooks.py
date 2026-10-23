@@ -13,6 +13,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from .handlers import HandlerError, HandlerResult, _click_one_of, _named_control
+from .notebook_regions import solution_indent
 
 BRIDGE = Path(__file__).with_name('notebook_bridge.js').read_text(encoding='utf-8')
 PLACEHOLDER = re.compile(r'YOUR CODE HERE|YOUR CODE STARTS HERE|START CODE HERE|START SOLUTION HERE|BEGIN SOLUTION|raise\s+NotImplementedError|#\s*TODO\b', re.I)
@@ -62,7 +63,7 @@ def apply_solution_regions(original, replacements):
     result = original
     for number in reversed(range(len(regions))):
         region = regions[number]
-        indent = re.match(r'[ \t]*', region.group().splitlines()[0]).group()
+        indent = solution_indent(original[:region.start()], region.group().splitlines()[0])
         body = textwrap.indent(textwrap.dedent(mapped[number]).strip(), indent) + '\n'
         result = result[:region.start('body')] + body + result[region.end('body'):]
     return validate_code(original, result)
