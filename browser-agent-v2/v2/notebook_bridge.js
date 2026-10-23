@@ -17,13 +17,29 @@ async request => {
   }));
   const stateKey = '__courseraV2NotebookExecution';
   const bounded = promise => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Notebook request timed out')), 20000))]);
+  // Retry only idempotent reads. Kernel execution/restart/save and submission
+  // are never repeated by this helper after an uncertain response.
+  const readJSON = async (url, description) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch(url, {method: 'GET', credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000)});
+        if (response.status >= 500 && attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+          continue;
+        }
+        if (!response.ok) throw new Error(description + ': HTTP ' + response.status);
+        return await response.json();
+      } catch (error) {
+        if (attempt >= 2 || !['TimeoutError', 'AbortError', 'TypeError'].includes(error.name)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+  };
   const kernelState = async () => {
     if (!nb.kernel?.kernel_url || !nb.kernel.is_connected()) return 'disconnected';
     const url = new URL(nb.kernel.kernel_url, location.href);
     if (url.origin !== location.origin) throw new Error('Unexpected kernel origin');
-    const response = await fetch(url.href, {credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000)});
-    if (!response.ok) throw new Error('Cannot read kernel status');
-    const model = await response.json();
+    const model = await readJSON(url.href, 'Cannot read kernel status');
     if (model.id !== nb.kernel.id) throw new Error('Kernel identity changed');
     return model.execution_state;
   };
@@ -46,9 +62,7 @@ async request => {
     const base = String(nb.base_url || '/').replace(/\/?$/, '/');
     const url = new URL(base + 'api/contents/' + path.split('/').map(encodeURIComponent).join('/') + '?content=1', location.origin);
     if (url.origin !== location.origin) return {error: 'Unexpected notebook server origin'};
-    const response = await fetch(url.href, {credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15000)});
-    if (!response.ok) return {error: 'Notebook server did not confirm save'};
-    const saved = await response.json();
+    const saved = await readJSON(url.href, 'Notebook server did not confirm save');
     if (saved.type !== 'notebook' || JSON.stringify(saved.content?.cells) !== JSON.stringify(document.cells)) {
       // Object key order can differ on the server; compare meaningful source/metadata below.
       const canonical = x => Array.isArray(x) ? x.map(canonical) : x && typeof x === 'object'
