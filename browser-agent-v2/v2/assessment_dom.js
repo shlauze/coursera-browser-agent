@@ -117,13 +117,27 @@ request => {
     } else if (fields.length === 1 && ['text','number','textarea'].includes(types[0])) {
       kind = types[0] === 'textarea' ? 'long_text' : types[0];
     } else return {error:'Unsupported or ambiguous answer controls',attestation};
+    const visualResource = src => {
+      try {
+        const url = new URL(src);
+        // Coursera rotates access signatures on the same content-addressed asset.
+        // Preserve the asset path, transformations, and every other parameter.
+        if (url.protocol === 'https:' && url.hostname === 'd3c33hcgiwev3.cloudfront.net') {
+          url.searchParams.delete('expiry'); url.searchParams.delete('hmac');
+          return url.href;
+        }
+      } catch (_) {}
+      return src;
+    };
+    const visualIdentity = images => JSON.stringify((Array.isArray(images) ? images : []).map(e =>
+      ({src:visualResource(e.src),width:e.width,height:e.height})));
     const visuals = [...root.querySelectorAll('img,canvas,video')].filter(visible);
     if (visuals.length) {
       const images = visuals.map(e => ({src: e.currentSrc || e.src || '', width: e.naturalWidth || 0, height: e.naturalHeight || 0}));
       const supported = visuals.every(e => e.tagName === 'IMG' && e.complete && e.naturalWidth > 0 &&
         !e.closest('label,[role="radio"],[role="checkbox"]'));
       const matches = (Array.isArray(request.visual_reviews) ? request.visual_reviews : []).filter(r =>
-        r.question_text === text && JSON.stringify(r.images) === JSON.stringify(images) &&
+        r.question_text === text && visualIdentity(r.images) === visualIdentity(images) &&
         typeof r.description === 'string' && r.description.trim() && r.description.length <= 6000);
       if (!supported || matches.length !== 1) return {
         error:'Question includes visual content; text-only model cannot answer it', attestation,

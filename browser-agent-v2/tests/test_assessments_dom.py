@@ -58,6 +58,25 @@ class AssessmentDomTests(unittest.TestCase):
         self.page.get_by_text('You did not answer the question',exact=True).evaluate('(e)=>e.remove()')
         self.assertFalse(inspect(self.page)['feedback_questions'][0]['unanswered'])
 
+    def test_coursera_image_signature_rotation_preserves_asset_identity(self):
+        import copy
+        src='https://d3c33hcgiwev3.cloudfront.net/immutable/chart.png?expiry=2&hmac=new&width=120'
+        self.page.set_content(FORM.replace('</legend>', '</legend><img id="chart">', 1))
+        self.page.locator('#chart').evaluate("""(e,src)=>{
+            Object.defineProperty(e,'currentSrc',{value:src});
+            Object.defineProperty(e,'complete',{value:true});
+            Object.defineProperty(e,'naturalWidth',{value:120});
+            Object.defineProperty(e,'naturalHeight',{value:80});
+            e.style.width='120px';e.style.height='80px';
+        }""",src)
+        state=self.page.evaluate(DOM,{'action':'inspect'})
+        review={**state['visual_context'],'description':'A red curve.'}
+        review['images'][0]['src']=src.replace('expiry=2&hmac=new','expiry=1&hmac=old')
+        self.assertNotIn('error',self.page.evaluate(DOM,{'action':'inspect','visual_reviews':[review]}))
+        for replacement in (src.replace('chart.png','different.png'),src.replace('width=120','width=240'),src.replace('cloudfront.net','example.com')):
+            wrong=copy.deepcopy(review);wrong['images'][0]['src']=replacement
+            self.assertIn('visual content',self.page.evaluate(DOM,{'action':'inspect','visual_reviews':[wrong]})['error'])
+
     def test_canvas_cannot_be_authorized_by_a_description(self):
         self.page.set_content(FORM.replace('</legend>', '</legend><canvas width="120" height="80"></canvas>', 1))
         state = self.page.evaluate(DOM, {'action':'inspect'})
