@@ -57,6 +57,16 @@ class NotebookReadTests(unittest.TestCase):
         self.assertIs(result['execution_started'], False)
         self.assertEqual(self.page.evaluate('executions'), 0)
 
+    def test_busy_edit_reports_explicit_non_mutation(self):
+        self.page.evaluate('''() => {
+            globalThis.edits = 0;
+            Jupyter.notebook.get_cells = () => [{set_text: () => edits++}];
+            globalThis.fetch = async () => new Response(JSON.stringify({id:'kernel1',execution_state:'busy'}),{status:200});
+        }''')
+        result = self.page.evaluate(BRIDGE, {'action':'edit','index':0,'code':'x=2'})
+        self.assertIs(result['edit_started'], False)
+        self.assertEqual(self.page.evaluate('edits'), 0)
+
     def test_save_verification_retries_get_but_saves_once(self):
         self.page.evaluate("failureKind='server'")
         self.assertEqual(self.page.evaluate(BRIDGE,{'action':'save'}),{'ok':True})

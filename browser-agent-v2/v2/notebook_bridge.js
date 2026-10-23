@@ -47,7 +47,7 @@ async request => {
   if (request.signature && request.signature !== signature()) return {error: 'Notebook changed since inspection'};
   if (request.action === 'edit') {
     const cell = cells[request.index];
-    if (await kernelState() !== 'idle') return {error: 'Kernel must be idle before editing'};
+    if (await kernelState() !== 'idle') return {error: 'Kernel must be idle before editing', edit_started: false};
     if (request.signature !== signature()) return {error: 'Notebook changed while waiting for kernel'};
     if (!cell || cell.cell_type !== 'code' || cell.metadata?.nbgrader?.locked ||
         cell.metadata?.nbgrader?.grade || cell.metadata?.editable === false)

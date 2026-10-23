@@ -150,6 +150,10 @@ def validate_code(original, code):
     return code
 
 
+class KernelBusyBeforeEdit(HandlerError):
+    """The bridge explicitly confirmed the cell was not changed."""
+
+
 class KernelBusyBeforeExecution(HandlerError):
     """The bridge explicitly confirmed no execute request was sent."""
 
@@ -168,6 +172,8 @@ class NotebookExecutor:
     def call(self, action, **values):
         result = self.frame.evaluate(BRIDGE, {'action': action, 'path': self.path, **values})
         if result.get('error'):
+            if action == 'edit' and result.get('edit_started') is False:
+                raise KernelBusyBeforeEdit(result['error'])
             if action == 'run' and result.get('execution_started') is False:
                 raise KernelBusyBeforeExecution(result['error'])
             raise HandlerError(result['error'])
@@ -204,14 +210,22 @@ class NotebookExecutor:
             if (regions := list(SOLUTION_REGIONS.finditer(source(snapshot['document']['cells'][i]))))}
         if len(json.dumps(context)) > 120000:
             raise HandlerError('Notebook context exceeds the supported Groq request size')
-        # The execution budget bounds notebook work. Provider generation,
-        # Retry-After and network backoff have their own limits and checkpoints.
-        # Charging that wait here discards a valid response before it can be saved.
-        request_started = time.monotonic()
-        try:
-            result = self.groq.notebook_patch(context)
-        finally:
-            self.deadline += max(0, time.monotonic() - request_started)
+        action = self.store.get_action(self.action_id) or {}
+        draft_identity = [action.get('course_id', self.action_id), self.path,
+                          snapshot['signature'], context]
+        draft_key = 'lab_patch_draft:' + hashlib.sha256(
+            json.dumps(draft_identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        result = self.store.get_meta(draft_key)
+        if result:
+            self.store.record_event('INFO', 'LAB_PATCH_REUSED',
+                                    'Reused validated draft for unchanged notebook and feedback; no model request')
+        else:
+            # Provider waits have their own retry limits and stop checkpoints.
+            request_started = time.monotonic()
+            try:
+                result = self.groq.notebook_patch(context)
+            finally:
+                self.deadline += max(0, time.monotonic() - request_started)
         index = result.get('index')
         if type(index) is not int or index not in originals or (target is not None and index != target):
             raise HandlerError('Model selected a protected or unrelated cell')
@@ -219,9 +233,25 @@ class NotebookExecutor:
         if 'regions' in result:
             proposed = apply_solution_regions(source(snapshot['document']['cells'][index]), result['regions'])
         code = validate_code(source(originals[index]), proposed)
-        self.check()
-        self.call('edit', signature=snapshot['signature'], index=index, code=code)
+        # Retain the validated answer before any stop, busy kernel or write failure.
+        self.store.set_meta(draft_key, {'index': index, 'code': code})
+        edit_deadline = min(self.deadline, time.monotonic() + 60)
+        announced = False
+        while True:
+            self.check()
+            try:
+                self.call('edit', signature=snapshot['signature'], index=index, code=code)
+                break
+            except KernelBusyBeforeEdit:
+                if time.monotonic() >= edit_deadline:
+                    raise HandlerError('Kernel remained busy before editing; validated draft saved for resume')
+                if not announced:
+                    self.store.record_event('INFO', 'LAB_KERNEL_EDIT_WAIT',
+                                            'Kernel busy before edit; waiting with validated draft saved')
+                    announced = True
+                self.frame.page.wait_for_timeout(500)
         self.call('save')
+        self.store.set_meta(draft_key, None)
         self.store.record_event('INFO', 'LAB_CELL_UPDATED', f'Lab solution cell {index + 1} updated and saved')
         return self.call('snapshot')
 
