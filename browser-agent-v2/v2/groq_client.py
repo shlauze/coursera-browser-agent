@@ -28,6 +28,10 @@ class RequestTooLarge(GroqError):
     pass
 
 
+class TruncatedResponse(GroqError):
+    pass
+
+
 def normalize(value):
     return " ".join(str(value).split())
 
@@ -346,6 +350,8 @@ class GroqClient:
                 self.store.set_meta("groq_retry_until", 0)
                 try:
                     choice = body["choices"][0]
+                    if choice.get('finish_reason') == 'length':
+                        raise TruncatedResponse('Groq response was truncated or incomplete')
                     if choice.get("finish_reason") != "stop":
                         raise GroqError("Groq response was truncated or incomplete")
                     return json.loads(choice["message"]["content"])
@@ -391,11 +397,16 @@ class GroqClient:
         if focused != context:
             self.store.record_event('INFO', 'LAB_CONTEXT_FOCUSED', 'Request limited to target/failure dependencies and instructions; notebook unchanged')
         context = focused
+        budget_key = 'notebook_output_budget:' + hashlib.sha256(
+            json.dumps([self.model, context], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        output_budget = self.store.get_meta(budget_key, 2048)
+        if output_budget not in (2048, 4096):
+            output_budget = 2048
         region_map = context.get('solution_regions', {})
         selected = [context['target']] if context.get('target') is not None else context.get('editable_cells', [])
         region_mode = bool(selected) and all(str(i) in region_map for i in selected)
         payload = {
-            "model": self.model, "temperature": 0.1, "max_completion_tokens": 2048,
+            "model": self.model, "temperature": 0.1, "max_completion_tokens": output_budget,
             "response_format": self._format("notebook_patch", {
                 "cannot_complete": {"type": "boolean"}, "index": {"type": "integer"},
                 "code": {"type": "string"}}), "messages": [
@@ -423,13 +434,25 @@ class GroqClient:
                 ' Return ONLY the body of each numbered region, without delimiter comments or surrounding function. '
                 'Supply every region of the selected cell exactly once, with Python indentation relative to the region. '
                 'The caller will preserve all code outside the regions verbatim.')
-        try:
-            result = self._request(payload)
-        except RequestTooLarge:
-            reduced = compact_notebook_context(context)
-            payload["messages"][-1]["content"] = json.dumps(reduced, ensure_ascii=False)
-            self.store.record_event("WARNING", "LAB_CONTEXT_REDUCED", "Removed unrelated notebook narrative and duplicate outputs; code and traceback preserved")
-            result = self._request(payload)
+        reduced_once = False
+        while True:
+            try:
+                result = self._request(payload)
+                break
+            except TruncatedResponse:
+                if payload['max_completion_tokens'] >= 4096:
+                    raise
+                payload['max_completion_tokens'] = 4096
+                self.store.set_meta(budget_key, 4096)
+                self.store.record_event('WARNING', 'LAB_OUTPUT_BUDGET_INCREASED',
+                    'Discarded truncated response; retry once with 4096 output tokens; budget saved for this context')
+            except RequestTooLarge:
+                if reduced_once:
+                    raise
+                reduced_once = True
+                reduced = compact_notebook_context(context)
+                payload["messages"][-1]["content"] = json.dumps(reduced, ensure_ascii=False)
+                self.store.record_event("WARNING", "LAB_CONTEXT_REDUCED", "Removed unrelated notebook narrative and duplicate outputs; code and traceback preserved")
         if not isinstance(result, dict) or result.get("cannot_complete") is not False:
             raise GroqError("Groq could not produce a supported notebook solution")
         return result

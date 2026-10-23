@@ -6,11 +6,41 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from playwright.sync_api import sync_playwright
 from v2.notebooks import handle_programming_lab
-from v2.groq_client import GroqClient, compact_notebook_context, focused_notebook_context
+from v2.groq_client import GroqClient, GroqError, TruncatedResponse, compact_notebook_context, focused_notebook_context
 from v2.handlers import HandlerError
 from v2.store import Store
 
 class LabFixTests(unittest.TestCase):
+ def test_truncated_lab_response_grows_once_and_remembers_budget(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   store=Store(Path(tmp)/'state.db');budgets=[]
+   answer={'cannot_complete':False,'index':1,'code':'x=1'}
+   def transport(key,payload):
+    budgets.append(payload['max_completion_tokens'])
+    reason='length' if len(budgets)==1 else 'stop'
+    return 200,{}, {'choices':[{'finish_reason':reason,'message':{'content':json.dumps(answer)}}]}
+   context={'notebook':[],'editable_cells':[1]}
+   client=GroqClient(store,key_loader=lambda:'test',transport=transport)
+   self.assertEqual(client.notebook_patch(context),answer)
+   self.assertEqual(budgets,[2048,4096])
+   restarted=GroqClient(Store(store.path),key_loader=lambda:'test',transport=transport)
+   self.assertEqual(restarted.notebook_patch(context),answer)
+   self.assertEqual(budgets,[2048,4096,4096])
+ def test_repeated_truncation_has_bounded_retry(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   budgets=[]
+   def transport(key,payload):
+    budgets.append(payload['max_completion_tokens'])
+    return 200,{}, {'choices':[{'finish_reason':'length','message':{'content':'{"cannot_complete":false'}}]}
+   with self.assertRaises(TruncatedResponse):
+    GroqClient(Store(Path(tmp)/'state.db'),key_loader=lambda:'test',transport=transport).notebook_patch({})
+   self.assertEqual(budgets,[2048,4096])
+ def test_other_incomplete_reasons_are_not_retried(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   transport=Mock(return_value=(200,{}, {'choices':[{'finish_reason':'content_filter','message':{'content':'{}'}}]}))
+   with self.assertRaises(GroqError):
+    GroqClient(Store(Path(tmp)/'state.db'),key_loader=lambda:'test',transport=transport).notebook_patch({})
+   self.assertEqual(transport.call_count,1)
  def test_region_request_uses_structured_region_schema(self):
   with tempfile.TemporaryDirectory() as tmp:
    store=Store(Path(tmp)/'state.db');payloads=[]
