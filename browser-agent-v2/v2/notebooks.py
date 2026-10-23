@@ -198,7 +198,14 @@ class NotebookExecutor:
             if (regions := list(SOLUTION_REGIONS.finditer(source(snapshot['document']['cells'][i]))))}
         if len(json.dumps(context)) > 120000:
             raise HandlerError('Notebook context exceeds the supported Groq request size')
-        result = self.groq.notebook_patch(context)
+        # The execution budget bounds notebook work. Provider generation,
+        # Retry-After and network backoff have their own limits and checkpoints.
+        # Charging that wait here discards a valid response before it can be saved.
+        request_started = time.monotonic()
+        try:
+            result = self.groq.notebook_patch(context)
+        finally:
+            self.deadline += max(0, time.monotonic() - request_started)
         index = result.get('index')
         if type(index) is not int or index not in originals or (target is not None and index != target):
             raise HandlerError('Model selected a protected or unrelated cell')
