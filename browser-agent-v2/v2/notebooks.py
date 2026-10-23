@@ -353,18 +353,22 @@ def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
     executor.call('save', signature=current['signature'])
     # Submission is distinct from local execution success. The runner checks the
     # actual Coursera outline afterward and retains ambiguous submission intent.
-    text = lab.locator('body').inner_text(timeout=10000)
+    scopes = [lab] if frame == lab.main_frame else [lab, frame]
+    text = '\n'.join(scope.locator('body').inner_text(timeout=10000) for scope in scopes)
     if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
         raise HandlerError('Notebook prepared; personal authorship confirmation requires the learner')
-    button = lab.get_by_role('button', name=re.compile(r'^Submit assignment$', re.I))
-    if button.count() != 1 or not button.is_enabled():
+    buttons = [scope.get_by_role('button', name=re.compile(r'^Submit assignment$', re.I)).locator('visible=true') for scope in scopes]
+    if sum(button.count() for button in buttons) != 1:
+        raise HandlerError('Notebook prepared; no unique enabled Submit assignment control')
+    button = next(button for button in buttons if button.count())
+    if not button.is_enabled():
         raise HandlerError('Notebook prepared; no unique enabled Submit assignment control')
     store.set_meta(f'submission:{action_id}', 'submitting')
     button.click(timeout=10000)
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         checkpoint()
-        text = lab.locator('body').inner_text(timeout=10000)
+        text = '\n'.join(scope.locator('body').inner_text(timeout=10000) for scope in scopes)
         if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
             raise HandlerError('Submission dialog requires personal authorship confirmation')
         if re.search(r'(?:successfully submitted|submission received|assignment submitted)', text, re.I):

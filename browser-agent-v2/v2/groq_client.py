@@ -177,6 +177,29 @@ def _transport(key, payload):
         return 0, {}, {}
 
 
+def compact_notebook_context(context):
+    # Preserve every code cell and the full execution traceback. Keep instructions
+    # immediately preceding editable cells; unrelated tutorial prose costs tokens.
+    result = json.loads(json.dumps(context))
+    cells = result.get("notebook", [])
+    important = set(result.get("editable_cells", []))
+    important.add(result.get("target"))
+    failure = result.get("failure") or {}
+    important.add(failure.get("index"))
+    keep = set()
+    for position, cell in enumerate(cells):
+        if cell.get("index") in important:
+            previous = position - 1
+            while previous >= 0 and cells[previous].get("type") != "code":
+                keep.add(previous)
+                previous -= 1
+    result["notebook"] = [cell for i, cell in enumerate(cells) if cell.get("type") == "code" or i in keep]
+    if failure:
+        result["failure"] = {k:v for k,v in failure.items() if k != "outputs"}
+    result["context_note"] = "Unrelated narrative and rendered outputs omitted. All code cells and failure reply retained. If necessary information is missing, return cannot_complete."
+    return result
+
+
 class GroqClient:
     def __init__(self, store, checkpoint=lambda: None, *, key_loader=None, transport=_transport,
                  sleep=time.sleep, model=None, max_wait=None, clock=time.time):
@@ -281,8 +304,8 @@ class GroqClient:
 
     def notebook_patch(self, context):
         """Propose one solution-cell edit; the executor validates and applies it."""
-        result = self._request({
-            "model": self.model, "temperature": 0.1, "max_completion_tokens": 8192,
+        payload = {
+            "model": self.model, "temperature": 0.1, "max_completion_tokens": 2048,
             "response_format": self._format("notebook_patch", {
                 "cannot_complete": {"type": "boolean"}, "index": {"type": "integer"},
                 "code": {"type": "string"}}), "messages": [
@@ -296,7 +319,14 @@ class GroqClient:
                  "submit via code, delete files, use shell commands or interactive input. "
                  "For repairs use the observed traceback and dependencies, not guesses about grader internals. "
                  "Set cannot_complete:true if the supplied information is insufficient."},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]})
+                {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]}
+        try:
+            result = self._request(payload)
+        except RequestTooLarge:
+            reduced = compact_notebook_context(context)
+            payload["messages"][-1]["content"] = json.dumps(reduced, ensure_ascii=False)
+            self.store.record_event("WARNING", "LAB_CONTEXT_REDUCED", "Removed unrelated notebook narrative and duplicate outputs; code and traceback preserved")
+            result = self._request(payload)
         if not isinstance(result, dict) or result.get("cannot_complete") is not False:
             raise GroqError("Groq could not produce a supported notebook solution")
         return result
