@@ -129,8 +129,8 @@ _ITEMS_JS = r"""() => {
     const anchorLines = (node.innerText || '').split('\n').map(norm).filter(Boolean);
     const itemTitle = anchorLines[0] || lines[0] || '';
     const detail = lines.filter(x => x !== itemTitle).join(' ');
-    const kindMatch = detail.match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i)
-      || anchorLines.slice(1).join(' ').match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i);
+    const kindMatch = detail.match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Programming Assignment|Practice Quiz|Practice Lab|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i)
+      || anchorLines.slice(1).join(' ').match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Programming Assignment|Practice Quiz|Practice Lab|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i);
     const pathKind = node.href.match(/\/learn\/[^/]+\/(lecture|supplement|quiz|assignment-submission|ungradedLab|ungradedLti|programming|coach|ungradedPlugin|ungradedWidget|discussionPrompt)\//i);
     const kinds = {lecture:'Video',supplement:'Reading',quiz:'Quiz','assignment-submission':'Assignment',ungradedlab:'Lab',ungradedlti:'Lab',programming:'Programming Assignment',coach:'Dialogue',ungradedplugin:'Ungraded Plugin',ungradedwidget:'Ungraded Plugin',discussionprompt:'Discussion Prompt'};
     const kind = kindMatch ? kindMatch[1] : pathKind ? (kinds[pathKind[1].toLowerCase()] || 'Unknown') : 'Unknown';

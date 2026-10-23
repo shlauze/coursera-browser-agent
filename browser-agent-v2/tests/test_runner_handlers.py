@@ -287,6 +287,16 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertIsNone(self.runner._next_coursework(self.cid,[practice,passed]))
         self.assertFalse(practice.completed)
 
+    def test_practice_programming_quiz_and_lab_skip_without_completion(self):
+        from dataclasses import replace
+        self.store.set_meta('required_assessments_first', True)
+        mandatory=replace(self.item,kind='Programming Assignment',title='Required lab')
+        for kind in ('Practice Programming Assignment','Practice Quiz','Practice Lab'):
+            optional=replace(self.item,kind=kind,title='Python Basics with Numpy')
+            self.assertEqual(self.runner._next_coursework(self.cid,[optional,mandatory]),mandatory)
+            self.assertIsNone(self.runner._next_coursework(self.cid,[optional]))
+            self.assertFalse(optional.completed)
+
     def test_practice_title_does_not_exclude_graded_assignment(self):
         self.store.set_meta("required_assessments_first", True)
         item=ItemRecord(title="Practice Exam",kind="Graded Assignment",completed=False,url="https://www.coursera.org/learn/example/quiz/a",module="M",index=0)

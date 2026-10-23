@@ -88,6 +88,10 @@ class BrowserDomTests(unittest.TestCase):
             ('pending', 'Peer-graded AssignmentResults pending', 'Peer-graded Assignment'),
             ('optional', 'Practice Peer-graded Assignment', 'Practice Peer-graded Assignment'),
             ('review', 'Review Your Peers', 'Review Your Peers'),
+            ('programming-practice', 'Practice Programming Assignment', 'Practice Programming Assignment'),
+            ('quiz-practice', 'Practice Quiz', 'Practice Quiz'),
+            ('lab-practice', 'Practice Lab', 'Practice Lab'),
+            ('mandatory-lab', 'Programming Assignment', 'Programming Assignment'),
         ]
         html = '<aside style="position:absolute;left:0;width:300px;height:600px"><h2>Course</h2><button aria-expanded="true">Module 1</button>'
         for key, label, _ in rows:
