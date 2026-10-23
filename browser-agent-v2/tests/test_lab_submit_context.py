@@ -11,6 +11,21 @@ from v2.handlers import HandlerError
 from v2.store import Store
 
 class LabFixTests(unittest.TestCase):
+ def test_commented_local_assignment_does_not_pull_global_training_example(self):
+  target='def schedule(epoch):\n # learning_rate = ...\n # YOUR CODE STARTS HERE\n\n # YOUR CODE ENDS HERE\n return learning_rate'
+  context={'notebook':[{'index':0,'type':'code','source':'learning_rate = expensive_training()'},
+    {'index':1,'type':'markdown','source':'Required decay formula'},
+    {'index':2,'type':'code','source':target}], 'editable_cells':[0,2],'target':2,
+    'solution_regions':{'0':[{'number':0,'source':'irrelevant saved answer'}], '2':[{'number':0,'source':'\n'}]}}
+  result=focused_notebook_context(context)
+  self.assertEqual([c['index'] for c in result['notebook']],[1,2])
+  self.assertEqual(result['notebook'][-1]['source'],target)
+  self.assertEqual(list(result['solution_regions']),['2'])
+  self.assertIn('0',context['solution_regions'])
+ def test_real_global_dependency_is_preserved(self):
+  context={'notebook':[{'index':0,'type':'code','source':'rate = 0.1'},
+    {'index':1,'type':'code','source':'def answer(x):\n return x * rate'}], 'editable_cells':[1],'target':1}
+  self.assertEqual([c['index'] for c in focused_notebook_context(context)['notebook']],[0,1])
  def test_unrelated_empty_loop_suites_do_not_expand_context(self):
   empty='def unrelated(values):\n for value in values:\n # YOUR CODE STARTS HERE\n\n # YOUR CODE ENDS HERE\n return values'
   context={'notebook':[{'index':0,'type':'code','source':'import math'},

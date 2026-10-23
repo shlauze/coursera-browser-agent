@@ -221,7 +221,19 @@ def notebook_analysis_source(source):
         if any(line.strip() and not line.lstrip().startswith('#') for line in match.group('body').splitlines()):
             return match.group()
         indent = solution_indent(source[:match.start()], match.group('header'))
-        return match.group('header') + indent + 'pass\n' + match.group('end')
+        comments = list(match.group('body').splitlines())
+        for line in reversed(source[:match.start()].splitlines()):
+            if line.strip() and not line.lstrip().startswith('#'):
+                break
+            comments.append(line)
+        # Instructor templates often declare a missing local in a comment,
+        # e.g. `# learning_rate = ...`, then return it below the empty region.
+        # Without this synthetic assignment symtable calls it a global and
+        # pulls unrelated examples defining the same name into the request.
+        locals_to_fill = sorted({m.group(1) for line in comments
+            if (m := re.match(r'^\s*#\s*([A-Za-z_]\w*)\s*=(?!=)', line))})
+        body = ''.join(indent + name + ' = None\n' for name in locals_to_fill) or indent + 'pass\n'
+        return match.group('header') + body + match.group('end')
     return pattern.sub(empty_suite, source)
 
 
@@ -282,6 +294,9 @@ def focused_notebook_context(context):
         return compact_notebook_context(context)
     result = json.loads(json.dumps(context))
     result['editable_cells'] = editable
+    if 'solution_regions' in result:
+        allowed = {str(context['target'])} if context.get('target') is not None else {str(i) for i in editable}
+        result['solution_regions'] = {key: value for key, value in result['solution_regions'].items() if key in allowed}
     result['notebook'] = [c for c in cells if c.get('type') != 'code' or c['index'] in selected]
     # Preserve adjacency against the ORIGINAL list, not across removed code.
     keep = set(selected)
