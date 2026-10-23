@@ -94,6 +94,45 @@ class GroqTests(unittest.TestCase):
         other=copy.deepcopy(q);other["text"]="choose variable"
         self.assertNotEqual(question_key(q),question_key(other))
 
+    def test_notebook_json_rejection_retries_once_with_same_schema(self):
+        for regions in (False, True):
+            context = {'editable_cells': [2], 'target': 2, 'notebook': [{'source': '# YOUR CODE HERE'}]}
+            answer = {'cannot_complete': False, 'index': 2, 'code': 'x = 1'}
+            if regions:
+                context['solution_regions'] = {'2': [{'number': 0, 'source': ''}]}
+                answer = {'cannot_complete': False, 'index': 2, 'regions': [{'number': 0, 'code': 'x = 1'}]}
+            seen = []
+            def transport(key, payload):
+                seen.append(copy.deepcopy(payload))
+                if len(seen) == 1:
+                    return 400, {}, {'error': {'code': 'json_validate_failed', 'failed_generation': 'PRIVATE'}}
+                return success(answer)
+            self.assertEqual(self.client(transport).notebook_patch(context), answer)
+            self.assertEqual(len(seen), 2)
+            self.assertEqual(seen[0]['response_format'], seen[1]['response_format'])
+            self.assertEqual(seen[0]['messages'], seen[1]['messages'][:-1])
+            self.assertIn('exactly these fields', seen[1]['messages'][-1]['content'])
+            self.assertNotIn('PRIVATE', json.dumps(seen))
+
+    def test_notebook_repeated_json_rejection_is_bounded_and_private(self):
+        seen = []
+        def transport(key, payload):
+            seen.append(1)
+            return 400, {}, {'error': {'code': 'json_validate_failed', 'failed_generation': 'PRIVATE'}}
+        with self.assertRaisesRegex(GroqError, 'json_validate_failed') as error:
+            self.client(transport).notebook_patch({'editable_cells': [2], 'target': 2, 'notebook': []})
+        self.assertEqual(len(seen), 2)
+        self.assertNotIn('PRIVATE', str(error.exception))
+
+    def test_notebook_other_400_does_not_retry(self):
+        seen = []
+        def transport(key, payload):
+            seen.append(1)
+            return 400, {}, {'error': {'code': 'invalid_request_error'}}
+        with self.assertRaisesRegex(GroqError, 'invalid_request_error'):
+            self.client(transport).notebook_patch({'editable_cells': [2], 'target': 2, 'notebook': []})
+        self.assertEqual(len(seen), 1)
+
     def test_notebook_patch_uses_json_and_reports_inability(self):
         context = {'editable_cells': [2], 'target': 2, 'notebook': [{'source': '# YOUR CODE HERE'}]}
         seen = []

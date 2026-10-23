@@ -34,6 +34,10 @@ class TruncatedResponse(GroqError):
     pass
 
 
+class ResponseValidationError(GroqError):
+    pass
+
+
 def normalize(value):
     return " ".join(str(value).split())
 
@@ -398,7 +402,8 @@ class GroqClient:
                 error = body.get("error", {}) if isinstance(body, dict) else {}
                 code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
                 code = code if isinstance(code, str) and re.fullmatch(r"[a-zA-Z0-9_]{1,80}", code) else "unknown"
-                raise GroqError(f"Groq rejected the request: HTTP {status} ({code})")
+                error_type = ResponseValidationError if status == 400 and code == "json_validate_failed" else GroqError
+                raise error_type(f"Groq rejected the request: HTTP {status} ({code})")
             delay = retry_seconds(headers, min(2 ** (attempt + 1), 30))
             if status == 429:
                 error = body.get("error", {}) if isinstance(body, dict) else {}
@@ -470,10 +475,26 @@ class GroqClient:
                 'Supply every region of the selected cell exactly once, with Python indentation relative to the region. '
                 'The caller will preserve all code outside the regions verbatim.')
         reduced_once = False
+        validation_retried = False
         while True:
             try:
                 result = self._request(payload)
                 break
+            except ResponseValidationError:
+                if validation_retried:
+                    raise
+                validation_retried = True
+                # Never reuse the rejected generation or weaken the response schema.
+                shape = ('cannot_complete (boolean), index (integer), regions (array of objects '
+                         'with number (integer) and code (string))' if region_mode else
+                         'cannot_complete (boolean), index (integer), code (string)')
+                payload['messages'].append({'role': 'user', 'content':
+                    'The provider rejected the previous output as invalid JSON/schema. '
+                    'Produce a fresh response containing exactly these fields: ' + shape + '. '
+                    'Return one JSON object with no Markdown or commentary, no extra keys, '
+                    'and escape newlines and quotes inside code strings. Keep all task constraints.'})
+                self.store.record_event('WARNING', 'LAB_JSON_FORMAT_RETRY',
+                    'Provider rejected notebook JSON; retry once with explicit format instructions and unchanged schema')
             except TruncatedResponse:
                 if payload['max_completion_tokens'] >= 4096:
                     raise
