@@ -371,7 +371,7 @@ def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
         text = '\n'.join(scope.locator('body').inner_text(timeout=10000) for scope in scopes)
         if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
             raise HandlerError('Submission dialog requires personal authorship confirmation')
-        if re.search(r'(?:successfully submitted|submission received|assignment submitted)', text, re.I):
+        if re.search(r'(?:successfully submitted|submission received|assignment submitted|programming workspace submission succeeded)', text, re.I):
             store.set_meta(f'submission:{action_id}', 'submitted')
             page.bring_to_front()
             page.goto(return_url, wait_until='domcontentloaded', timeout=30000)

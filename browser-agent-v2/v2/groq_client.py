@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import ast
 import hashlib
 import json
 import math
 import os
 import re
 import secrets
+import symtable
 import time
 import urllib.error
 import urllib.request
@@ -200,6 +202,87 @@ def compact_notebook_context(context):
     return result
 
 
+def focused_notebook_context(context):
+    """Limit a repair to the failing cell and its transitive code dependencies.
+
+    This changes only the request, never the notebook or instructor tests. Keep
+    unparseable cells and imports conservatively; refuse to narrow without an
+    identifiable editable dependency.
+    """
+    failure = context.get('failure') or {}
+    roots = {context.get('target'), failure.get('index')} - {None}
+    if not roots:
+        return context
+    cells = context.get('notebook', [])
+    if any('index' not in cell for cell in cells):
+        return context
+    definitions, references, always = {}, {}, set()
+    for cell in cells:
+        if cell.get('type') != 'code':
+            continue
+        index = cell['index']
+        # IPython line magics are context, not Python syntax.
+        source = '\n'.join(line for line in cell['source'].splitlines()
+                           if not line.lstrip().startswith('%'))
+        try:
+            tree = ast.parse(source)
+            symbols = symtable.symtable(source, '<notebook>', 'exec')
+        except SyntaxError:
+            always.add(index)
+            continue
+        def external_names(table):
+            names = {s.get_name() for s in table.get_symbols()
+                     if s.is_referenced() and s.is_global() and not s.is_assigned()}
+            for child in table.get_children():
+                names.update(external_names(child))
+            return names
+        references[index] = external_names(symbols)
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                always.add(index)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                definitions.setdefault(node.name, set()).add(index)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                for name in ast.walk(node):
+                    if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store):
+                        definitions.setdefault(name.id, set()).add(index)
+    selected = roots | always
+    while True:
+        expanded = selected | {i for key in selected for name in references.get(key, ())
+                               for i in definitions.get(name, ())}
+        if expanded == selected:
+            break
+        selected = expanded
+    editable = [i for i in context.get('editable_cells', []) if i in selected]
+    if not editable:
+        return compact_notebook_context(context)
+    result = json.loads(json.dumps(context))
+    result['editable_cells'] = editable
+    result['notebook'] = [c for c in cells if c.get('type') != 'code' or c['index'] in selected]
+    # Preserve adjacency against the ORIGINAL list, not across removed code.
+    keep = set(selected)
+    for pos, cell in enumerate(cells):
+        if cell['index'] in set(editable) | roots:
+            prior = pos - 1
+            while prior >= 0 and cells[prior].get('type') != 'code':
+                keep.add(cells[prior]['index'])
+                prior -= 1
+    result['notebook'] = [c for c in cells if c['index'] in keep]
+    if failure:
+        def clean(value):
+            if isinstance(value, str):
+                return re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', value)
+            if isinstance(value, list):
+                return [clean(v) for v in value]
+            if isinstance(value, dict):
+                return {k: clean(v) for k, v in value.items()}
+            return value
+        result['failure'] = clean({k: v for k, v in failure.items() if k != 'outputs'})
+    result['context_note'] = ('Focused repair: failing/target cell, editable dependencies, their instructions and imports retained. '
+                              'Other cells omitted; return cannot_complete if additional information is required.')
+    return result
+
+
 class GroqClient:
     def __init__(self, store, checkpoint=lambda: None, *, key_loader=None, transport=_transport,
                  sleep=time.sleep, model=None, max_wait=None, clock=time.time):
@@ -304,6 +387,10 @@ class GroqClient:
 
     def notebook_patch(self, context):
         """Propose one solution-cell edit; the executor validates and applies it."""
+        focused = focused_notebook_context(context)
+        if focused != context:
+            self.store.record_event('INFO', 'LAB_CONTEXT_FOCUSED', 'Request limited to target/failure dependencies and instructions; notebook unchanged')
+        context = focused
         payload = {
             "model": self.model, "temperature": 0.1, "max_completion_tokens": 2048,
             "response_format": self._format("notebook_patch", {
