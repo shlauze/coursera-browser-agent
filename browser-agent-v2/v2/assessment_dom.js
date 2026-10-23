@@ -84,7 +84,6 @@ request => {
   const questions = [], bindings = [], feedbackQuestions = [];
   for (let i = 0; i < roots.length; i++) {
     const root = roots[i], fields = answerInputs.filter(e => root.contains(e));
-    if ([...root.querySelectorAll('img,canvas,video')].some(visible)) return {error:'Question includes visual content; text-only model cannot answer it',attestation};
     const disabled = fields.some(e => e.disabled || e.closest('fieldset[disabled]') || e.getAttribute('aria-disabled') === 'true');
     let text = textOf(root, 'input,textarea,select,label,button,[role="radio"],[role="checkbox"],[data-testid="feedback"],.feedback,.points,[data-testid="points"]');
     // Text inputs explicitly reference their prompt. Do not confuse numeric
@@ -118,6 +117,19 @@ request => {
     } else if (fields.length === 1 && ['text','number','textarea'].includes(types[0])) {
       kind = types[0] === 'textarea' ? 'long_text' : types[0];
     } else return {error:'Unsupported or ambiguous answer controls',attestation};
+    const visuals = [...root.querySelectorAll('img,canvas,video')].filter(visible);
+    if (visuals.length) {
+      const images = visuals.map(e => ({src: e.currentSrc || e.src || '', width: e.naturalWidth || 0, height: e.naturalHeight || 0}));
+      const supported = visuals.every(e => e.tagName === 'IMG' && e.complete && e.naturalWidth > 0 &&
+        !e.closest('label,[role="radio"],[role="checkbox"]'));
+      const matches = (Array.isArray(request.visual_reviews) ? request.visual_reviews : []).filter(r =>
+        r.question_text === text && JSON.stringify(r.images) === JSON.stringify(images) &&
+        typeof r.description === 'string' && r.description.trim() && r.description.length <= 6000);
+      if (!supported || matches.length !== 1) return {
+        error:'Question includes visual content; text-only model cannot answer it', attestation,
+        visual_context:{question_text:text,images}};
+      text += ' [Reviewed diagram description: ' + matches[0].description.trim() + ']';
+    }
     const question = {id:`q${i}`,text,kind,options,max_length: fields[0].maxLength > 0 ? fields[0].maxLength : 10000};
     if (disabled) {
       const scores = [...root.querySelectorAll('.points,[data-testid="points"],[data-testid="part-points"]')].map(e=>norm(e.innerText))
@@ -132,7 +144,10 @@ request => {
       } else if (['text','number','long_text'].includes(kind) && fields[0].value?.trim()) {
         answer = {cannot_answer:false,text:fields[0].value};
       }
-      feedbackQuestions.push({question,answer,earned:score?Number(score[1]):null,possible:score?Number(score[2]):null,feedback:([...root.querySelectorAll('[id$="-grade-feedback"]')].map(e=>textOf(e)).join(' ') || textOf(root)).slice(0,3000)});
+      const unanswered = answer === null && [...root.querySelectorAll('div,span,p')].some(e =>
+        visible(e) && e.children.length === 0 && norm(e.textContent) === 'You did not answer the question' &&
+        !e.closest('label,[role="radio"],[role="checkbox"]'));
+      feedbackQuestions.push({question,answer,unanswered,earned:score?Number(score[1]):null,possible:score?Number(score[2]):null,feedback:([...root.querySelectorAll('[id$="-grade-feedback"]')].map(e=>textOf(e)).join(' ') || textOf(root)).slice(0,3000)});
       continue;
     }
     questions.push(question);

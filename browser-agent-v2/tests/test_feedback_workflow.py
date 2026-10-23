@@ -30,3 +30,12 @@ class OldAttemptRecoveryTests(unittest.TestCase):
         with self.assertRaises(HandlerError):
             _recover_feedback_answers([{'question':{'text':'Question','kind':'single','options':[]},'earned':0,'possible':1}],memory)
         memory.record.assert_not_called()
+
+    def test_explicit_unanswered_review_retains_no_fabricated_answer(self):
+        from v2.assessments import _recover_feedback_answers
+        memory=Mock()
+        _recover_feedback_answers([{'question':{'text':'Question','kind':'multiple','options':[]},
+            'answer':None,'unanswered':True,'earned':0.5,'possible':1}],memory)
+        memory.record.assert_not_called()
+        with self.assertRaises(HandlerError):
+            _recover_feedback_answers([{'question':{},'answer':None,'unanswered':True,'earned':None,'possible':1}],memory)

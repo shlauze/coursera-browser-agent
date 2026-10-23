@@ -6,6 +6,8 @@ import re
 import time
 from contextvars import ContextVar
 
+_VISUAL_REVIEWS = ContextVar("visual_reviews", default=[])
+
 _RANDOM_DUPLICATES = ContextVar("random_duplicates", default=False)
 _CONFIRMATION = ContextVar("assessment_confirmation", default=None)
 
@@ -18,13 +20,13 @@ DOM = (Path(__file__).with_name("assessment_dom.js")).read_text(encoding="utf-8"
 
 
 def inspect(page):
-    result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get()})
+    result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()})
     while result.get("attestation"):
         callback = _CONFIRMATION.get()
         if callback is None:
             raise HandlerError("Personal authorship confirmation requires the learner")
         callback(page)
-        result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get()})
+        result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()})
     if result.get("error"):
         raise HandlerError(result["error"])
     return result
@@ -32,7 +34,7 @@ def inspect(page):
 
 def act(page, snapshot, **request):
     inspect(page)  # A late notice must pause before any mutation.
-    result = page.evaluate(DOM, {"allow_random_duplicates": _RANDOM_DUPLICATES.get(), "snapshot": snapshot["snapshot"], "expected_path": snapshot["path"], **request})
+    result = page.evaluate(DOM, {"allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get(), "snapshot": snapshot["snapshot"], "expected_path": snapshot["path"], **request})
     if not result.get("ok"):
         raise HandlerError(result.get("error", "Assignment action was not confirmed"))
 
@@ -78,7 +80,7 @@ def _confirmation_observed(page, checkpoint, *, attempts=5):
     """Read the current mounted form; never click a stale/replacement checkbox."""
     for index in range(attempts):
         checkpoint()
-        state = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get()})
+        state = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()})
         if not state.get("error") and state.get("attestation") is False:
             return True
         if index + 1 < attempts:
@@ -110,9 +112,12 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
         checkpoint()  # Cooperative wait: Stop and Skip remain runner controls.
         if current_page.url != path:
             raise HandlerError("Assignment page changed while waiting for confirmation")
-        if not current_page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get()}).get("attestation"):
+        if not current_page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()}).get("attestation"):
             store.set_meta("confirmation_required", None)
             store.record_event("INFO", "CONFIRMATION_OBSERVED", "Learner confirmation observed on Coursera; continuing the same assessment")
+    from urllib.parse import urlsplit
+    visual_path = re.sub(r"/(?:attempt|view-feedback)/?$", "", urlsplit(page.url).path)
+    visual_token = _VISUAL_REVIEWS.set(store.get_meta("visual_reviews:" + visual_path, []) if store else [])
     enabled = store is not None and store.get_control_state() in {"running", "paused"}
     random_token = _RANDOM_DUPLICATES.set(bool(store and store.get_meta("allow_random_duplicate_options", False)))
     token = _CONFIRMATION.set(wait_for_learner if enabled else None)
@@ -122,6 +127,7 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
     finally:
         _CONFIRMATION.reset(token)
         _RANDOM_DUPLICATES.reset(random_token)
+        _VISUAL_REVIEWS.reset(visual_token)
         if enabled:
             store.set_meta("confirmation_required", None)
 
@@ -329,12 +335,16 @@ def _recover_feedback_answers(rows, memory):
     for row in rows:
         if not _scored_feedback(row):
             raise HandlerError("Previous failed attempt score is unknown; reconcile before retry")
+        if row.get("answer") is None and row.get("unanswered") is True:
+            # A scored, explicitly blank response has no choices to learn from.
+            # Keep its review row, but never invent an answer or cached success.
+            continue
         try:
             answer = validate_answer(row["question"], row.get("answer"))
         except GroqError as exc:
             raise HandlerError("Previous failed attempt selections are unknown; reconcile before retry") from exc
         recovered.append((row, answer))
-    if not recovered:
+    if not rows:
         raise HandlerError("Previous failed attempt has no question review")
     for row, answer in recovered:
         memory.record(row["question"], answer, earned=row["earned"], possible=row["possible"], feedback=row.get("feedback", ""))

@@ -29,6 +29,41 @@ class AssessmentDomTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.browser.close();cls.playwright.stop()
 
+    def test_reviewed_visual_requires_exact_stem_image_and_dimensions(self):
+        import copy
+        svg = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="red"/></svg>'
+        self.page.set_content(FORM.replace('</legend>', '</legend><img id="chart">', 1))
+        self.page.locator('#chart').evaluate('(e,src)=>e.src=src', svg)
+        self.page.wait_for_function('document.querySelector("img").complete && document.querySelector("img").naturalWidth > 0')
+        blocked = self.page.evaluate(DOM, {'action':'inspect'})
+        self.assertIn('visual content', blocked['error'])
+        review = {**blocked['visual_context'], 'description':'A solid red rectangle.'}
+        accepted = self.page.evaluate(DOM, {'action':'inspect', 'visual_reviews':[review]})
+        self.assertIn('Reviewed diagram description: A solid red rectangle.', accepted['questions'][0]['text'])
+        for field in ('stem', 'src', 'width', 'description'):
+            wrong = copy.deepcopy(review)
+            if field == 'stem': wrong['question_text'] += ' changed'
+            elif field == 'description': wrong['description'] = ''
+            else: wrong['images'][0][field] = 'changed'
+            self.assertIn('visual content', self.page.evaluate(DOM, {'action':'inspect','visual_reviews':[wrong]})['error'])
+        self.assertIn('visual content', self.page.evaluate(DOM, {'action':'inspect','visual_reviews':[review,review]})['error'])
+        self.page.locator('#chart').evaluate('(e)=>document.querySelector("label").append(e)')
+        self.assertIn('visual content', self.page.evaluate(DOM, {'action':'inspect','visual_reviews':[review]})['error'])
+
+    def test_explicit_blank_feedback_is_distinguished_from_missing_selection(self):
+        self.page.set_content('<main><fieldset disabled><legend>1. Which number is even?</legend><label><input type="radio" name="q">2</label><label><input type="radio" name="q">3</label><span class="points">0 / 1 point</span><div>You did not answer the question</div></fieldset></main>')
+        row=inspect(self.page)['feedback_questions'][0]
+        self.assertTrue(row['unanswered'])
+        self.assertIsNone(row['answer'])
+        self.page.get_by_text('You did not answer the question',exact=True).evaluate('(e)=>e.remove()')
+        self.assertFalse(inspect(self.page)['feedback_questions'][0]['unanswered'])
+
+    def test_canvas_cannot_be_authorized_by_a_description(self):
+        self.page.set_content(FORM.replace('</legend>', '</legend><canvas width="120" height="80"></canvas>', 1))
+        state = self.page.evaluate(DOM, {'action':'inspect'})
+        review = {**state['visual_context'], 'description':'A reviewed diagram.'}
+        self.assertIn('visual content', self.page.evaluate(DOM, {'action':'inspect','visual_reviews':[review]})['error'])
+
     def test_file_feedback_retains_zero_rubric_without_quiz_fields(self):
         self.page.goto('https://www.coursera.org/learn/example/assignment-submission/abc/test/view-feedback')
         self.page.set_content('<main>No uploaded file<h2>How you were graded</h2>Rubric 1 Status: 0/5 points Rubric 2 Status: 0/3 points</main>')
