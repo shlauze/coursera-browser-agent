@@ -132,6 +132,8 @@ request => {
     const visualIdentity = images => JSON.stringify((Array.isArray(images) ? images : []).map(e =>
       ({src:visualResource(e.src),width:e.width,height:e.height})));
     const visuals = [...root.querySelectorAll('img,canvas,video')].filter(visible);
+    if (visuals.some(e => e.tagName === 'IMG' && (!e.complete || !e.naturalWidth)))
+      return {error:'Question image is still loading',attestation};
     if (visuals.length) {
       const images = visuals.map(e => ({src: e.currentSrc || e.src || '', width: e.naturalWidth || 0, height: e.naturalHeight || 0}));
       const supported = visuals.every(e => e.tagName === 'IMG' && e.complete && e.naturalWidth > 0 &&

@@ -77,6 +77,31 @@ class AssessmentDomTests(unittest.TestCase):
             wrong=copy.deepcopy(review);wrong['images'][0]['src']=replacement
             self.assertIn('visual content',self.page.evaluate(DOM,{'action':'inspect','visual_reviews':[wrong]})['error'])
 
+    def test_waits_for_image_decoding_before_matching_review(self):
+        from v2.assessments import _VISUAL_REVIEWS
+        self.page.set_content(FORM.replace('</legend>', '</legend><img id="chart">', 1))
+        self.page.locator('#chart').evaluate("""e=>{
+            window.decoded=true;
+            Object.defineProperty(e,'currentSrc',{value:'https://example.com/chart.png'});
+            Object.defineProperty(e,'complete',{get:()=>window.decoded});
+            Object.defineProperty(e,'naturalWidth',{get:()=>window.decoded?120:0});
+            Object.defineProperty(e,'naturalHeight',{get:()=>window.decoded?80:0});
+            e.style.width='120px';e.style.height='80px';
+        }""")
+        blocked=self.page.evaluate(DOM,{'action':'inspect'})
+        review={**blocked['visual_context'],'description':'A red curve.'}
+        token=_VISUAL_REVIEWS.set([review])
+        try:
+            self.page.evaluate('()=>{window.decoded=false;setTimeout(()=>window.decoded=true,700)}')
+            self.assertEqual(self.page.evaluate(DOM,{'action':'inspect','visual_reviews':[review]})['error'],'Question image is still loading')
+            state=_wait(self.page,lambda:None,lambda r:bool(r.get('questions')),seconds=3)
+            self.assertIn('Reviewed diagram description',state['questions'][0]['text'])
+            self.page.evaluate('()=>window.decoded=false')
+            with self.assertRaisesRegex(HandlerError,'Question image is still loading'):
+                _wait(self.page,lambda:None,lambda r:bool(r.get('questions')),seconds=0.6)
+        finally:
+            _VISUAL_REVIEWS.reset(token)
+
     def test_canvas_cannot_be_authorized_by_a_description(self):
         self.page.set_content(FORM.replace('</legend>', '</legend><canvas width="120" height="80"></canvas>', 1))
         state = self.page.evaluate(DOM, {'action':'inspect'})

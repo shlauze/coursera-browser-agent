@@ -54,7 +54,7 @@ def _wait(page, checkpoint, predicate, *, seconds=25):
             # React can mount inputs before their labels/formulas arrive.
             # Never use partial choices; retry only extraction failures here.
             if str(exc) not in {"Ambiguous answer options", "Question text is missing",
-                                "Cannot associate every answer field with a question"}:
+                                "Cannot associate every answer field with a question", "Question image is still loading"}:
                 raise
             last_error = str(exc)
             previous_snapshot = None
