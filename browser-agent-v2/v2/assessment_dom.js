@@ -201,8 +201,9 @@ request => {
   const limitedTimerNotice = String.raw`You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the time(?:r)? runs out\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
   const simpleTimerNotice = String.raw`You have [1-9]\d* minutes? to submit this attempt\.`;
   const timerNotice = '(?:' + limitedTimerNotice + '|' + simpleTimerNotice + ')';
+  const remainingAttemptsNotice = String.raw`You will have \d+ attempts? left after this one\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
   const dialogText = norm(scope.innerText);
-  const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: ` + timerNotice + String.raw`)? Continue\s*Cancel$`).test(dialogText);
+  const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: (?:` + timerNotice + '|' + remainingAttemptsNotice + String.raw`))? Continue\s*Cancel$`).test(dialogText);
   const startConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + timerNotice + String.raw` Continue\s*Cancel$`).test(dialogText);
   const fileForm = !location.pathname.endsWith('/view-feedback') && [...scope.querySelectorAll('input[type="file"]')].length > 0;
   const fileFeedback = location.pathname.endsWith('/view-feedback') && /No uploaded file/.test(pageText) && /How you were graded/.test(pageText)

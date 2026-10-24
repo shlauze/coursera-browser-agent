@@ -1,11 +1,13 @@
-# Coursera Browser Agent — v0.2.61
+# Coursera Browser Agent — v0.2.62
 
 Текущая реализация — **v2**, Windows x64. Готовый EXE включает Python и Playwright.
 Google Chrome, аккаунт Coursera и собственный ключ Groq нужны отдельно.
 
-**[Скачать EXE 0.2.61](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.61/CourseraAgent-0.2.61.exe)** · **[Все файлы релиза](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.61)**
+**[Скачать EXE 0.2.62](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.62/CourseraAgent-0.2.62.exe)** · **[Все файлы релиза](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.62)**
 
-В 0.2.61 добавлен выбор Groq / Ollama и автоматическое переключение при лимите Groq.
+В 0.2.62 исправлено распознавание окна повторной попытки с оставшимися попытками.
+Для короткого лимита Groq (до 30 секунд) программа ждёт; для долгого использует Ollama.
+Тайм-аут локальной генерации увеличен до 15 минут для работы на CPU.
 В панели откройте «Модель и автопереключение», остановите исполнителя, выберите
 установленную локальную модель и сохраните настройки. После Retry-After программа
 автоматически возвращается к Groq. Черновики и прогресс сохраняются. Неизвестные подтверждения по-прежнему требуют проверки пользователя.
@@ -14,7 +16,7 @@ Google Chrome, аккаунт Coursera и собственный ключ Groq �
 
 1. Скачайте EXE по ссылке выше и положите в доступную для записи папку.
    `Code → Download ZIP` скачивает исходники; готового EXE в этом архиве нет.
-2. Дважды щёлкните `CourseraAgent-0.2.61.exe`. При первом запуске введите свой
+2. Дважды щёлкните `CourseraAgent-0.2.62.exe`. При первом запуске введите свой
    ключ Groq в консоли. Панель откроется по адресу http://127.0.0.1:8766/.
 3. Запустите исполнителя кнопкой в панели. В отдельном Chrome войдите в Coursera
    вручную, если потребуется. Оставляйте консоль открытой.
@@ -25,12 +27,12 @@ Google Chrome, аккаунт Coursera и собственный ключ Groq �
 $agentDir = Join-Path $env:USERPROFILE 'Documents\CourseraAgent'
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
 Set-Location $agentDir
-Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.61/CourseraAgent-0.2.61.exe' -OutFile 'CourseraAgent-0.2.61.exe'
-.\CourseraAgent-0.2.61.exe --version
-.\CourseraAgent-0.2.61.exe
+Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.62/CourseraAgent-0.2.62.exe' -OutFile 'CourseraAgent-0.2.62.exe'
+.\CourseraAgent-0.2.62.exe --version
+.\CourseraAgent-0.2.62.exe
 ```
 
-Ожидаемая версия: `0.2.61`. Для обновления существующей установки используйте
+Ожидаемая версия: `0.2.62`. Для обновления существующей установки используйте
 её прежнюю папку, чтобы программа нашла сохранённый прогресс.
 
 ## Запуск исполнителя из PowerShell
@@ -38,7 +40,7 @@ Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releas
 Откройте PowerShell **в папке с EXE**. После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.61.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.62.exe --chrome-port 9224 run
 ```
 
 `run` запускает исполнителя без новой панели. Для первого запуска удобнее
@@ -48,8 +50,8 @@ Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releas
 Остановка — из второго PowerShell в той же папке:
 
 ```powershell
-.\CourseraAgent-0.2.61.exe stop
-.\CourseraAgent-0.2.61.exe status
+.\CourseraAgent-0.2.62.exe stop
+.\CourseraAgent-0.2.62.exe status
 ```
 
 Дождитесь `control_state: stopped` в JSON. Для нового запуска используйте `run`;
@@ -68,11 +70,11 @@ EXE не подписан сертификатом издателя; контр�
 
 ```powershell
 Get-Location
-Test-Path .\CourseraAgent-0.2.61.exe
+Test-Path .\CourseraAgent-0.2.62.exe
 ```
 
 Если результат `False`, скачайте EXE или перейдите в папку, где он сохранён.
-Путь с пробелами запускается так: `& "C:\Папка программы\CourseraAgent-0.2.61.exe"`.
+Путь с пробелами запускается так: `& "C:\Папка программы\CourseraAgent-0.2.62.exe"`.
 
 ## Исходники и подробная инструкция
 

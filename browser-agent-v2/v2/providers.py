@@ -11,6 +11,7 @@ import time
 import urllib.request
 
 OLLAMA_URL = 'http://127.0.0.1:11434'
+LOCAL_TIMEOUT_SECONDS = 900
 DEFAULTS = {'mode': 'groq', 'ollama_model': '', 'num_ctx': 8192}
 
 
@@ -97,7 +98,7 @@ def ollama_transport(config, payload, checkpoint):
 
     def generate():
         try:
-            with urllib.request.urlopen(request, timeout=180) as response:
+            with urllib.request.urlopen(request, timeout=LOCAL_TIMEOUT_SECONDS) as response:
                 result_queue.put((True, json.loads(response.read(2_000_000))))
         except Exception:
             # Do not expose provider response bodies, prompts or answers.
@@ -105,7 +106,7 @@ def ollama_transport(config, payload, checkpoint):
 
     checkpoint()
     threading.Thread(target=generate, daemon=True, name='ollama-generation').start()
-    deadline = time.monotonic() + 185
+    deadline = time.monotonic() + LOCAL_TIMEOUT_SECONDS + 5
     while True:
         checkpoint()
         if time.monotonic() >= deadline:

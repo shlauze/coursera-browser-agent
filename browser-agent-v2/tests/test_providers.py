@@ -65,6 +65,33 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(remote.call_count, 1)
         self.assertEqual(self.store.get_meta('groq_wait')['retry_at'], 180)
 
+    def test_short_limit_waits_without_slow_local_generation(self):
+        self.configure()
+        remote = Mock(side_effect=[(429, {'Retry-After': '5'}, {}),
+            (200, {}, {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(self.answer)}}]})])
+        elapsed = [100.0]
+        client = self.client(remote, sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
+        client.clock = lambda: elapsed[0]
+        self.assertEqual(client._request({}), self.answer)
+        self.assertEqual(elapsed[0], 105)
+        self.local.assert_not_called()
+
+    def test_failed_local_generation_does_not_repeat_expired_cooldown(self):
+        self.configure()
+        remote = Mock(side_effect=[(429, {'Retry-After': '60'}, {}),
+            (200, {}, {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(self.answer)}}]})])
+        elapsed = [100.0]
+        def local(*args):
+            elapsed[0] += 180
+            raise GroqError('local timeout')
+        self.local.side_effect = local
+        sleep = Mock(side_effect=AssertionError('Cooldown already expired'))
+        client = self.client(remote, sleep=sleep)
+        client.clock = lambda: elapsed[0]
+        self.assertEqual(client._request({}), self.answer)
+        self.assertEqual(remote.call_count, 2)
+        sleep.assert_not_called()
+
     def test_local_failure_keeps_groq_wait_and_honors_stop(self):
         self.configure()
         self.local.side_effect = GroqError('unavailable')
@@ -153,6 +180,7 @@ class ProviderTests(unittest.TestCase):
         with patch('v2.providers.models', return_value=['local:latest']), patch('v2.providers.urllib.request.urlopen', return_value=response) as send:
             self.assertEqual(ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192}, payload, lambda: None), self.answer)
             req = send.call_args.args[0]
+            self.assertEqual(send.call_args.kwargs['timeout'], 900)
             self.assertEqual(req.full_url, 'http://127.0.0.1:11434/api/chat')
             self.assertNotIn('Authorization', req.headers)
             self.assertEqual(json.loads(req.data)['format'], payload['response_format']['json_schema']['schema'])
@@ -167,6 +195,32 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'user stop'):
                 ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192}, payload, stop)
             send.assert_not_called()
+
+    def test_stop_interrupts_slow_local_wait_without_accepting_late_response(self):
+        import threading
+        started, release = threading.Event(), threading.Event()
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps({'done': True, 'done_reason': 'stop',
+            'message': {'content': json.dumps(self.answer)}}).encode()
+        def send(*args, **kwargs):
+            started.set()
+            release.wait(3)
+            return response
+        checks = [0]
+        def checkpoint():
+            checks[0] += 1
+            if checks[0] > 1:
+                self.assertTrue(started.wait(2))
+                raise RuntimeError('user stop')
+        try:
+            with patch('v2.providers.models', return_value=['local:latest']), patch('v2.providers.urllib.request.urlopen', side_effect=send):
+                with self.assertRaisesRegex(RuntimeError, 'user stop'):
+                    ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192},
+                        {'messages': [{'role': 'user', 'content': '2+2?'}]}, checkpoint)
+        finally:
+            release.set()
 
     def test_provider_settings_http_requires_csrf_and_preserves_progress(self):
         import threading

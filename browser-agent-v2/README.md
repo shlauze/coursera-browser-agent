@@ -1,4 +1,4 @@
-# Coursera Browser Agent v2 — 0.2.61
+# Coursera Browser Agent v2 — 0.2.62
 
 Локальный инструмент для Windows: отдельный профиль Chrome, панель управления,
 SQLite с прогрессом и интеграция с Groq. Сертификат считается подтверждённым
@@ -6,8 +6,8 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 
 ## Запуск EXE без установки Python
 
-Скачайте **[CourseraAgent-0.2.61.exe](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.61/CourseraAgent-0.2.61.exe)**
-или ZIP с EXE и инструкцией из [релиза 0.2.61](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.61).
+Скачайте **[CourseraAgent-0.2.62.exe](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.62/CourseraAgent-0.2.62.exe)**
+или ZIP с EXE и инструкцией из [релиза 0.2.62](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.62).
 Архив `Code → Download ZIP` содержит исходники, готового EXE в нём нет.
 
 Положите EXE в доступную для записи папку. Для продолжения существующей работы
@@ -15,17 +15,17 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 Откройте PowerShell в этой папке и проверьте файл:
 
 ```powershell
-Test-Path .\CourseraAgent-0.2.61.exe
-.\CourseraAgent-0.2.61.exe --version
+Test-Path .\CourseraAgent-0.2.62.exe
+.\CourseraAgent-0.2.62.exe --version
 ```
 
-Ожидаются `True` и `0.2.61`. Если файл не найден, скачайте его или исправьте
+Ожидаются `True` и `0.2.62`. Если файл не найден, скачайте его или исправьте
 текущую папку командой `cd "ПОЛНЫЙ ПУТЬ К ПАПКЕ С EXE"`.
 
 ### Первый запуск через панель
 
 ```powershell
-.\CourseraAgent-0.2.61.exe
+.\CourseraAgent-0.2.62.exe
 ```
 
 Введите свой ключ Groq в консоли, если он ещё не настроен. Ввод скрыт.
@@ -39,7 +39,7 @@ Test-Path .\CourseraAgent-0.2.61.exe
 После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.61.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.62.exe --chrome-port 9224 run
 ```
 
 Эта команда не открывает новую панель. Не запускайте одновременно второй
@@ -52,20 +52,20 @@ Test-Path .\CourseraAgent-0.2.61.exe
 
 ```powershell
 # Настроить или заменить ключ (ввод скрыт)
-.\CourseraAgent-0.2.61.exe configure-groq
+.\CourseraAgent-0.2.62.exe configure-groq
 
 # Просмотреть сохранённое состояние
-.\CourseraAgent-0.2.61.exe status
+.\CourseraAgent-0.2.62.exe status
 
 # Пауза и продолжение работающего исполнителя
-.\CourseraAgent-0.2.61.exe pause
-.\CourseraAgent-0.2.61.exe resume
+.\CourseraAgent-0.2.62.exe pause
+.\CourseraAgent-0.2.62.exe resume
 
 # Штатная остановка на безопасной точке
-.\CourseraAgent-0.2.61.exe stop
+.\CourseraAgent-0.2.62.exe stop
 
 # Диагностика комплекта без запросов к Coursera/Groq
-.\CourseraAgent-0.2.61.exe --self-test
+.\CourseraAgent-0.2.62.exe --self-test
 ```
 
 После `stop` дождитесь `control_state: stopped` в выводе `status`.
@@ -74,7 +74,7 @@ Test-Path .\CourseraAgent-0.2.61.exe
 ### Панель с указанным портом
 
 ```powershell
-.\CourseraAgent-0.2.61.exe --chrome-port 9224 serve --panel-port 8769
+.\CourseraAgent-0.2.62.exe --chrome-port 9224 serve --panel-port 8769
 ```
 
 Откройте http://127.0.0.1:8769/ вручную. При явном `serve` браузер с панелью
@@ -118,6 +118,18 @@ cd coursera-browser-agent\browser-agent-v2
 Ключ DPAPI привязан к пользователю Windows. На другом ПК настройте свой ключ.
 EXE не подписан сертификатом издателя; SHA256 опубликованы в релизе.
 Полная инструкция: [настройка для другого пользователя](SETUP_OTHER_USER.md).
+
+## Исправления 0.2.62
+
+- Распознаётся окно повторной попытки с «attempts left after this one» и временем ожидания.
+  Продолжение разрешено только после проверки предыдущего незачтённого результата;
+  при восстановлении открытого окна сначала выполняется Cancel и повторная сверка.
+- При лимите Groq до 30 секунд автоматический режим ждёт Retry-After без запуска
+  медленной локальной генерации. Для более долгого ожидания используется Ollama.
+- Локальная генерация может занимать до 15 минут, в том числе на CPU. Стоп остаётся
+  доступен; поздний ответ после остановки не применяется. Успешное получение ответа
+  отмечается событием OLLAMA_RESPONSE и ещё не означает зачёт задания.
+- После неудачного локального запроса уже истёкшее ожидание Groq не повторяется.
 
 ## Выбор Groq / Ollama / автоматически
 

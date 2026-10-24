@@ -45,12 +45,16 @@ class GroqTests(unittest.TestCase):
 
     def test_production_waits_on_same_question_beyond_old_budget(self):
         calls=[]; sleeps=[]
+        now = [100.0]
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
         def transport(*args):
             calls.append(1)
             if len(calls) < 4:
                 return 429, {"retry-after":"120"}, {"error":{"message":"Tokens per day (TPD): Limit 200000 Used 199900 Requested 500"}}
             return success({"cannot_answer":False,"selected":["a"]})
-        self.client(transport, max_wait=None, sleep=sleeps.append).answer(self.question)
+        self.client(transport, max_wait=None, sleep=sleep, clock=lambda: now[0]).answer(self.question)
         self.assertEqual(len(calls),4)
         self.assertEqual(sum(sleeps),360)
         self.assertEqual(self.store.get_meta("groq_rate_limit")["metric"],"TPD")
@@ -163,12 +167,16 @@ class GroqTests(unittest.TestCase):
 
     def test_429_waits_at_least_retry_after_and_checkpoints(self):
         calls=[]; sleeps=[]; checkpoints=[]
+        now = [100.0]
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
         def transport(key,payload):
             calls.append(1)
             if len(calls)==1:
                 return 429,{"Retry-After":"3","X-RateLimit-Remaining-Tokens":"0","Authorization":"secret"},{}
             return success({"cannot_answer":False,"selected":["a"]})
-        client=self.client(transport,sleep=sleeps.append)
+        client=self.client(transport,sleep=sleep,clock=lambda: now[0])
         client.checkpoint=lambda:checkpoints.append(1)
         client.answer(self.question)
         self.assertEqual(sum(sleeps),3)

@@ -345,11 +345,20 @@ class GroqClient:
         self.store.record_event('INFO', 'PROVIDER_OLLAMA', f'Local generation: {config["ollama_model"]}; {reason}')
         result = (self.local_transport or ollama_transport)(config, payload, self.checkpoint)
         self.checkpoint()
+        self.store.record_event('INFO', 'OLLAMA_RESPONSE', 'Local response received; task validation still required')
         return result
 
     def _fallback(self, payload, reason):
         from .providers import settings
         if settings(self.store)['mode'] != 'auto':
+            return False, None
+        wait = self.store.get_meta('groq_wait') or {}
+        remaining = max(float(self.store.get_meta('groq_retry_until', 0)),
+                        float(wait.get('retry_at', 0))) - self.clock()
+        if 0 < remaining <= 30:
+            # A short rate-limit wait is cheaper than starting a CPU generation.
+            self.store.record_event('INFO', 'PROVIDER_SHORT_WAIT',
+                'Groq cooldown is at most 30 seconds; waiting before retry instead of starting local generation')
             return False, None
         try:
             return True, self._local_request(payload, reason)
@@ -460,7 +469,8 @@ class GroqClient:
             if (self.max_wait is not None and waited + delay > self.max_wait) or (status != 429 and attempt >= 5):
                 raise GroqError("Groq retry budget exhausted; course deferred without shortening Retry-After")
             self.store.record_event("WARNING", "GROQ_WAIT", f"Groq HTTP {status}; retry in {delay:g} seconds")
-            remaining = delay
+            # Local generation may have already consumed the entire cooldown.
+            remaining = max(0, float((self.store.get_meta('groq_wait') or {}).get('retry_at', 0)) - self.clock())
             while remaining > 0:
                 self.checkpoint()
                 step = min(1, remaining)
