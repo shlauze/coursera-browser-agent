@@ -120,7 +120,10 @@ class Dashboard:
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("X-Frame-Options", "DENY")
-                self.send_header("Referrer-Policy", "no-referrer")
+                # Chrome gives form POSTs Origin:null under no-referrer, which
+                # would reject our own forms. Keep same-origin provenance while
+                # suppressing referrers to external sites; Origin/CSRF stay strict.
+                self.send_header("Referrer-Policy", "same-origin")
                 self.send_header(
                     "Content-Security-Policy",
                     "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",

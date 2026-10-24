@@ -1,9 +1,9 @@
-Coursera Browser Agent 0.2.63 — Windows x64
+Coursera Browser Agent 0.2.64 — Windows x64
 
 Python устанавливать не нужно. Нужны Google Chrome, Интернет,
 собственный аккаунт Coursera и ключ Groq.
 
-1. Поместите CourseraAgent-0.2.63.exe в отдельную доступную для записи папку.
+1. Поместите CourseraAgent-0.2.64.exe в отдельную доступную для записи папку.
 2. Запустите EXE двойным щелчком. При первом запуске введите ключ Groq
    в консоли (ввод скрыт), либо нажмите Enter и настройте его позднее.
 3. Панель откроется в браузере. Исполнитель запускается кнопкой в панели.
@@ -14,13 +14,13 @@ profile и logs рядом с EXE. Сохраняйте их при обновл
 другим людям. Замена EXE не требует удаления этих папок.
 
 Настройка ключа позднее (из терминала в папке программы):
-  .\CourseraAgent-0.2.63.exe configure-groq
+  .\CourseraAgent-0.2.64.exe configure-groq
 
 Проверка комплекта без запросов к Coursera/Groq:
-  .\CourseraAgent-0.2.63.exe --self-test
+  .\CourseraAgent-0.2.64.exe --self-test
 
 Если стандартные порты заняты другой установкой:
-  .\CourseraAgent-0.2.63.exe --chrome-port 9225 serve --panel-port 8767
+  .\CourseraAgent-0.2.64.exe --chrome-port 9225 serve --panel-port 8767
   Затем откройте http://127.0.0.1:8767/
 
 Не запускайте новую копию одновременно с другой установкой на том же

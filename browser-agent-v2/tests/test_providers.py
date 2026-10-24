@@ -305,3 +305,47 @@ class ProviderTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+
+    def test_chrome_form_origin_and_cross_origin_protection(self):
+        import threading
+        from playwright.sync_api import sync_playwright
+        from urllib.request import Request, urlopen
+        from urllib.parse import urlencode
+        from urllib.error import HTTPError
+        self.store.set_control_state('running')
+        panel = Dashboard(self.store, Control(self.store), port=0)
+        server = panel.build_server()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{panel.port}'
+        origins = []
+        try:
+            with patch('v2.dashboard.ollama_models', return_value=[]), sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True, channel='chrome')
+                try:
+                    page = browser.new_page()
+                    page.on('request', lambda request: origins.append(request.headers.get('origin')) if request.method == 'POST' else None)
+                    page.goto(base + '/providers')
+                    with page.expect_response(lambda r: r.url.endswith('/action/providers') and r.request.method == 'POST') as response:
+                        page.locator('button[type=submit]').click()
+                    self.assertEqual(response.value.status, 303)
+                    page.wait_for_url('**/providers?notice=*')
+                    self.assertEqual(origins, [base])
+                    self.assertEqual(self.store.get_meta('provider_pending')['mode'], 'groq')
+                    self.assertEqual(self.store.get_control_state(), 'running')
+                    self.assertIn('Ожидает применения', page.locator('body').inner_text())
+                finally:
+                    browser.close()
+            for origin in ('null', 'https://example.org', 'http://127.0.0.1:1'):
+                request = Request(base + '/action/providers/cancel',
+                    data=urlencode({'csrf': panel.csrf_token}).encode(),
+                    headers={'Origin': origin, 'Content-Type': 'application/x-www-form-urlencoded'})
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(request, timeout=3)
+                self.assertEqual(error.exception.code, 403)
+                error.exception.close()
+            self.assertIsNotNone(self.store.get_meta('provider_pending'))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)

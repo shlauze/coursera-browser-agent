@@ -1,4 +1,4 @@
-# Coursera Browser Agent v2 — 0.2.63
+# Coursera Browser Agent v2 — 0.2.64
 
 Локальный инструмент для Windows: отдельный профиль Chrome, панель управления,
 SQLite с прогрессом и интеграция с Groq. Сертификат считается подтверждённым
@@ -6,9 +6,9 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 
 ## Запуск EXE без установки Python
 
-Версия 0.2.63 доступна в исходниках и локальной сборке EXE. Файл этого релиза
+Версия 0.2.64 доступна в исходниках и локальной сборке EXE. Файл этого релиза
 пока не опубликован. [Опубликованные сборки](https://github.com/shlauze/coursera-browser-agent/releases)
-могут отставать от исходников. Для сборки 0.2.63 выполните `build_exe.cmd`
+могут отставать от исходников. Для сборки 0.2.64 выполните `build_exe.cmd`
 на Windows с Python; готовый EXE затем запускается без установленного Python.
 
 Архив `Code → Download ZIP` содержит исходники, готового EXE в нём нет.
@@ -18,17 +18,17 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 Откройте PowerShell в этой папке и проверьте файл:
 
 ```powershell
-Test-Path .\CourseraAgent-0.2.63.exe
-.\CourseraAgent-0.2.63.exe --version
+Test-Path .\CourseraAgent-0.2.64.exe
+.\CourseraAgent-0.2.64.exe --version
 ```
 
-Ожидаются `True` и `0.2.63`. Если файл не найден, скачайте его или исправьте
+Ожидаются `True` и `0.2.64`. Если файл не найден, скачайте его или исправьте
 текущую папку командой `cd "ПОЛНЫЙ ПУТЬ К ПАПКЕ С EXE"`.
 
 ### Первый запуск через панель
 
 ```powershell
-.\CourseraAgent-0.2.63.exe
+.\CourseraAgent-0.2.64.exe
 ```
 
 Введите свой ключ Groq в консоли, если он ещё не настроен. Ввод скрыт.
@@ -42,7 +42,7 @@ Test-Path .\CourseraAgent-0.2.63.exe
 После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.63.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.64.exe --chrome-port 9224 run
 ```
 
 Эта команда не открывает новую панель. Не запускайте одновременно второй
@@ -55,20 +55,20 @@ Test-Path .\CourseraAgent-0.2.63.exe
 
 ```powershell
 # Настроить или заменить ключ (ввод скрыт)
-.\CourseraAgent-0.2.63.exe configure-groq
+.\CourseraAgent-0.2.64.exe configure-groq
 
 # Просмотреть сохранённое состояние
-.\CourseraAgent-0.2.63.exe status
+.\CourseraAgent-0.2.64.exe status
 
 # Пауза и продолжение работающего исполнителя
-.\CourseraAgent-0.2.63.exe pause
-.\CourseraAgent-0.2.63.exe resume
+.\CourseraAgent-0.2.64.exe pause
+.\CourseraAgent-0.2.64.exe resume
 
 # Штатная остановка на безопасной точке
-.\CourseraAgent-0.2.63.exe stop
+.\CourseraAgent-0.2.64.exe stop
 
 # Диагностика комплекта без запросов к Coursera/Groq
-.\CourseraAgent-0.2.63.exe --self-test
+.\CourseraAgent-0.2.64.exe --self-test
 ```
 
 После `stop` дождитесь `control_state: stopped` в выводе `status`.
@@ -77,7 +77,7 @@ Test-Path .\CourseraAgent-0.2.63.exe
 ### Панель с указанным портом
 
 ```powershell
-.\CourseraAgent-0.2.63.exe --chrome-port 9224 serve --panel-port 8769
+.\CourseraAgent-0.2.64.exe --chrome-port 9224 serve --panel-port 8769
 ```
 
 Откройте http://127.0.0.1:8769/ вручную. При явном `serve` браузер с панелью
@@ -133,6 +133,11 @@ EXE не подписан сертификатом издателя; SHA256 оп
   доступен; поздний ответ после остановки не применяется. Успешное получение ответа
   отмечается событием OLLAMA_RESPONSE и ещё не означает зачёт задания.
 - После неудачного локального запроса уже истёкшее ожидание Groq не повторяется.
+
+## Исправление формы в 0.2.64
+
+Исправлена ошибка `Invalid origin` при сохранении модели из Chrome.
+Проверка Origin и CSRF сохранена; форма проверяется настоящим браузерным POST.
 
 ## Выбор Groq / Ollama / автоматически
 
