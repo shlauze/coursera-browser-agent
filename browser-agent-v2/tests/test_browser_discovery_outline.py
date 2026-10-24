@@ -123,6 +123,41 @@ class BrowserDomTests(unittest.TestCase):
             "deep-learning-with-pytorch", "second-course", "new-course"
         ])
 
+    def _load_drawer_outline(self, extra="", *, nested=False):
+        html = OUTLINE_HTML.replace('<aside ',
+            '<div class="cds-Modal-container"><div role="dialog" data-testid="drawer-toggle-drawer"><aside ')
+        html = html.replace('</aside>', '</aside>' + (extra if nested else '') + '</div>'
+            + ('' if nested else extra) + '</div>')
+        self.page.route('https://www.coursera.org/learn/example-course/**',
+                        lambda route: route.fulfill(body=html))
+        self.page.goto('https://www.coursera.org/learn/example-course/lecture/intro')
+
+    def test_modal_course_drawer_expands_and_preserves_completion_evidence(self):
+        self._load_drawer_outline()
+        snapshot = scan_outline(self.page)
+        self.assertEqual(len(snapshot.items), 3)
+        self.assertEqual([item.completed for item in snapshot.items], [True, True, False])
+        self.assertEqual(self.page.locator('[data-testid="drawer-toggle-drawer"]').count(), 1)
+        self.assertEqual(self.page.get_by_role('button', name='Module 2').get_attribute('aria-expanded'), 'true')
+
+    def test_course_drawer_does_not_hide_other_confirmations(self):
+        from v2.ui import UnknownOverlay
+        for nested, extra in [(True, '<div role="dialog">Confirm authorship<button>Confirm</button></div>'),
+                              (False, '<div role="alertdialog">Unknown confirmation</div>'),
+                              (False, '<p>Additional unknown modal content</p>')]:
+            with self.subTest(nested=nested, extra=extra):
+                self._load_drawer_outline(extra, nested=nested)
+                with self.assertRaises(UnknownOverlay):
+                    scan_outline(self.page)
+                self.assertEqual(self.page.get_by_role('button', name='Module 2').get_attribute('aria-expanded'), 'false')
+                self.page.unroute_all()
+
+    def test_unidentified_drawer_is_still_blocked(self):
+        from v2.ui import require_clear_outline, UnknownOverlay
+        self.page.set_content('<div role="dialog" data-testid="drawer-toggle-drawer">Unknown drawer</div>')
+        with self.assertRaises(UnknownOverlay):
+            require_clear_outline(self.page)
+
     def test_open_course_refinds_selected_card(self) -> None:
         self.page.route("https://www.coursera.org/my-learning*", lambda route: route.fulfill(body=QUEUE_HTML))
         self.page.route("https://www.coursera.org/learn/deep-learning-with-pytorch/lecture/intro",

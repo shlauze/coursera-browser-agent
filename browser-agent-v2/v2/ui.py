@@ -25,8 +25,29 @@ def dismiss_learning_overlay(page):
     return dismissed
 
 
+_IS_OUTLINE_DRAWER_JS = r"""element => {
+    const selector = '[role="dialog"][data-testid="drawer-toggle-drawer"]';
+    const drawers = element.matches(selector) ? [element] :
+        element.matches('.cds-Modal-container:not([role="dialog"]):not([role="alertdialog"])')
+            ? [...element.querySelectorAll(selector)] : [];
+    if (drawers.length !== 1) return false;
+    const drawer = drawers[0];
+    const root = document.querySelector('[data-v2-outline-root]');
+    if (!root || !drawer.contains(root)) return false;
+    const module = [...root.querySelectorAll('button[aria-expanded],[role="button"][aria-expanded]')]
+        .some(e => /(?:Module|Week)\s*\d+/i.test(e.innerText || e.getAttribute('aria-label') || ''));
+    if (!module || !root.querySelector('a[href*="/learn/"]')) return false;
+    // Only the drawer and its plain modal shell are exempt. Any nested or
+    // separate dialog is still inspected independently by the caller.
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    return norm(element.innerText) === norm(drawer.innerText);
+}"""
+
+
 def require_clear_outline(page):
     dismiss_learning_overlay(page)
     for dialog in page.locator('[role="dialog"],[role="alertdialog"],dialog[open],.cds-Modal-container').element_handles():
         if dialog.is_visible() and dialog.inner_text().strip():
+            if dialog.evaluate(_IS_OUTLINE_DRAWER_JS):
+                continue
             raise UnknownOverlay("Unknown modal blocks course outline; learner review required")
