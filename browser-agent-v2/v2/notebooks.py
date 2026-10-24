@@ -123,6 +123,13 @@ def validate_code(original, code):
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, 'attr', '')
+            keras_compile = (name == 'compile' and isinstance(node.func, ast.Attribute)
+                             and not node.args and bool({'optimizer', 'loss'} & {k.arg for k in node.keywords})
+                             and all(k.arg in {'optimizer', 'loss', 'metrics', 'loss_weights',
+                                 'weighted_metrics', 'run_eagerly', 'steps_per_execution',
+                                 'jit_compile', 'auto_scale_loss'} for k in node.keywords))
+            if keras_compile:
+                continue
             if name in forbidden or name in {'system', 'popen', 'rmtree', 'unlink', 'remove', 'exit', 'kill'}:
                 raise HandlerError('Generated code contains an unsupported interactive or destructive operation')
     # Keep instructor scaffolding outside explicit answer delimiters byte-for-byte.
@@ -212,7 +219,8 @@ class NotebookExecutor:
             str(i): [{'number': n, 'source': region.group('body')} for n, region in enumerate(regions)]
             for i in originals
             if (regions := list(SOLUTION_REGIONS.finditer(source(snapshot['document']['cells'][i]))))}
-        if len(json.dumps(context)) > 120000:
+        from .groq_client import focused_notebook_context, deduplicate_notebook_context
+        if len(json.dumps(deduplicate_notebook_context(focused_notebook_context(context)))) > 120000:
             raise HandlerError('Notebook context exceeds the supported Groq request size')
         action = self.store.get_action(self.action_id) or {}
         draft_identity = [action.get('course_id', self.action_id), self.path,
@@ -544,12 +552,10 @@ def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
     text = '\n'.join(scope.locator('body').inner_text(timeout=10000) for scope in scopes)
     if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
         raise HandlerError('Notebook prepared; personal authorship confirmation requires the learner')
-    buttons = [scope.get_by_role('button', name=re.compile(r'^Submit assignment$', re.I)).locator('visible=true') for scope in scopes]
-    if sum(button.count() for button in buttons) != 1:
-        raise HandlerError('Notebook prepared; no unique enabled Submit assignment control')
-    button = next(button for button in buttons if button.count())
-    if not button.is_enabled():
-        raise HandlerError('Notebook prepared; no unique enabled Submit assignment control')
+    button = wait_for_submit_control(lab, scopes, checkpoint, store)
+    text = '\n'.join(scope.locator('body').inner_text(timeout=10000) for scope in scopes)
+    if re.search(r'(?:work is your own|work is my own|I.*understand and agree)', text, re.I):
+        raise HandlerError('Submission requires personal authorship confirmation')
     store.set_meta(f'submission:{action_id}', 'submitting')
     button.click(timeout=10000)
     deadline = time.monotonic() + 120
@@ -570,3 +576,32 @@ def handle_programming_lab(page, checkpoint, *, groq, store, action_id):
             return HandlerResult('Notebook executed, saved and submitted; awaiting Coursera outline verification')
         lab.wait_for_timeout(500)
     raise HandlerError('Lab submission result is unclear; intent saved without a duplicate submission')
+
+
+def wait_for_submit_control(lab, scopes, checkpoint, store, *, timeout=30):
+    """Recover a responsive header through normal viewport layout, never force-click."""
+    deadline = time.monotonic() + timeout
+    widened = False
+    while True:
+        checkpoint()
+        buttons = [scope.get_by_role('button', name=re.compile(r'^Submit assignment$', re.I))
+                   .locator('visible=true') for scope in scopes]
+        count = sum(button.count() for button in buttons)
+        if count > 1:
+            raise HandlerError('Notebook prepared; multiple Submit assignment controls are ambiguous')
+        if count == 1:
+            button = next(button for button in buttons if button.count())
+            if button.is_enabled():
+                return button
+        if not widened:
+            hidden = lab.get_by_role('button', name=re.compile(r'^Submit assignment$', re.I), include_hidden=True)
+            width = lab.evaluate('() => innerWidth')
+            if hidden.count() == 1 and not hidden.is_visible() and width < 1200:
+                checkpoint()
+                lab.set_viewport_size({'width': 1280, 'height': 900})
+                widened = True
+                store.record_event('INFO', 'LAB_SUBMIT_VIEWPORT',
+                    'Expanded lab viewport to reveal the responsive submission header')
+        if time.monotonic() >= deadline:
+            raise HandlerError('Notebook prepared; no unique enabled Submit assignment control after waiting')
+        lab.wait_for_timeout(500)

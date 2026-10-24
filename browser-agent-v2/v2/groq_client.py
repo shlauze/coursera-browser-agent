@@ -38,6 +38,45 @@ class ResponseValidationError(GroqError):
     pass
 
 
+def validate_notebook_response(result, context, region_mode):
+    """Validate JSON mode locally with the same contract as structured output."""
+    fields = {'cannot_complete', 'index', 'regions' if region_mode else 'code'}
+    if (not isinstance(result, dict) or set(result) != fields
+            or type(result.get('cannot_complete')) is not bool or type(result.get('index')) is not int):
+        raise ResponseValidationError('Notebook response has invalid fields or types')
+    if result['cannot_complete']:
+        raise GroqError('Groq could not produce a supported notebook solution')
+    index = result['index']
+    allowed = context.get('editable_cells', [])
+    if ((allowed and index not in allowed)
+            or (context.get('target') is not None and index != context['target'])):
+        raise ResponseValidationError('Notebook response selected an unrelated cell')
+    if region_mode:
+        regions = result['regions']
+        expected = {r['number'] for r in context['solution_regions'].get(str(index), [])}
+        if (not isinstance(regions, list) or len(regions) != len(expected)
+                or any(not isinstance(r, dict) or set(r) != {'number', 'code'}
+                       or type(r['number']) is not int or not isinstance(r['code'], str)
+                       or not r['code'].strip() or len(r['code']) > 40000 for r in regions)
+                or {r['number'] for r in regions} != expected):
+            raise ResponseValidationError('Notebook response has invalid solution regions')
+    elif not isinstance(result['code'], str) or not result['code'].strip() or len(result['code']) > 40000:
+        raise ResponseValidationError('Notebook response has invalid code')
+    return result
+
+
+def deduplicate_notebook_context(context):
+    result = json.loads(json.dumps(context))
+    sources = {str(c['index']): c['source'] for c in result.get('notebook', []) if 'index' in c}
+    for index, regions in result.get('solution_regions', {}).items():
+        for region in regions:
+            # Region bodies already occur verbatim in the notebook cell. Keep the
+            # numbering but do not pay for the same code twice. Never edit source.
+            if region.get('source') is not None and region['source'] in sources.get(index, ''):
+                del region['source']
+    return result
+
+
 def normalize(value):
     return " ".join(str(value).split())
 
@@ -234,8 +273,19 @@ def notebook_analysis_source(source):
         # e.g. `# learning_rate = ...`, then return it below the empty region.
         # Without this synthetic assignment symtable calls it a global and
         # pulls unrelated examples defining the same name into the request.
-        locals_to_fill = sorted({m.group(1) for line in comments
-            if (m := re.match(r'^\s*#\s*([A-Za-z_]\w*)\s*=(?!=)', line))})
+        locals_to_fill = set()
+        for line in comments:
+            candidate = re.sub(r'^\s*#\s*', '', line)
+            try:
+                assignment = ast.parse(candidate)
+            except (SyntaxError, IndentationError):
+                continue
+            for node in assignment.body:
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    locals_to_fill.update(n.id for t in targets for n in ast.walk(t)
+                                         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store))
+        locals_to_fill = sorted(locals_to_fill)
         body = ''.join(indent + name + ' = None\n' for name in locals_to_fill) or indent + 'pass\n'
         return match.group('header') + body + match.group('end')
     return pattern.sub(empty_suite, source)
@@ -255,11 +305,14 @@ def focused_notebook_context(context):
     cells = context.get('notebook', [])
     if any('index' not in cell for cell in cells):
         return context
-    definitions, references, always = {}, {}, set()
+    definitions, references, always, imports = {}, {}, set(), {}
     for cell in cells:
         if cell.get('type') != 'code':
             continue
         index = cell['index']
+        if re.match(r'^\s*%%(?:javascript|html|latex|markdown|svg)\b', cell['source']) and index not in roots:
+            # Non-Python cell magics cannot define Python dependencies.
+            continue
         # IPython line magics are context, not Python syntax.
         source = '\n'.join(line for line in cell['source'].splitlines()
                            if not line.lstrip().startswith('%'))
@@ -279,7 +332,7 @@ def focused_notebook_context(context):
         references[index] = external_names(symbols)
         for node in tree.body:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                always.add(index)
+                imports.setdefault(index, []).append(ast.get_source_segment(source, node))
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 definitions.setdefault(node.name, set()).add(index)
             elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
@@ -310,7 +363,9 @@ def focused_notebook_context(context):
             while prior >= 0 and cells[prior].get('type') != 'code':
                 keep.add(cells[prior]['index'])
                 prior -= 1
-    result['notebook'] = [c for c in cells if c['index'] in keep]
+    result['notebook'] = [c if c['index'] in keep else
+                         {**c, 'source': '\n'.join(imports[c['index']]), 'context_only': 'imports'}
+                         for c in cells if c['index'] in keep or c['index'] in imports]
     if failure:
         def clean(value):
             if isinstance(value, str):
@@ -392,6 +447,12 @@ class GroqClient:
             if limits:
                 self.store.set_meta("groq_limits", {"observed_at": datetime.now(timezone.utc).isoformat(), **limits})
             if too_large(status, body):
+                error = body.get('error', {}) if isinstance(body, dict) else {}
+                message = str(error.get('message', '')) if isinstance(error, dict) else ''
+                numbers = {name: int(match[1].replace(',', '')) for name in ('limit', 'requested')
+                           if (match := re.search(r'\b' + name + r'\s*[:=]?\s*(\d[\d,]*)', message, re.I))}
+                self.store.set_meta('groq_request_size', {'status': status, **numbers,
+                    'observed_at': datetime.now(timezone.utc).isoformat()})
                 raise RequestTooLarge("Groq rejected the request size")
             if status == 200:
                 self.store.set_meta("groq_wait", None)
@@ -404,7 +465,7 @@ class GroqClient:
                         raise GroqError("Groq response was truncated or incomplete")
                     return json.loads(choice["message"]["content"])
                 except (KeyError, IndexError, TypeError, ValueError) as exc:
-                    raise GroqError("Groq returned invalid JSON") from exc
+                    raise ResponseValidationError("Groq returned invalid JSON") from exc
             if status in {401, 403}:
                 raise GroqError(f"Groq access error HTTP {status}; check the configured key")
             if status not in {0, 408, 429, 500, 502, 503, 504}:
@@ -446,7 +507,7 @@ class GroqClient:
         focused = focused_notebook_context(context)
         if focused != context:
             self.store.record_event('INFO', 'LAB_CONTEXT_FOCUSED', 'Request limited to target/failure dependencies and instructions; notebook unchanged')
-        context = focused
+        context = deduplicate_notebook_context(focused)
         budget_key = 'notebook_output_budget:' + hashlib.sha256(
             json.dumps([self.model, context], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         output_budget = self.store.get_meta(budget_key, 2048)
@@ -471,7 +532,7 @@ class GroqClient:
                  "submit via code, delete files, use shell commands or interactive input. "
                  "For repairs use the observed traceback and dependencies, not guesses about grader internals. "
                  "Set cannot_complete:true if the supplied information is insufficient."},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]}
+                {"role": "user", "content": json.dumps(context, ensure_ascii=False, separators=(',', ':'))}]}
         if region_mode:
             payload['response_format'] = self._format('notebook_regions', {
                 'cannot_complete': {'type': 'boolean'}, 'index': {'type': 'integer'},
@@ -489,12 +550,15 @@ class GroqClient:
         while True:
             try:
                 result = self._request(payload)
+                result = validate_notebook_response(result, context, region_mode)
                 break
             except ResponseValidationError:
                 if validation_retried:
                     raise
                 validation_retried = True
-                # Never reuse the rejected generation or weaken the response schema.
+                # A repeated provider-side schema failure needs a different wire
+                # format. The local validator still enforces the full contract.
+                payload['response_format'] = {'type': 'json_object'}
                 shape = ('cannot_complete (boolean), index (integer), regions (array of objects '
                          'with number (integer) and code (string))' if region_mode else
                          'cannot_complete (boolean), index (integer), code (string)')
@@ -504,7 +568,7 @@ class GroqClient:
                     'Return one JSON object with no Markdown or commentary, no extra keys, '
                     'and escape newlines and quotes inside code strings. Keep all task constraints.'})
                 self.store.record_event('WARNING', 'LAB_JSON_FORMAT_RETRY',
-                    'Provider rejected notebook JSON; retry once with explicit format instructions and unchanged schema')
+                    'Retry once in JSON object mode; enforce fields, types, cell identity and regions locally')
             except TruncatedResponse:
                 if payload['max_completion_tokens'] >= 4096:
                     raise
@@ -516,8 +580,14 @@ class GroqClient:
                 if reduced_once:
                     raise
                 reduced_once = True
-                reduced = compact_notebook_context(context)
-                payload["messages"][-1]["content"] = json.dumps(reduced, ensure_ascii=False)
+                reduced = deduplicate_notebook_context(compact_notebook_context(context))
+                encoded = json.dumps(reduced, ensure_ascii=False, separators=(',', ':'))
+                if ({k: v for k, v in reduced.items() if k != 'context_note'} ==
+                        {k: v for k, v in context.items() if k != 'context_note'}
+                        or len(encoded) >= len(payload['messages'][1]['content'])):
+                    raise RequestTooLarge('Required notebook context still exceeds Groq limits; identical retry suppressed')
+                # A format-repair reminder may follow this message.
+                payload["messages"][1]["content"] = encoded
                 self.store.record_event("WARNING", "LAB_CONTEXT_REDUCED", "Removed unrelated notebook narrative and duplicate outputs; code and traceback preserved")
         if not isinstance(result, dict) or result.get("cannot_complete") is not False:
             raise GroqError("Groq could not produce a supported notebook solution")

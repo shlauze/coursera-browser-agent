@@ -153,7 +153,7 @@ class LabFixTests(unittest.TestCase):
     if len(payloads)==1:return 413,{},{}
     return 200,{}, {'choices':[{'finish_reason':'stop','message':{'content':json.dumps({'cannot_complete':False,'index':1,'code':'x=1'})}}]}
    client=GroqClient(store,key_loader=lambda:'test',transport=transport)
-   client.notebook_patch({'notebook':[{'index':0,'type':'markdown','source':'unrelated'}, {'index':1,'type':'code','source':'x=0'}], 'editable_cells':[]})
+   client.notebook_patch({'notebook':[{'index':0,'type':'markdown','source':'unrelated ' * 100}, {'index':1,'type':'code','source':'x=0'}], 'editable_cells':[]})
    self.assertEqual(len(payloads),2)
    self.assertEqual(payloads[0]['max_completion_tokens'],2048)
    self.assertLess(len(payloads[1]['messages'][-1]['content']),len(payloads[0]['messages'][-1]['content'])+300)

@@ -16,7 +16,7 @@ async request => {
     return [c.cell_type, c.source, metadata, c.id];
   }));
   const stateKey = '__courseraV2NotebookExecution';
-  const bounded = promise => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Notebook request timed out')), 20000))]);
+  const bounded = (promise, ms = 20000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Notebook request timed out')), ms))]);
   // Retry only idempotent reads. Kernel execution/restart/save and submission
   // are never repeated by this helper after an uncertain response.
   const readJSON = async (url, description) => {
@@ -58,7 +58,13 @@ async request => {
     return {ok: true};
   }
   if (request.action === 'save') {
-    await bounded(nb.save_notebook());
+    try {
+      await bounded(nb.save_notebook(), 60000);
+    } catch (error) {
+      // A lost acknowledgement does not prove the write failed. Verify by GET
+      // below; never issue a second save after a timeout.
+      if (error.message !== 'Notebook request timed out') throw error;
+    }
     const base = String(nb.base_url || '/').replace(/\/?$/, '/');
     const url = new URL(base + 'api/contents/' + path.split('/').map(encodeURIComponent).join('/') + '?content=1', location.origin);
     if (url.origin !== location.origin) return {error: 'Unexpected notebook server origin'};

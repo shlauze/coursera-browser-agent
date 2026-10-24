@@ -98,7 +98,7 @@ class GroqTests(unittest.TestCase):
         other=copy.deepcopy(q);other["text"]="choose variable"
         self.assertNotEqual(question_key(q),question_key(other))
 
-    def test_notebook_json_rejection_retries_once_with_same_schema(self):
+    def test_notebook_json_rejection_retries_once_with_local_schema_validation(self):
         for regions in (False, True):
             context = {'editable_cells': [2], 'target': 2, 'notebook': [{'source': '# YOUR CODE HERE'}]}
             answer = {'cannot_complete': False, 'index': 2, 'code': 'x = 1'}
@@ -113,7 +113,7 @@ class GroqTests(unittest.TestCase):
                 return success(answer)
             self.assertEqual(self.client(transport).notebook_patch(context), answer)
             self.assertEqual(len(seen), 2)
-            self.assertEqual(seen[0]['response_format'], seen[1]['response_format'])
+            self.assertEqual(seen[1]['response_format'], {'type': 'json_object'})
             self.assertEqual(seen[0]['messages'], seen[1]['messages'][:-1])
             self.assertIn('exactly these fields', seen[1]['messages'][-1]['content'])
             self.assertNotIn('PRIVATE', json.dumps(seen))
