@@ -253,6 +253,57 @@ class AssessmentDomTests(unittest.TestCase):
         self.assertTrue(result['questions'])
         self.assertTrue(self.page.evaluate('window.clicked'))
 
+    def simple_timed_dialog(self, extra=""):
+        self.timed_dialog(extra)
+        self.page.locator('[role=dialog]').evaluate("""e => {
+            const paragraphs = e.querySelectorAll('p');
+            paragraphs[0].innerHTML = 'You have <b>20 minutes</b> to submit this attempt.';
+            paragraphs[1].remove();
+        }""")
+
+    def test_simple_timed_start_requires_verified_entry(self):
+        self.simple_timed_dialog()
+        state = inspect(self.page)
+        self.assertTrue(state['start_confirmation'])
+        self.assertFalse(state['retry_confirmation'])
+        with self.assertRaises(HandlerError):
+            _await_attempt(self.page, lambda: None, seconds=2)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+        result = _await_attempt(self.page, lambda: None, start_verified=True, seconds=3)
+        self.assertTrue(result['questions'])
+        self.assertTrue(self.page.evaluate('window.clicked'))
+
+    def test_simple_timed_unknown_terms_or_duplicate_button_blocked(self):
+        for extra in ['<p>I agree to new terms and payment.</p>', '<button>Continue</button>']:
+            with self.subTest(extra=extra):
+                self.simple_timed_dialog(extra)
+                state = inspect(self.page)
+                self.assertFalse(state['start_confirmation'])
+                with self.assertRaises(HandlerError):
+                    act(self.page, state, action='button', label='Continue', start_attempt_verified=True)
+                self.assertIsNone(self.page.evaluate('window.clicked'))
+
+    def test_existing_simple_timed_dialog_cancelled_before_result_read(self):
+        from v2.assessments import _handle_assessment
+        self.simple_timed_dialog()
+        with patch('v2.assessments._wait_entry', side_effect=[inspect(self.page), HandlerError('landing inspected')]):
+            with self.assertRaisesRegex(HandlerError, 'landing inspected'):
+                _handle_assessment(self.page, lambda: None, groq=Mock(), store=self.store, action_id=1)
+        self.assertEqual(self.page.locator('[role=dialog]').count(), 0)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+
+    def test_simple_timer_with_replacement_requires_failed_result(self):
+        self.simple_timed_dialog()
+        self.page.locator('[role=dialog]').evaluate("e => e.innerHTML=e.innerHTML.replace('</h2>', '</h2><p>When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher.</p>')")
+        state = inspect(self.page)
+        self.assertTrue(state['retry_confirmation'])
+        self.assertFalse(state['start_confirmation'])
+        with self.assertRaises(HandlerError):
+            _await_attempt(self.page, lambda: None, start_verified=True, seconds=2)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+        result = _await_attempt(self.page, lambda: None, failed_verified=True, seconds=3)
+        self.assertTrue(result['questions'])
+
     def test_timed_start_requires_verified_entry(self):
         self.timed_dialog()
         self.assertTrue(inspect(self.page)['start_confirmation'])

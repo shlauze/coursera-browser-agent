@@ -1,4 +1,4 @@
-# Coursera Browser Agent v2 — 0.2.59
+# Coursera Browser Agent v2 — 0.2.60
 
 Локальный инструмент для Windows: отдельный профиль Chrome, панель управления,
 SQLite с прогрессом и интеграция с Groq. Сертификат считается подтверждённым
@@ -6,8 +6,8 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 
 ## Запуск EXE без установки Python
 
-Скачайте **[CourseraAgent-0.2.59.exe](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.59/CourseraAgent-0.2.59.exe)**
-или ZIP с EXE и инструкцией из [релиза 0.2.59](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.59).
+Скачайте **[CourseraAgent-0.2.60.exe](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.60/CourseraAgent-0.2.60.exe)**
+или ZIP с EXE и инструкцией из [релиза 0.2.60](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.60).
 Архив `Code → Download ZIP` содержит исходники, готового EXE в нём нет.
 
 Положите EXE в доступную для записи папку. Для продолжения существующей работы
@@ -15,17 +15,17 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 Откройте PowerShell в этой папке и проверьте файл:
 
 ```powershell
-Test-Path .\CourseraAgent-0.2.59.exe
-.\CourseraAgent-0.2.59.exe --version
+Test-Path .\CourseraAgent-0.2.60.exe
+.\CourseraAgent-0.2.60.exe --version
 ```
 
-Ожидаются `True` и `0.2.59`. Если файл не найден, скачайте его или исправьте
+Ожидаются `True` и `0.2.60`. Если файл не найден, скачайте его или исправьте
 текущую папку командой `cd "ПОЛНЫЙ ПУТЬ К ПАПКЕ С EXE"`.
 
 ### Первый запуск через панель
 
 ```powershell
-.\CourseraAgent-0.2.59.exe
+.\CourseraAgent-0.2.60.exe
 ```
 
 Введите свой ключ Groq в консоли, если он ещё не настроен. Ввод скрыт.
@@ -39,7 +39,7 @@ Test-Path .\CourseraAgent-0.2.59.exe
 После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.59.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.60.exe --chrome-port 9224 run
 ```
 
 Эта команда не открывает новую панель. Не запускайте одновременно второй
@@ -52,20 +52,20 @@ Test-Path .\CourseraAgent-0.2.59.exe
 
 ```powershell
 # Настроить или заменить ключ (ввод скрыт)
-.\CourseraAgent-0.2.59.exe configure-groq
+.\CourseraAgent-0.2.60.exe configure-groq
 
 # Просмотреть сохранённое состояние
-.\CourseraAgent-0.2.59.exe status
+.\CourseraAgent-0.2.60.exe status
 
 # Пауза и продолжение работающего исполнителя
-.\CourseraAgent-0.2.59.exe pause
-.\CourseraAgent-0.2.59.exe resume
+.\CourseraAgent-0.2.60.exe pause
+.\CourseraAgent-0.2.60.exe resume
 
 # Штатная остановка на безопасной точке
-.\CourseraAgent-0.2.59.exe stop
+.\CourseraAgent-0.2.60.exe stop
 
 # Диагностика комплекта без запросов к Coursera/Groq
-.\CourseraAgent-0.2.59.exe --self-test
+.\CourseraAgent-0.2.60.exe --self-test
 ```
 
 После `stop` дождитесь `control_state: stopped` в выводе `status`.
@@ -74,7 +74,7 @@ Test-Path .\CourseraAgent-0.2.59.exe
 ### Панель с указанным портом
 
 ```powershell
-.\CourseraAgent-0.2.59.exe --chrome-port 9224 serve --panel-port 8769
+.\CourseraAgent-0.2.60.exe --chrome-port 9224 serve --panel-port 8769
 ```
 
 Откройте http://127.0.0.1:8769/ вручную. При явном `serve` браузер с панелью
@@ -120,6 +120,12 @@ EXE не подписан сертификатом издателя; SHA256 оп
 Полная инструкция: [настройка для другого пользователя](SETUP_OTHER_USER.md).
 
 ## Последние изменения
+
+- **0.2.60:** распознаётся короткое окно старта «You have 20 minutes to submit
+  this attempt». Продолжение разрешено только после проверенного Start/Resume;
+  существующее окно сначала закрывается для сверки результата предыдущей попытки.
+  Неизвестные условия и повторная отправка без проверки результата блокируются.
+
 
 - **0.2.59:** боковое меню курса, открытое как модальное окно Coursera,
   больше не останавливает чтение и раскрытие модулей. Неизвестные окна

@@ -198,7 +198,9 @@ request => {
   });
   const replacementNotice = String.raw`When you submit a new attempt it will replace your previous submission\. This new attempt will only replace your previous grade if it[’']s higher\.`;
   const duration = String.raw`(?:\d+\s*(?:h|hours?)(?:\s*\d+\s*(?:m|minutes?))?|\d+\s*(?:m|minutes?))`;
-  const timerNotice = String.raw`You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the time(?:r)? runs out\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
+  const limitedTimerNotice = String.raw`You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the time(?:r)? runs out\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
+  const simpleTimerNotice = String.raw`You have [1-9]\d* minutes? to submit this attempt\.`;
+  const timerNotice = '(?:' + limitedTimerNotice + '|' + simpleTimerNotice + ')';
   const dialogText = norm(scope.innerText);
   const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: ` + timerNotice + String.raw`)? Continue\s*Cancel$`).test(dialogText);
   const startConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + timerNotice + String.raw` Continue\s*Cancel$`).test(dialogText);
