@@ -56,6 +56,7 @@ def runtime_status(store, now=None):
             "waiting": state == "running" and remaining > 0 and active.get('provider') != 'ollama',
             "provider": active, "provider_settings": provider_settings(store),
             "provider_pending": store.get_meta('provider_pending'),
+            "generation_seconds": max(0, int(now - active['started_at'])) if active.get('phase') == 'generating' and active.get('started_at') is not None else None,
             "reason": wait.get("reason", "rate_limit" if remaining else None),
             "http_status": wait.get("status"), "limit": store.get_meta("groq_rate_limit", {})}
 
@@ -68,6 +69,9 @@ def runtime_html(status):
     title = "Ожидание Groq" if status["waiting"] else "Текущий этап"
     parts = [status["course"], status["item"], stages.get(status["stage"], status["stage"])]
     active = status.get('provider') or {}
+    if status.get('control_state') == 'running' and active.get('phase') == 'generating':
+        title = "Ollama готовит ответ"
+        parts.append(f"Запрос выполняется {status.get('generation_seconds', 0)} сек. На CPU это может занять до 15 минут. Повторный запуск не нужен.")
     if active:
         parts.append(f"Провайдер: {active.get('provider', '')}; модель: {active.get('model', '')}")
     if status["remaining_seconds"] and active.get('provider') == 'ollama':

@@ -215,6 +215,19 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(status['waiting'])
         self.assertIn('локальная генерация', runtime_html(status))
 
+    def test_generation_timer_stops_when_response_arrives(self):
+        self.configure('ollama')
+        self.store.set_control_state('running')
+        def local(*args):
+            status = runtime_status(self.store, now=145)
+            self.assertEqual(status['generation_seconds'], 45)
+            self.assertIn('Ollama готовит ответ', runtime_html(status))
+            return self.answer
+        self.local.side_effect = local
+        self.client(Mock())._request({})
+        self.assertIsNone(runtime_status(self.store, now=160)['generation_seconds'])
+        self.assertEqual(self.store.get_meta('provider_active')['phase'], 'response_received')
+
     def test_local_transport_never_sends_key_and_validates_response(self):
         client = self.client(Mock())
         payload = {'messages': [{'role': 'user', 'content': '2+2?'}], 'max_completion_tokens': 64,

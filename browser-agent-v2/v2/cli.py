@@ -25,6 +25,10 @@ PROFILE = ROOT / "profile"
 LOGS = ROOT / "logs"
 
 
+class RunnerAlreadyActive(RuntimeError):
+    """A duplicate launch is not a failure of the existing worker."""
+
+
 @contextmanager
 def single_runner_lock(path: Path):
     """Prevent two local processes from controlling the same Chrome profile."""
@@ -41,7 +45,7 @@ def single_runner_lock(path: Path):
             try:
                 msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as exc:
-                raise RuntimeError("Another v2 runner already owns the profile") from exc
+                raise RunnerAlreadyActive("Another v2 runner already owns the profile") from exc
             try:
                 yield
             finally:
@@ -53,7 +57,7 @@ def single_runner_lock(path: Path):
             try:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as exc:
-                raise RuntimeError("Another v2 runner already owns the profile") from exc
+                raise RunnerAlreadyActive("Another v2 runner already owns the profile") from exc
             try:
                 yield
             finally:
@@ -123,6 +127,9 @@ class WorkerSupervisor:
                     # and cleanup must finish before releasing the lock.
                     if self.control.get_state() != "stopped":
                         self.control.mark_stopped()
+        except RunnerAlreadyActive:
+            self.store.record_event("INFO", "RUN_ALREADY_ACTIVE", "Duplicate launch ignored; existing worker and progress unchanged")
+            logger.info("Исполнитель уже запущен. Второй экземпляр не нужен; состояние и прогресс сохранены. Откройте действующую панель управления.")
         except StopRequested:
             self.store.record_event("INFO", "RUN_STOPPED", "Stopped at a safe checkpoint")
             logger.info("Stopped at a safe checkpoint")

@@ -123,6 +123,53 @@ class RunnerSafetyTests(unittest.TestCase):
         finish.assert_not_called()
         self.assertIsNotNone(self.store.get_meta("item_attention:"+item_id(first)))
 
+    def test_model_failure_in_lab_continues_quiz_and_preserves_uncertain_submission(self):
+        from dataclasses import replace
+        from v2.groq_client import GroqError
+        first = replace(self.item, kind='Programming Assignment', title='Large lab')
+        second = replace(first, kind='Graded Assignment', title='Other quiz', url=first.url+'other')
+        page = Mock(url=first.url)
+        actions = []
+        def handler(page, kind, checkpoint, **kw):
+            actions.append(kw['action_id'])
+            if len(actions) == 1:
+                self.store.set_meta(f"submission:{kw['action_id']}", 'submitting')
+                raise GroqError('Local context budget too small')
+            return Mock(message='passed')
+        done = replace(second, completed=True)
+        outlines = [OutlineSnapshot(self.card.title, items, page.url) for items in
+                    ((first, second), (first, second), (first, done))]
+        with patch('v2.runner.open_course', return_value=page), patch('v2.runner.scan_outline', side_effect=outlines), \
+             patch('v2.runner.open_item', return_value=page), patch('v2.runner.handle', side_effect=handler) as handle, \
+             patch.object(self.runner, '_verify_item', return_value=True), patch.object(self.runner, '_finish_course') as finish:
+            with self.assertRaisesRegex(RunnerAttention, 'await learner input'):
+                self.runner._process_course(page, self.card)
+        self.assertEqual([call.args[1] for call in handle.call_args_list], [ItemAction.PROGRAMMING_LAB, ItemAction.ASSESSMENT])
+        self.assertEqual(self.runner.completed_items, 1)
+        self.assertEqual(self.store.get_meta(f'submission:{actions[0]}'), 'submitting')
+        self.assertIn(actions[0], [a['id'] for a in self.store.pending_actions()])
+        finish.assert_not_called()
+
+    def test_unsupported_item_does_not_block_other_required_work(self):
+        from dataclasses import replace
+        from v2.policy import Decision
+        first = replace(self.item, kind='Graded Assignment', title='Unknown environment')
+        second = replace(first, title='Supported quiz', url=first.url+'other')
+        done = replace(second, completed=True)
+        page = Mock(url=first.url)
+        outlines = [OutlineSnapshot(self.card.title, items, page.url) for items in
+                    ((first, second), (first, second), (first, done))]
+        with patch('v2.runner.open_course', return_value=page), patch('v2.runner.scan_outline', side_effect=outlines), \
+             patch('v2.runner.decide', side_effect=[Decision(ItemAction.REVIEW_REQUIRED, 'Unsupported environment'), Decision(ItemAction.ASSESSMENT, '')]), \
+             patch('v2.runner.open_item', return_value=page), patch('v2.runner.handle', return_value=Mock(message='passed')) as handle, \
+             patch.object(self.runner, '_verify_item', return_value=True), patch.object(self.runner, '_finish_course') as finish:
+            with self.assertRaisesRegex(RunnerAttention, 'await learner input'):
+                self.runner._process_course(page, self.card)
+        handle.assert_called_once()
+        self.assertIn((self.cid, first.url), self.runner.blocked_items)
+        self.assertEqual(self.runner.completed_items, 1)
+        finish.assert_not_called()
+
     def test_optional_exclusion_is_exact_scoped_and_not_completion(self):
         record={"url":self.item.url,"title":self.item.title,"evidence":"Optional Essay Question / Practice Peer-graded Assignment","authorized_skip":True}
         self.store.set_meta("verified_optional:"+self.cid,[record])
@@ -269,7 +316,7 @@ class RunnerSafetyTests(unittest.TestCase):
              patch("v2.runner.scan_outline", return_value=OutlineSnapshot(self.card.title, (graded,), graded.url)), \
              patch("v2.runner.open_item") as open_item, \
              patch("v2.runner.handle") as handler:
-            with self.assertRaisesRegex(RunnerAttention, "Peer review"):
+            with self.assertRaisesRegex(RunnerAttention, "await learner input"):
                 self.runner._process_course(Mock(), self.card)
         open_item.assert_not_called()
         handler.assert_not_called()

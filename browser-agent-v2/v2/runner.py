@@ -20,7 +20,7 @@ from .handlers import HandlerError, handle
 from .outline import ItemRecord, OutlineError, OutlineSnapshot, open_item, scan_outline
 from .policy import ItemAction, decide, is_coursework
 from .store import Store, _safe_event_message
-from .groq_client import GroqClient
+from .groq_client import GroqClient, GroqError
 
 
 CERTIFICATES_URL = "https://www.coursera.org/my-learning?myLearningTab=CERTIFICATES"
@@ -439,6 +439,13 @@ class Runner:
             candidates.sort(key=lambda item: not bool(re.search(r"\bgraded\b", item.kind, re.I)))
         return next(iter(candidates), None)
 
+    def _retain_item(self, cid, item, reason, outcome=None):
+        self.blocked_items.add((cid, item.url))
+        self.store.set_meta("item_attention:" + item_id(item), {"course_id": cid, "url": item.url,
+            "title": item.title, "reason": reason, "submission_state": outcome})
+        self.store.record_event("WARNING", "ITEM_REVIEW_REQUIRED",
+            f"Item retained for review; continuing other required items: {item.title}")
+
     def _wait_for_overlay(self, page):
         from .ui import UnknownOverlay, require_clear_outline
         self.store.set_meta("confirmation_required", {
@@ -513,9 +520,11 @@ class Runner:
                 try:
                     assignment_base(unfinished.url or "")
                 except HandlerError as exc:
-                    raise RunnerAttention("Peer review route is unsupported") from exc
+                    self._retain_item(course_id(card), unfinished, "Peer review route is unsupported")
+                    continue
             if decision.action == ItemAction.REVIEW_REQUIRED:
-                raise RunnerAttention(f"{unfinished.title}: {decision.reason}")
+                self._retain_item(course_id(card), unfinished, decision.reason)
+                continue
             self.store.set_meta("current_item", unfinished.title)
             action_id = self.store.begin_action(
                 course_id(card), key, decision.action.value,
@@ -542,11 +551,8 @@ class Runner:
                     self.store.resolve_action(action_id, "failed", {"submission_state": outcome})
                 self.store.record_event("ERROR", "ITEM_UNCLEAR", f"{unfinished.title}: {exc}")
                 from playwright.sync_api import TimeoutError as PageTimeout
-                if isinstance(exc, (HandlerError, PageTimeout)):
-                    self.blocked_items.add((course_id(card), unfinished.url))
-                    self.store.set_meta("item_attention:" + key, {"course_id": course_id(card), "url": unfinished.url,
-                        "title": unfinished.title, "reason": str(exc), "submission_state": outcome})
-                    self.store.record_event("WARNING", "ITEM_REVIEW_REQUIRED", f"Item retained for review; continuing other required items: {unfinished.title}")
+                if isinstance(exc, (HandlerError, PageTimeout, GroqError)):
+                    self._retain_item(course_id(card), unfinished, str(exc), outcome)
                     page.goto(unfinished.url, wait_until="domcontentloaded", timeout=45_000)
                     continue
                 raise RunnerAttention(f"Result unclear for {unfinished.title}: {exc}") from exc

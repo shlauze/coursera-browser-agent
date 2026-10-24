@@ -341,10 +341,17 @@ class GroqClient:
         from .providers import settings, ollama_transport
         config = settings(self.store)
         self.checkpoint()
-        self.store.set_meta('provider_active', {'provider': 'ollama', 'model': config['ollama_model'], 'reason': reason})
+        active = {'provider': 'ollama', 'model': config['ollama_model'], 'reason': reason,
+                  'phase': 'generating', 'started_at': self.clock()}
+        self.store.set_meta('provider_active', active)
         self.store.record_event('INFO', 'PROVIDER_OLLAMA', f'Local generation: {config["ollama_model"]}; {reason}')
-        result = (self.local_transport or ollama_transport)(config, payload, self.checkpoint)
-        self.checkpoint()
+        try:
+            result = (self.local_transport or ollama_transport)(config, payload, self.checkpoint)
+            self.checkpoint()
+        except Exception:
+            self.store.set_meta('provider_active', {**active, 'phase': 'ended_without_response'})
+            raise
+        self.store.set_meta('provider_active', {**active, 'phase': 'response_received'})
         self.store.record_event('INFO', 'OLLAMA_RESPONSE', 'Local response received; task validation still required')
         return result
 

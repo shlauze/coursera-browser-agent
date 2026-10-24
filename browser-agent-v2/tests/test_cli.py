@@ -23,11 +23,14 @@ class CliRecoveryTests(unittest.TestCase):
             with patch.object(cli, 'DATA', root), cli.single_runner_lock(root/'runner.lock'):
                 store.set_control_state('running')
                 supervisor=cli.WorkerSupervisor(store,control)
-                with patch.object(cli, '_logger'):
+                with patch.object(cli, '_logger') as logger:
                     supervisor._worker(scan_only=False)
-                self.assertIsInstance(supervisor.last_error,RuntimeError)
+                self.assertIsNone(supervisor.last_error)
+                logger.return_value.exception.assert_not_called()
                 self.assertEqual(control.get_state(),'running')
                 self.assertNotIn('RUNNER_STOPPED',[e['code'] for e in store.recent_events(10)])
+                self.assertNotIn('RUN_FAILED',[e['code'] for e in store.recent_events(10)])
+                self.assertIn('RUN_ALREADY_ACTIVE',[e['code'] for e in store.recent_events(10)])
 
     def test_stale_control_state_is_recovered_only_when_lock_is_free(self):
         with tempfile.TemporaryDirectory() as directory:
