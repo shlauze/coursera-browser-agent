@@ -88,6 +88,53 @@ def cell_identity(cell):
     return {'id': cell.get('id'), 'cell_type': cell['cell_type'], 'metadata': meta}
 
 
+def optional_tail_cells(document):
+    """Exclude only an explicit terminal OPTIONAL/UNGRADED section.
+
+    A table of contents, casual prose, or an optional heading followed by a
+    required code section cannot remove a required execution/test gate.
+    Notebook cells and instructor tests themselves are never changed.
+    """
+    cells = document['cells']
+    def graded(cell):
+        meta = cell.get('metadata', {}).get('nbgrader', {})
+        return (meta.get('grade') is True or meta.get('solution') is True
+                or bool(re.search(r'(?mi)^\s*#+\s*GRADED\s+FUNCTION\s*:', source(cell))))
+    for start, cell in enumerate(cells):
+        if cell['cell_type'] != 'markdown':
+            continue
+        # Only a real ATX heading outside fenced examples; TOC links never match.
+        fence = False
+        headings = []
+        for line in source(cell).splitlines():
+            if re.match(r'^\s*(?:```|~~~)', line):
+                fence = not fence
+            match = None if fence else re.match(r'^\s{0,3}(#{1,6})\s+(.+)', line)
+            if match:
+                headings.append((len(match[1]), match[2]))
+        optional = [(level, text) for level, text in headings
+                    if re.search(r'\bOPTIONAL\b', text, re.I) and re.search(r'\bUNGRADED\b', text, re.I)]
+        if len(optional) != 1 or not any(graded(c) for c in cells[:start] if c['cell_type'] == 'code'):
+            continue
+        level = optional[0][0]
+        if sum(heading_level <= level for heading_level, _ in headings) != 1:
+            continue
+        end = len(cells)
+        for i in range(start + 1, len(cells)):
+            if cells[i]['cell_type'] == 'markdown' and any(
+                    len(m[1]) <= level for line in source(cells[i]).splitlines()
+                    if (m := re.match(r'^\s{0,3}(#{1,6})\s+', line))):
+                end = i
+                break
+        # Do not infer dependency independence for a non-terminal section.
+        if any(c['cell_type'] == 'code' and source(c).strip() for c in cells[end:]):
+            continue
+        indices = {i for i in range(start, end) if cells[i]['cell_type'] == 'code'}
+        if indices and not any(graded(cells[i]) for i in indices):
+            return indices
+    return set()
+
+
 def solution_manifest(document, previous=None):
     """Remember designated solution cells after their placeholder comments disappear."""
     cells = document['cells']
@@ -392,6 +439,11 @@ class NotebookExecutor:
         original = snapshot['document']
         manifest_key = self.execution_key.replace('lab_execution:', 'lab_manifest:', 1)
         originals, manifest = solution_manifest(original, self.store.get_meta(manifest_key))
+        optional = optional_tail_cells(original)
+        if optional:
+            originals = {i: c for i, c in originals.items() if i not in optional}
+            self.store.record_event('INFO', 'LAB_OPTIONAL_SECTION_EXCLUDED',
+                f'Explicit OPTIONAL/UNGRADED tail: {len(optional)} code cells excluded from execution; source unchanged, no completion claimed')
         if not originals:
             raise HandlerError('Notebook has no explicitly editable solution cells')
         self.artifact('original-' + uuid.uuid4().hex + '.ipynb', original, exclusive=True)
@@ -415,7 +467,7 @@ class NotebookExecutor:
             failure = None
             results = []
             for index, cell in enumerate(snapshot['document']['cells']):
-                if cell['cell_type'] != 'code' or not source(cell).strip():
+                if index in optional or cell['cell_type'] != 'code' or not source(cell).strip():
                     continue
                 result = self.run_cell(snapshot, index)
                 results.append({'index': index, **result})
@@ -429,6 +481,7 @@ class NotebookExecutor:
             self.artifact('working.ipynb', snapshot['document'])
             if failure is None:
                 report = {'status': 'executed', 'path': self.path, 'cells_run': len(results), 'repairs': attempt,
+                          'excluded_optional_cells': sorted(optional),
                           'source_sha256': hashlib.sha256(snapshot['signature'].encode()).hexdigest()}
                 self.store.set_meta(f'lab_report:{self.action_id}', report)
                 self.store.record_event('INFO', 'LAB_EXECUTED', f'Executed {len(results)} code cells; saved notebook verified')
