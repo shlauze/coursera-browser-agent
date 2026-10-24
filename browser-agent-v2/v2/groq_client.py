@@ -77,6 +77,39 @@ def deduplicate_notebook_context(context):
     return result
 
 
+def compact_dependency_context(context):
+    """Request-only compaction: keep target/test exact and helper Python executable."""
+    result = json.loads(json.dumps(context))
+    protected = {context.get('target'), (context.get('failure') or {}).get('index')}
+    if context.get('target') is None:
+        return result
+    class WithoutDocstrings(ast.NodeTransformer):
+        def visit_FunctionDef(self, node):
+            return self.strip_doc(node)
+        visit_AsyncFunctionDef = visit_FunctionDef
+        visit_ClassDef = visit_FunctionDef
+        visit_Module = visit_FunctionDef
+        def strip_doc(self, node):
+            self.generic_visit(node)
+            if (node.body and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)):
+                node.body = node.body[1:] or [ast.Pass()]
+            return node
+    for cell in result.get('notebook', []):
+        if cell.get('type') != 'code' or cell.get('index') in protected:
+            continue
+        try:
+            tree = ast.parse(cell['source'])
+        except SyntaxError:
+            continue
+        compact = ast.unparse(ast.fix_missing_locations(WithoutDocstrings().visit(tree)))
+        if len(compact) < len(cell['source']):
+            cell['source'] = compact
+            cell['context_only'] = 'Dependency comments/docstrings omitted; Python operations retained'
+    return result
+
+
 def normalize(value):
     return " ".join(str(value).split())
 
@@ -347,6 +380,8 @@ def focused_notebook_context(context):
             break
         selected = expanded
     editable = [i for i in context.get('editable_cells', []) if i in selected]
+    if context.get('target') is not None:
+        editable = [i for i in editable if i == context['target']]
     if not editable:
         return compact_notebook_context(context)
     result = json.loads(json.dumps(context))
@@ -447,6 +482,11 @@ class GroqClient:
             if limits:
                 self.store.set_meta("groq_limits", {"observed_at": datetime.now(timezone.utc).isoformat(), **limits})
             if too_large(status, body):
+                if status == 429 and 'retry-after' in headers:
+                    delay = retry_seconds(headers, 0)
+                    self.store.set_meta('groq_retry_until', self.clock() + delay)
+                    self.store.set_meta('groq_wait', {'status': status, 'retry_at': self.clock() + delay,
+                                                    'reason': 'rate_limit'})
                 error = body.get('error', {}) if isinstance(body, dict) else {}
                 message = str(error.get('message', '')) if isinstance(error, dict) else ''
                 numbers = {name: int(match[1].replace(',', '')) for name in ('limit', 'requested')
@@ -504,6 +544,7 @@ class GroqClient:
 
     def notebook_patch(self, context):
         """Propose one solution-cell edit; the executor validates and applies it."""
+        original_context = context
         focused = focused_notebook_context(context)
         if focused != context:
             self.store.record_event('INFO', 'LAB_CONTEXT_FOCUSED', 'Request limited to target/failure dependencies and instructions; notebook unchanged')
@@ -580,7 +621,19 @@ class GroqClient:
                 if reduced_once:
                     raise
                 reduced_once = True
-                reduced = deduplicate_notebook_context(compact_notebook_context(context))
+                failure_index = (context.get('failure') or {}).get('index')
+                candidates = [i for i in context.get('editable_cells', [])
+                              if type(failure_index) is int and i <= failure_index]
+                if context.get('target') is None and candidates:
+                    # The nearest solution is a bounded repair candidate, not a
+                    # diagnosis. Keep the failing test, traceback and transitive
+                    # code intact; the model must decline if this target cannot
+                    # fix it. Explicit target prevents recursive narrowing.
+                    target = max(candidates)
+                    self.store.record_event('WARNING', 'LAB_REPAIR_TARGETED',
+                        f'Oversize repair narrowed to solution cell {target + 1}; test and dependency code retained')
+                    return self.notebook_patch({**original_context, 'target': target})
+                reduced = compact_dependency_context(deduplicate_notebook_context(compact_notebook_context(context)))
                 encoded = json.dumps(reduced, ensure_ascii=False, separators=(',', ':'))
                 if ({k: v for k, v in reduced.items() if k != 'context_note'} ==
                         {k: v for k, v in context.items() if k != 'context_note'}

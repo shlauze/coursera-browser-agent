@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import Mock
 
 from playwright.sync_api import sync_playwright
-from v2.groq_client import (GroqClient, RequestTooLarge, ResponseValidationError,
+from v2.groq_client import (GroqClient, RequestTooLarge, ResponseValidationError, compact_dependency_context,
     focused_notebook_context, deduplicate_notebook_context, validate_notebook_response)
 from v2.notebooks import validate_code, wait_for_submit_control, BRIDGE
 from v2.handlers import HandlerError
@@ -118,6 +118,53 @@ class RequestRecoveryTests(unittest.TestCase):
                     {**good, 'regions': [good['regions'][0]] * 2}]:
             with self.assertRaises(ResponseValidationError):
                 validate_notebook_response(bad, ctx, True)
+
+    def test_oversize_repair_narrows_once_then_compacts_only_helpers(self):
+        helper = 'def helper(x):\n """' + 'Helper documentation. ' * 100 + '"""\n # comment\n return x+1'
+        target = 'def answer(x):\n return helper(x)'
+        failure = {'index': 3, 'reply': {'ename': 'AssertionError', 'traceback': ['actual failure']}}
+        context = {'notebook': [
+            {'index': 0, 'type': 'code', 'source': helper},
+            {'index': 1, 'type': 'markdown', 'source': 'Required answer instructions'},
+            {'index': 2, 'type': 'code', 'source': target},
+            {'index': 3, 'type': 'code', 'source': 'assert answer(1)==2'}],
+            'editable_cells': [0, 2], 'failure': failure}
+        answer = {'cannot_complete': False, 'index': 2, 'code': target}
+        client = self.client([(413, {}, {}), (413, {}, {}), self.ok(answer)])
+        self.assertEqual(client.notebook_patch(context), answer)
+        self.assertEqual(len(self.payloads), 3)
+        second = json.loads(self.payloads[1]['messages'][1]['content'])
+        third = json.loads(self.payloads[2]['messages'][1]['content'])
+        self.assertEqual(second['target'], 2)
+        self.assertEqual(third['editable_cells'], [2])
+        cells = {c['index']: c for c in third['notebook']}
+        self.assertEqual(cells[2]['source'], target)
+        self.assertEqual(cells[3]['source'], 'assert answer(1)==2')
+        self.assertEqual(third['failure'], failure)
+        self.assertEqual(cells[0]['source'], 'def helper(x):\n    return x + 1')
+        self.assertEqual(context['notebook'][0]['source'], helper)
+
+    def test_explicit_target_retains_code_but_not_other_exercise_instructions(self):
+        context = {'notebook': [
+            {'index': 0, 'type': 'markdown', 'source': 'Other exercise narrative'},
+            {'index': 1, 'type': 'code', 'source': 'def helper(x): return x'},
+            {'index': 2, 'type': 'markdown', 'source': 'Target formula'},
+            {'index': 3, 'type': 'code', 'source': 'def answer(x): return helper(x)'}],
+            'editable_cells': [1, 3], 'target': 3}
+        result = focused_notebook_context(context)
+        self.assertEqual(result['editable_cells'], [3])
+        self.assertEqual([c['index'] for c in result['notebook']], [1, 2, 3])
+
+    def test_oversize_429_keeps_retry_after_for_reduced_request(self):
+        sleeps = []
+        context = {**self.context, 'notebook': self.context['notebook'] + [
+            {'index': 2, 'type': 'markdown', 'source': 'unrelated ' * 100}]}
+        context.pop('target')
+        client = self.client([(429, {'Retry-After': '2'}, {'error': {'code': 'request_too_large'}}), self.ok()])
+        client.clock = lambda: 0
+        client.sleep = sleeps.append
+        client.notebook_patch(context)
+        self.assertEqual(sum(sleeps), 2)
 
     def test_keras_compile_allowed_but_python_compilation_and_shell_blocked(self):
         code = "model.compile(optimizer=adam, loss='categorical_crossentropy', metrics=['accuracy'])"
