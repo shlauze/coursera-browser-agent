@@ -56,6 +56,7 @@ def runtime_status(store, now=None):
             "waiting": state == "running" and remaining > 0 and active.get('provider') != 'ollama',
             "provider": active, "provider_settings": provider_settings(store),
             "provider_pending": store.get_meta('provider_pending'),
+            "lab": store.get_meta(f'lab_runtime:{action_id}', {}) if action_id else {},
             "generation_seconds": max(0, int(now - active['started_at'])) if active.get('phase') == 'generating' and active.get('started_at') is not None else None,
             "last_chunk_seconds": max(0, int(now - active['last_chunk_at'])) if active.get('last_chunk_at') is not None else None,
             "reason": wait.get("reason", "rate_limit" if remaining else None),
@@ -83,6 +84,13 @@ def runtime_html(status):
         parts.append("На CPU генерация может занять больше 15 минут. Предел запроса — 60 минут, ожидания без данных — 15 минут. Повторный запуск не нужен.")
     if active:
         parts.append(f"Провайдер: {active.get('provider', '')}; модель: {active.get('model', '')}")
+    lab = status.get('lab') or {}
+    if status.get('control_state') == 'running' and lab.get('status') in {'starting', 'running'}:
+        title = "Выполнение graded lab"
+        parts.append(f"Ячейка {lab['index'] + 1} из {lab['cells_total']}; состояние: {lab['status']}; ядро: {lab.get('kernel', 'ожидание ответа')}.")
+        elapsed = max(0, int(time.time() - lab['started_at']))
+        age = max(0, int(time.time() - lab['updated_at']))
+        parts.append(f"Прошло {elapsed} сек.; последнее обновление {age} сек. назад. Сообщений вывода: {lab.get('output_count', 0)}. Оценка Coursera ещё не подтверждена.")
     if status["remaining_seconds"] and active.get('provider') == 'ollama':
         parts.append(f"Groq восстанавливает квоту ещё {status['remaining_seconds']} сек. Выбрана локальная генерация Ollama.")
     elif status["remaining_seconds"]:

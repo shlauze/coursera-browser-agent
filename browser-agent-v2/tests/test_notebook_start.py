@@ -22,7 +22,7 @@ class NotebookStartTests(unittest.TestCase):
         self.executor = NotebookExecutor(self.frame, Mock(), self.store, 1, lambda: None)
         self.executor.execution_key = 'lab_execution:fixture'
         self.executor.path = 'fixture.ipynb'
-        self.snapshot = {'signature': 'fixed'}
+        self.snapshot = {'signature': 'fixed', 'document': {'cells': [{'cell_type': 'code', 'source': 'x=1'}]}}
         self.runs = 0
         self.sent = 0
 
@@ -51,6 +51,7 @@ class NotebookStartTests(unittest.TestCase):
         self.assertEqual(self.sent, 1)
         self.assertEqual(self.runs, 4)
         self.assertEqual(self.store.get_meta(self.executor.execution_key)['status'], 'finished')
+        self.assertEqual(self.store.get_meta('lab_runtime:1')['status'], 'finished')
 
     def test_busy_timeout_records_not_started(self):
         self.bridge(busy=1000)

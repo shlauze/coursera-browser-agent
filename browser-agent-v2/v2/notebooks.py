@@ -107,13 +107,17 @@ def solution_manifest(document, previous=None):
     return originals, manifest
 
 
+class GeneratedSyntaxError(HandlerError):
+    """A proposal failed local parsing before any notebook edit or execution."""
+
+
 def validate_code(original, code):
     if not isinstance(code, str) or not code.strip() or len(code) > 40000:
         raise HandlerError('Generated cell source is empty or too large')
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
-        raise HandlerError(f'Generated Python has a syntax error on line {exc.lineno}') from exc
+        raise GeneratedSyntaxError(f'Generated Python has a syntax error on line {exc.lineno}: {exc.msg}') from exc
     # A conservative sanity check, not a sandbox. Execution remains remote.
     forbidden = {'eval', 'exec', '__import__', 'compile', 'input', 'breakpoint'}
     for node in ast.walk(tree):
@@ -219,20 +223,51 @@ class NotebookExecutor:
         if result:
             self.store.record_event('INFO', 'LAB_PATCH_REUSED',
                                     'Reused validated draft for unchanged notebook and feedback; no model request')
-        else:
-            # Provider waits have their own retry limits and stop checkpoints.
-            request_started = time.monotonic()
+        # Persist rejected proposals across restarts. A different model or new
+        # source/feedback gets a new budget; unchanged failures are not retried blindly.
+        from .providers import settings
+        model = getattr(self.groq, 'model', '')
+        provider = [settings(self.store), model if isinstance(model, str) else '']
+        rejection_key = 'lab_proposal_rejections:' + hashlib.sha256(
+            json.dumps([draft_key, provider], sort_keys=True).encode()).hexdigest()
+        rejected = self.store.get_meta(rejection_key) or {'fingerprints': []}
+        while True:
+            self.check()
+            if result is None:
+                if rejected.get('exhausted') or len(rejected['fingerprints']) >= 3:
+                    raise HandlerError('Lab proposal syntax repair budget exhausted; feedback saved for review')
+                request_context = {**context}
+                if rejected.get('proposal'):
+                    request_context['proposal_validation'] = {
+                        'stage': 'before_edit_and_execution', 'error': rejected['error'],
+                        'rejected_proposal': rejected['proposal'],
+                        'instruction': 'Correct the reported syntax error while preserving all instructor code.'}
+                # Provider waits have their own retry limits and stop checkpoints.
+                request_started = time.monotonic()
+                try:
+                    result = self.groq.notebook_patch(request_context)
+                finally:
+                    self.deadline += max(0, time.monotonic() - request_started)
+            index = result.get('index')
+            if type(index) is not int or index not in originals or (target is not None and index != target):
+                raise HandlerError('Model selected a protected or unrelated cell')
             try:
-                result = self.groq.notebook_patch(context)
-            finally:
-                self.deadline += max(0, time.monotonic() - request_started)
-        index = result.get('index')
-        if type(index) is not int or index not in originals or (target is not None and index != target):
-            raise HandlerError('Model selected a protected or unrelated cell')
-        proposed = result.get('code')
-        if 'regions' in result:
-            proposed = apply_solution_regions(source(snapshot['document']['cells'][index]), result['regions'])
-        code = validate_code(source(originals[index]), proposed)
+                proposed = result.get('code')
+                if 'regions' in result:
+                    proposed = apply_solution_regions(source(snapshot['document']['cells'][index]), result['regions'])
+                code = validate_code(source(originals[index]), proposed)
+                if failure and code == source(snapshot['document']['cells'][index]):
+                    raise HandlerError('Lab repair proposed unchanged code after a failure; no blind re-execution')
+                break
+            except GeneratedSyntaxError as exc:
+                fingerprint = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+                duplicate = fingerprint in rejected['fingerprints']
+                rejected = {'fingerprints': rejected['fingerprints'] + [fingerprint],
+                            'proposal': result, 'error': str(exc), 'exhausted': duplicate}
+                self.store.set_meta(rejection_key, rejected)
+                self.store.record_event('WARNING', 'LAB_PROPOSAL_REJECTED',
+                    f'Cell {index + 1}: {exc}; notebook unchanged, validation feedback saved')
+                result = None
         # Retain the validated answer before any stop, busy kernel or write failure.
         self.store.set_meta(draft_key, {'index': index, 'code': code})
         edit_deadline = min(self.deadline, time.monotonic() + 60)
@@ -260,6 +295,10 @@ class NotebookExecutor:
         key = self.execution_key
         start_deadline = min(self.deadline, time.monotonic() + 60)
         announced = False
+        started_at = time.time()
+        runtime = {'status': 'starting', 'index': index, 'cells_total': len(snapshot['document']['cells']),
+                   'started_at': started_at, 'updated_at': started_at}
+        self.store.set_meta(f'lab_runtime:{self.action_id}', runtime)
         while True:
             self.check()
             self.store.set_meta(key, {'status': 'starting', 'path': self.path, 'index': index, 'token': token})
@@ -278,13 +317,24 @@ class NotebookExecutor:
                                             'Kernel busy before execute; waiting without sending code')
                     announced = True
                 self.frame.page.wait_for_timeout(500)
+        runtime['status'] = 'running'
+        self.store.record_event('INFO', 'LAB_CELL_STARTED', f'Executing notebook cell {index + 1}; Coursera grade not yet confirmed')
         deadline = min(self.deadline, time.monotonic() + self.cell_timeout)
+        last_report = 0
         try:
             while time.monotonic() < deadline:
                 self.check()
                 result = self.call('poll', token=token)
+                if time.monotonic() - last_report >= 5 or (result.get('reply') and result.get('idle')):
+                    runtime.update(updated_at=time.time(), kernel=result.get('kernel'),
+                                   reply_received=bool(result.get('reply')), output_count=len(result.get('outputs') or []))
+                    self.store.set_meta(f'lab_runtime:{self.action_id}', runtime)
+                    last_report = time.monotonic()
                 if result.get('reply') and result.get('idle') and result.get('kernel') == 'idle':
                     self.store.set_meta(key, {'status': 'finished', 'path': self.path, 'index': index})
+                    self.store.set_meta(f'lab_runtime:{self.action_id}', {**runtime, 'status': 'finished'})
+                    self.store.record_event('INFO', 'LAB_CELL_FINISHED',
+                        f'Notebook cell {index + 1} finished: {result["reply"].get("status", "unknown")}')
                     return result
                 self.frame.page.wait_for_timeout(500)
             raise HandlerError(f'Lab cell {index + 1} exceeded its execution time limit')
@@ -295,6 +345,7 @@ class NotebookExecutor:
             except Exception:
                 pass
             self.store.set_meta(key, {'status': 'uncertain', 'path': self.path, 'index': index, 'token': token})
+            self.store.set_meta(f'lab_runtime:{self.action_id}', {**runtime, 'status': 'uncertain', 'updated_at': time.time()})
             raise
 
     def ready_snapshot(self, timeout=60):
@@ -388,13 +439,29 @@ def find_notebook(pages):
             continue
         for frame in page.frames:
             try:
-                if frame.evaluate('() => !!(globalThis.Jupyter?.notebook?._fully_loaded && Jupyter.notebook.kernel?.is_connected())'):
-                    matches.append((page, frame))
+                identity = frame.evaluate('''() => {
+                    const nb = globalThis.Jupyter?.notebook;
+                    if (!nb?._fully_loaded || !nb.kernel?.is_connected()) return null;
+                    return {origin: location.origin, path: nb.notebook_path, kernel: nb.kernel.id,
+                        cells: nb.toJSON().cells.map(c => {
+                            const metadata = {...c.metadata};
+                            for (const k of ['trusted','collapsed','scrolled','execution','ExecuteTime']) delete metadata[k];
+                            return [c.cell_type,c.source,metadata,c.id];
+                        })};
+                }''')
+                if identity:
+                    matches.append((page, frame, identity))
             except Exception:
                 continue
     if len(matches) > 1:
-        raise HandlerError('Multiple notebook editors opened; unable to select the assignment safely')
-    return matches[0] if matches else None
+        identities = [m[2] for m in matches]
+        first = identities[0]
+        if (not isinstance(first, dict) or not all(first.get(k) for k in ('origin', 'path', 'kernel', 'cells'))
+                or first['origin'] == 'null' or any(identity != first for identity in identities[1:])):
+            raise HandlerError('Multiple different notebook editors opened; unable to select the assignment safely')
+        # Equivalent views of the same kernel and document are safe to reuse.
+        # Do not close tabs or choose between differing unsaved documents.
+    return matches[0][:2] if matches else None
 
 
 def wait_for_course_mark(page, expected_url, checkpoint, *, checks=24, interval_ms=5000):
