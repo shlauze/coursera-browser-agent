@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from v2.groq_client import GroqClient, GroqError, question_key
-from v2.providers import settings, save_settings, ollama_transport, validate_schema
+from v2.providers import settings, save_settings, ollama_transport, validate_schema, apply_pending_settings, cancel_pending_settings
 from v2.dashboard import Dashboard, runtime_status, runtime_html
 from v2.control import Control
 from v2.store import Store
@@ -159,6 +159,53 @@ class ProviderTests(unittest.TestCase):
         self.assertIn('name="csrf"', html)
         self.assertNotIn('http-equiv="refresh"', html)
 
+    def test_running_selection_applies_only_on_next_request(self):
+        self.configure('groq')
+        self.store.set_control_state('running')
+        def remote(*args):
+            with patch('v2.providers.models', return_value=['local:latest']):
+                save_settings(self.store, 'ollama', 'local:latest', 8192, defer=True)
+            self.assertEqual(settings(self.store)['mode'], 'groq')
+            return (200, {}, {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(self.answer)}}]})
+        client = self.client(Mock(side_effect=remote))
+        self.assertEqual(client._request({}), self.answer)
+        self.local.assert_not_called()
+        self.assertIsNotNone(self.store.get_meta('provider_pending'))
+        self.assertEqual(client._request({}), self.answer)
+        self.local.assert_called_once()
+        self.assertIsNone(self.store.get_meta('provider_pending'))
+        self.assertEqual(settings(self.store)['mode'], 'ollama')
+
+    def test_queue_latest_selection_cancel_and_pause_preserved(self):
+        self.configure('groq')
+        self.store.set_control_state('paused')
+        with patch('v2.providers.models', return_value=['local:latest']):
+            save_settings(self.store, 'auto', 'local:latest', 8192, defer=True)
+            save_settings(self.store, 'ollama', 'local:latest', 16384, defer=True)
+        self.assertEqual(self.store.get_meta('provider_pending')['num_ctx'], 16384)
+        self.assertEqual(self.store.get_control_state(), 'paused')
+        self.assertEqual(settings(self.store)['mode'], 'groq')
+        cancel_pending_settings(self.store)
+        self.assertFalse(apply_pending_settings(self.store))
+        self.assertEqual(settings(self.store)['mode'], 'groq')
+
+    def test_stopped_save_clears_pending_without_starting(self):
+        self.store.set_meta('provider_pending', {'mode': 'ollama'})
+        save_settings(self.store, 'groq', '', 8192, defer=True)
+        self.assertIsNone(self.store.get_meta('provider_pending'))
+        self.assertEqual(self.store.get_control_state(), 'stopped')
+
+    def test_provider_form_escapes_errors_and_retains_attempted_model(self):
+        panel = Dashboard(self.store, Control(self.store))
+        with patch('v2.dashboard.ollama_models', side_effect=OSError()):
+            html = panel._providers_page(error='<script>bad</script>', form_values={
+                'mode': 'auto', 'ollama_model': 'missing:latest', 'num_ctx': '16384'})
+        self.assertNotIn('<script>', html)
+        self.assertIn('&lt;script&gt;', html)
+        self.assertIn('value="missing:latest" selected', html)
+        self.assertIn('value="16384" selected', html)
+        self.assertIn('Ollama не отвечает', html)
+
     def test_local_generation_is_not_displayed_as_groq_wait(self):
         self.configure()
         self.store.set_control_state('running')
@@ -249,10 +296,11 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(settings(self.store)['mode'], 'auto')
                 self.assertIsNotNone(self.store.get_course('saved'))
                 self.store.set_control_state('running')
-                with self.assertRaises(HTTPError) as exc:
-                    post(panel.csrf_token)
-                self.assertEqual(exc.exception.code, 409)
-                exc.exception.close()
+                with post(panel.csrf_token) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn('/providers', response.url)
+                self.assertEqual(self.store.get_meta('provider_pending')['mode'], 'auto')
+                self.assertEqual(self.store.get_control_state(), 'running')
         finally:
             server.shutdown()
             server.server_close()

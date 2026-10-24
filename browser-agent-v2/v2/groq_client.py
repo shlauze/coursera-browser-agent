@@ -397,7 +397,9 @@ class GroqClient:
             remaining -= step
 
     def _request(self, payload):
-        from .providers import settings
+        from .providers import settings, apply_pending_settings
+        self.checkpoint()
+        apply_pending_settings(self.store)
         if settings(self.store)['mode'] == 'ollama':
             return self._local_request(payload, 'selected')
         wait = self.store.get_meta('groq_wait') or {}

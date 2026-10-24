@@ -1,22 +1,24 @@
-# Coursera Browser Agent — v0.2.62
+# Coursera Browser Agent — исходники v0.2.63
 
 Текущая реализация — **v2**, Windows x64. Готовый EXE включает Python и Playwright.
 Google Chrome, аккаунт Coursera и собственный ключ Groq нужны отдельно.
 
-**[Скачать EXE 0.2.62](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.62/CourseraAgent-0.2.62.exe)** · **[Все файлы релиза](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.62)**
+**[Скачать EXE 0.2.61](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.61/CourseraAgent-0.2.61.exe)** · **[Все файлы релиза](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.61)**
 
-В 0.2.62 исправлено распознавание окна повторной попытки с оставшимися попытками.
-Для короткого лимита Groq (до 30 секунд) программа ждёт; для долгого использует Ollama.
-Тайм-аут локальной генерации увеличен до 15 минут для работы на CPU.
-В панели откройте «Модель и автопереключение», остановите исполнителя, выберите
-установленную локальную модель и сохраните настройки. После Retry-After программа
-автоматически возвращается к Groq. Черновики и прогресс сохраняются. Неизвестные подтверждения по-прежнему требуют проверки пользователя.
+В исходниках 0.2.63 обновлена страница выбора модели: три режима, список локальных моделей,
+состояние Ollama и применение настроек перед следующим новым запросом.
+Выбор можно менять во время работы, отменять ожидающее изменение и сохранять
+без перезапуска задания. Прогресс и черновики сохраняются.
 
-## Быстрый запуск без Python
+Готовая опубликованная сборка ниже — 0.2.61. Для нового интерфейса 0.2.63
+соберите EXE через `browser-agent-v2/build_exe.cmd`; локальная сборка 0.2.63
+уже проверена, но файл релиза пока не опубликован.
+
+## Быстрый запуск опубликованной версии без Python
 
 1. Скачайте EXE по ссылке выше и положите в доступную для записи папку.
    `Code → Download ZIP` скачивает исходники; готового EXE в этом архиве нет.
-2. Дважды щёлкните `CourseraAgent-0.2.62.exe`. При первом запуске введите свой
+2. Дважды щёлкните `CourseraAgent-0.2.61.exe`. При первом запуске введите свой
    ключ Groq в консоли. Панель откроется по адресу http://127.0.0.1:8766/.
 3. Запустите исполнителя кнопкой в панели. В отдельном Chrome войдите в Coursera
    вручную, если потребуется. Оставляйте консоль открытой.
@@ -27,12 +29,12 @@ Google Chrome, аккаунт Coursera и собственный ключ Groq �
 $agentDir = Join-Path $env:USERPROFILE 'Documents\CourseraAgent'
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
 Set-Location $agentDir
-Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.62/CourseraAgent-0.2.62.exe' -OutFile 'CourseraAgent-0.2.62.exe'
-.\CourseraAgent-0.2.62.exe --version
-.\CourseraAgent-0.2.62.exe
+Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.61/CourseraAgent-0.2.61.exe' -OutFile 'CourseraAgent-0.2.61.exe'
+.\CourseraAgent-0.2.61.exe --version
+.\CourseraAgent-0.2.61.exe
 ```
 
-Ожидаемая версия: `0.2.62`. Для обновления существующей установки используйте
+Ожидаемая версия: `0.2.61`. Для обновления существующей установки используйте
 её прежнюю папку, чтобы программа нашла сохранённый прогресс.
 
 ## Запуск исполнителя из PowerShell
@@ -40,7 +42,7 @@ Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releas
 Откройте PowerShell **в папке с EXE**. После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.62.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.61.exe --chrome-port 9224 run
 ```
 
 `run` запускает исполнителя без новой панели. Для первого запуска удобнее
@@ -50,8 +52,8 @@ Invoke-WebRequest -Uri 'https://github.com/shlauze/coursera-browser-agent/releas
 Остановка — из второго PowerShell в той же папке:
 
 ```powershell
-.\CourseraAgent-0.2.62.exe stop
-.\CourseraAgent-0.2.62.exe status
+.\CourseraAgent-0.2.61.exe stop
+.\CourseraAgent-0.2.61.exe status
 ```
 
 Дождитесь `control_state: stopped` в JSON. Для нового запуска используйте `run`;
@@ -70,11 +72,11 @@ EXE не подписан сертификатом издателя; контр�
 
 ```powershell
 Get-Location
-Test-Path .\CourseraAgent-0.2.62.exe
+Test-Path .\CourseraAgent-0.2.61.exe
 ```
 
 Если результат `False`, скачайте EXE или перейдите в папку, где он сохранён.
-Путь с пробелами запускается так: `& "C:\Папка программы\CourseraAgent-0.2.62.exe"`.
+Путь с пробелами запускается так: `& "C:\Папка программы\CourseraAgent-0.2.61.exe"`.
 
 ## Исходники и подробная инструкция
 

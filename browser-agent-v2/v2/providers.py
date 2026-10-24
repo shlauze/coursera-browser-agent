@@ -27,8 +27,8 @@ def models():
                    and not re.search(r'[:\-]cloud$', m['name'])})
 
 
-def save_settings(store, mode, model, num_ctx):
-    if store.get_control_state() != 'stopped':
+def save_settings(store, mode, model, num_ctx, *, defer=False):
+    if not defer and store.get_control_state() != 'stopped':
         raise ValueError('Сначала остановите исполнителя и дождитесь состояния «Остановлен».')
     if mode not in {'groq', 'ollama', 'auto'}:
         raise ValueError('Неизвестный режим провайдера.')
@@ -48,9 +48,36 @@ def save_settings(store, mode, model, num_ctx):
         if model not in available:
             raise ValueError('Выберите установленную локальную модель Ollama.')
     value = {'mode': mode, 'ollama_model': model, 'num_ctx': num_ctx}
-    store.set_meta('provider_settings', value)
-    store.record_event('INFO', 'PROVIDER_SETTINGS', f'Provider mode: {mode}; local model: {model or "none"}')
+    with store._connection(write=True) as connection:
+        state = connection.execute('SELECT state FROM control WHERE id=1').fetchone()['state']
+        if state != 'stopped' and not defer:
+            raise ValueError('Сначала остановите исполнителя.')
+        queued = state != 'stopped'
+        key = 'provider_pending' if queued else 'provider_settings'
+        connection.execute('INSERT INTO metadata(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                           (key, json.dumps(value)))
+        if not queued:
+            connection.execute("DELETE FROM metadata WHERE key='provider_pending'")
+    store.record_event('INFO', 'PROVIDER_SETTINGS_QUEUED' if queued else 'PROVIDER_SETTINGS',
+                       f'Provider mode: {mode}; local model: {model or "none"}')
     return value
+
+
+def apply_pending_settings(store):
+    """Consume the latest selection atomically, only at a model request boundary."""
+    with store._connection(write=True) as connection:
+        row = connection.execute("SELECT value_json FROM metadata WHERE key='provider_pending'").fetchone()
+        if row is None:
+            return False
+        connection.execute("INSERT INTO metadata(key,value_json) VALUES('provider_settings',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (row['value_json'],))
+        connection.execute("DELETE FROM metadata WHERE key='provider_pending'")
+    store.record_event('INFO', 'PROVIDER_SETTINGS_APPLIED', 'Selected provider settings applied before a new model request')
+    return True
+
+
+def cancel_pending_settings(store):
+    with store._connection(write=True) as connection:
+        connection.execute("DELETE FROM metadata WHERE key='provider_pending'")
 
 
 def validate_schema(value, schema):

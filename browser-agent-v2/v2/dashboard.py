@@ -16,7 +16,7 @@ from .control import Control, ControlError
 from .store import Store
 from . import __version__
 from .token_usage import usage_summary, usage_html
-from .providers import settings as provider_settings, models as ollama_models, save_settings
+from .providers import settings as provider_settings, models as ollama_models, save_settings, cancel_pending_settings
 
 
 _CSS = """
@@ -55,6 +55,7 @@ def runtime_status(store, now=None):
             "retry_at": retry_at or None, "remaining_seconds": remaining,
             "waiting": state == "running" and remaining > 0 and active.get('provider') != 'ollama',
             "provider": active, "provider_settings": provider_settings(store),
+            "provider_pending": store.get_meta('provider_pending'),
             "reason": wait.get("reason", "rate_limit" if remaining else None),
             "http_status": wait.get("status"), "limit": store.get_meta("groq_rate_limit", {})}
 
@@ -131,9 +132,9 @@ class Dashboard:
                 self._send(code, json.dumps(value, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
 
-            def _redirect(self, notice: str) -> None:
+            def _redirect(self, notice: str, destination: str = '/') -> None:
                 self.send_response(303)
-                self.send_header("Location", "/?notice=" + quote(notice))
+                self.send_header("Location", destination + "?notice=" + quote(notice))
                 self.send_header("Content-Length", "0")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
@@ -143,7 +144,8 @@ class Dashboard:
                 if path == "/api/status":
                     self._json(200, {**dashboard.store.snapshot(), "version": __version__, "runtime": runtime_status(dashboard.store), "groq_usage": usage_summary(dashboard.store)})
                 elif path == '/providers':
-                    self._send(200, dashboard._providers_page().encode('utf-8'), 'text/html; charset=utf-8')
+                    notice = parse_qs(urlsplit(self.path).query).get('notice', [''])[0][:200]
+                    self._send(200, dashboard._providers_page(notice=notice).encode('utf-8'), 'text/html; charset=utf-8')
                 elif path == "/":
                     query = parse_qs(urlsplit(self.path).query)
                     notice = query.get("notice", [""])[0][:200]
@@ -178,8 +180,12 @@ class Dashboard:
                 try:
                     if path == '/action/providers':
                         save_settings(dashboard.store, fields.get('mode', ['groq'])[0],
-                                      fields.get('model', [''])[0], fields.get('num_ctx', ['8192'])[0])
-                        self._redirect('Настройки провайдера сохранены. Запустите исполнителя для продолжения.')
+                                      fields.get('model', [''])[0], fields.get('num_ctx', ['8192'])[0], defer=True)
+                        self._redirect('Выбор сохранён. Ниже показано, применён ли он уже.', '/providers')
+                        return
+                    if path == '/action/providers/cancel':
+                        cancel_pending_settings(dashboard.store)
+                        self._redirect('Ожидающее изменение отменено. Применённые настройки сохранены.', '/providers')
                         return
                     if path == "/action/start" and dashboard.start_callback:
                         if dashboard.control.get_state() != "stopped":
@@ -207,7 +213,12 @@ class Dashboard:
                             self._redirect("Очередь обновлена")
                             return
                 except (ControlError, KeyError, ValueError) as error:
-                    self._send(409, str(error).encode("utf-8"), "text/plain; charset=utf-8")
+                    if path == '/action/providers':
+                        attempted = {'mode': fields.get('mode', ['groq'])[0], 'ollama_model': fields.get('model', [''])[0],
+                                     'num_ctx': fields.get('num_ctx', ['8192'])[0]}
+                        self._send(409, dashboard._providers_page(error=str(error), form_values=attempted).encode('utf-8'), 'text/html; charset=utf-8')
+                    else:
+                        self._send(409, str(error).encode("utf-8"), "text/plain; charset=utf-8")
                     return
                 self._send(404, b"Not found", "text/plain; charset=utf-8")
 
@@ -306,37 +317,71 @@ class Dashboard:
 <tbody>{events or '<tr><td colspan="4" class="empty">Событий пока нет.</td></tr>'}</tbody></table></section>
 </main></body></html>"""
 
-    def _providers_page(self):
-        config = provider_settings(self.store)
-        error = ''
+    def _providers_page(self, notice='', error='', form_values=None):
+        applied = provider_settings(self.store)
+        pending = self.store.get_meta('provider_pending')
+        config = form_values or pending or applied
+        labels = {'groq': 'Только Groq', 'ollama': 'Только Ollama', 'auto': 'Автоматически'}
+        state = self.store.get_control_state()
+        state_label = {'running': 'Работает', 'paused': 'На паузе', 'stop_requested': 'Останавливается', 'stopped': 'Остановлен'}.get(state, state)
+        service_error = ''
         try:
-            available = ollama_models()
+            installed = ollama_models()
         except (OSError, ValueError):
-            available = []
-            error = 'Ollama недоступна. Запустите её на этом компьютере (127.0.0.1:11434).'
-        available = sorted(set(available + ([config['ollama_model']] if config['ollama_model'] else [])))
+            installed = []
+            service_error = 'Ollama не отвечает. Запустите приложение Ollama и обновите список.'
+        available = sorted(set(installed + ([config['ollama_model']] if config['ollama_model'] else [])))
         def options(pairs, selected):
             return ''.join(f'<option value="{escape(str(value), quote=True)}"'
-                           + (' selected' if value == selected else '') + f'>{escape(label)}</option>'
+                           + (' selected' if str(value) == str(selected) else '') + f'>{escape(label)}</option>'
                            for value, label in pairs)
-        modes = options([('groq', 'Только Groq'), ('ollama', 'Только Ollama'),
-                         ('auto', 'Автоматически: Groq → Ollama → Groq')], config['mode'])
-        local = options([('', 'Выберите установленную модель')] + [(m, m) for m in available], config['ollama_model'])
-        contexts = options([(n, str(n)) for n in (8192, 16384, 32768)], config['num_ctx'])
-        disabled = '' if self.store.get_control_state() == 'stopped' else ' disabled'
-        return f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Выбор модели</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"><style>{_CSS}</style></head><body>
-<main><section class="panel"><h1>Модель и автопереключение</h1><p><a href="/">Вернуться в панель</a></p>
-<p>Для изменения настроек остановите исполнителя и дождитесь состояния «Остановлен».</p>
-<p>Автоматически: при HTTP 429, временной ошибке или сохранённом ожидании Groq используются локальные модели.
-После Retry-After следующий запрос снова идёт в Groq. Если Ollama недоступна, сохраняется ожидание Groq.
-Ошибки ключа, неподходящий ответ и неизвестные подтверждения не обходятся.</p>
-<p>Прогресс и проверенные ответы общие для обоих провайдеров. Качество локальной модели может отличаться.
-Больший контекст требует больше памяти; слишком длинные запросы отклоняются без обрезки задания.</p>
-<p class="error">{escape(error)}</p><form method="post" action="/action/providers">
-<input type="hidden" name="csrf" value="{escape(self.csrf_token, quote=True)}">
-<p><label>Режим <select name="mode">{modes}</select></label></p>
-<p><label>Модель Ollama <select name="model">{local}</select></label></p>
-<p><label>Контекст Ollama <select name="num_ctx">{contexts}</select></label></p>
-<button{disabled}>Сохранить</button></form><p>Для обновления списка моделей обновите эту страницу.
-Модели загружаются в Ollama отдельно; программа их автоматически не устанавливает.</p></section></main></body></html>'''
+        local = options([('', 'Выберите установленную модель')] +
+                        [(m, m + (' — недоступна' if m not in installed else '')) for m in available], config['ollama_model'])
+        contexts = options([(8192, '8 192 — меньше памяти'), (16384, '16 384 — больше контекста'),
+                            (32768, '32 768 — больше памяти')], config['num_ctx'])
+        descriptions = {'groq': 'Облачная модель. При лимите ждёт восстановления Groq.',
+                        'ollama': 'Локальная модель на вашем компьютере. Без запросов к Groq.',
+                        'auto': 'Groq по умолчанию. При долгом лимите — Ollama, затем возврат к Groq.'}
+        cards = ''.join(f'<label class="choice"><input type="radio" name="mode" value="{mode}"'
+                        + (' checked' if mode == config['mode'] else '')
+                        + f'><span><strong>{title}</strong><small>{descriptions[mode]}</small></span></label>'
+                        for mode, title in labels.items())
+        def describe(value):
+            text = labels.get(value['mode'], value['mode'])
+            if value['mode'] != 'groq':
+                text += ' · ' + value['ollama_model']
+            return escape(text)
+        pending_html = ('<div class="pending" role="status"><strong>Ожидает применения: ' + describe(pending)
+                        + '</strong><p>Применится перед следующим новым запросом к модели. Текущий запрос или ожидание Groq завершится с прежними настройками. Пауза и остановка сохраняются.</p>'
+                        + self._form('/action/providers/cancel', 'Отменить изменение', 'secondary') + '</div>') if pending else ''
+        active = self.store.get_meta('provider_active') or {}
+        last_provider = escape(str(active.get('provider', 'Пока нет запросов')) + ' · ' + str(active.get('model', '')))
+        messages = (f'<div class="notice" role="status">{escape(notice)}</div>' if notice else '')
+        messages += (f'<div class="pending error" role="alert">{escape(error)}</div>' if error else '')
+        health = service_error or (f'Ollama доступна · установлено моделей: {len(installed)}' if installed else 'Ollama доступна, но локальные модели ещё не установлены.')
+        button = 'Сохранить выбор' if state == 'stopped' else 'Применить со следующего запроса'
+        return f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Выбор модели · Coursera Agent</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><style>{_CSS}
+.provider-form{{display:block}}.choices{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0 24px}}
+.choice{{display:flex;gap:10px;border:2px solid #dde4f0;border-radius:12px;padding:18px;cursor:pointer;background:white}}
+.choice:has(input:checked){{border-color:#1c5ed0;background:#edf4ff}}.choice:focus-within{{outline:3px solid #97bfff}}
+.choice input{{margin:4px 0;accent-color:#1c5ed0}}.choice small{{display:block;color:#56667e;line-height:1.5;margin-top:8px}}
+.provider-form select{{display:block;width:100%;max-width:540px;padding:12px;margin:8px 0 14px;border:1px solid #abb8cc;border-radius:8px;background:white;font:inherit}}
+.provider-form details{{margin:20px 0}}.provider-form summary{{cursor:pointer}}.model-label{{display:block;font-weight:600}}
+@media(max-width:750px){{.choices{{grid-template-columns:1fr}}}}
+</style></head><body><header><h1>Выбор модели</h1><p>Coursera Agent {escape(__version__)} · {escape(state_label)}</p></header>
+<main><p><a href="/">← Панель управления</a></p>{messages}
+<section class="panel"><h2>Текущие настройки</h2><p><strong>Применено:</strong> {describe(applied)}</p>
+<p class="sub">Последний провайдер запроса: {last_provider}</p>{pending_html}</section>
+<section class="panel"><h2>1. Выберите режим</h2><form class="provider-form" method="post" action="/action/providers">
+<input type="hidden" name="csrf" value="{escape(self.csrf_token, quote=True)}"><div class="choices">{cards}</div>
+<h2>2. Локальная модель</h2><p>{escape(health)}</p><label class="model-label" for="local-model">Модель Ollama</label>
+<select id="local-model" name="model">{local}</select><p class="sub">Нужна для режимов «Только Ollama» и «Автоматически». В режиме Groq не используется.</p>
+<p><a href="/providers">Обновить список и статус</a> <span class="sub">— несохранённый выбор будет сброшен.</span></p>
+<details><summary>Настройки памяти Ollama</summary><label class="model-label" for="local-context">Размер контекста</label>
+<select id="local-context" name="num_ctx">{contexts}</select><p class="sub">Больший контекст требует больше памяти. Слишком длинное задание не обрезается.</p></details>
+<button type="submit">{button}</button><p class="sub">Настройки сохраняются после перезапуска. Ответы и прогресс остаются на месте. Сохранение не запускает остановленного исполнителя.</p>
+</form></section><section class="panel"><h2>Как работает автоматический режим</h2>
+<p>Лимит Groq до 30 секунд: программа ждёт. Более долгое ожидание: использует выбранную модель Ollama. После срока ожидания новый запрос снова идёт в Groq.</p>
+<p>Ollama на CPU может отвечать до 15 минут. Качество ответов зависит от модели; получение ответа ещё не означает зачёт задания.</p>
+<p class="sub">Модели устанавливаются отдельно в Ollama. Ключ Groq хранится отдельно и не передаётся локальной модели.</p></section></main></body></html>'''
