@@ -150,6 +150,37 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertIn(actions[0], [a['id'] for a in self.store.pending_actions()])
         finish.assert_not_called()
 
+    def test_disconnected_lab_continues_same_course_without_replaying_submission(self):
+        from dataclasses import replace
+        from playwright.sync_api import Error
+        from v2.notebooks import NotebookExecutor
+        first = replace(self.item, kind='Programming Assignment', title='Disconnected lab')
+        second = replace(first, kind='Graded Assignment', title='Available quiz', url=first.url+'other')
+        done = replace(second, completed=True)
+        page = Mock(url=first.url)
+        outlines = [OutlineSnapshot(self.card.title, items, page.url) for items in
+                    ((first, second), (first, second), (first, done))]
+        failed_actions = []
+        def handler(page, kind, checkpoint, **kwargs):
+            if not failed_actions:
+                aid = kwargs['action_id']
+                failed_actions.append(aid)
+                self.store.set_meta(f'submission:{aid}', 'submitting')
+                frame = Mock()
+                frame.evaluate.side_effect = Error('TypeError: Failed to fetch')
+                NotebookExecutor(frame, Mock(), self.store, aid, checkpoint).call('snapshot')
+            return Mock(message='passed')
+        with patch('v2.runner.open_course', return_value=page), patch('v2.runner.scan_outline', side_effect=outlines), \
+             patch('v2.runner.open_item', return_value=page), patch('v2.runner.handle', side_effect=handler) as handled, \
+             patch.object(self.runner, '_verify_item', return_value=True):
+            with self.assertRaisesRegex(RunnerAttention, 'await learner input'):
+                self.runner._process_course(page, self.card)
+        self.assertEqual(handled.call_count, 2)
+        self.assertEqual(self.runner.completed_items, 1)
+        self.assertEqual(self.store.get_action(failed_actions[0])['status'], 'pending')
+        self.assertEqual(self.store.get_meta(f'submission:{failed_actions[0]}'), 'submitting')
+        self.assertIn((self.cid, first.url), self.runner.blocked_items)
+
     def test_unsupported_item_does_not_block_other_required_work(self):
         from dataclasses import replace
         from v2.policy import Decision

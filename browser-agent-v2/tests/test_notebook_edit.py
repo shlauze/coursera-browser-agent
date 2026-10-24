@@ -84,6 +84,33 @@ class NotebookEditTests(unittest.TestCase):
         self.executor(action=2).patch(self.snapshot, {0: self.cell}, target=0)
         self.assertEqual(self.groq.notebook_patch.call_count, 2)
 
+    def test_browser_failure_preserves_validated_draft_for_resume(self):
+        from playwright.sync_api import Error
+        self.frame.evaluate.side_effect = Error('TypeError: Failed to fetch')
+        with self.assertRaisesRegex(HandlerError, 'saved state retained'):
+            self.executor().patch(self.snapshot, {0: self.cell}, target=0)
+        self.frame.evaluate.assert_called_once()
+        self.frame.evaluate.side_effect = self.bridge
+        self.executor(action=2).patch(self.snapshot, {0: self.cell}, target=0)
+        self.groq.notebook_patch.assert_called_once()
+        self.assertEqual(self.edits, 1)
+
+    def test_browser_failures_never_replay_operations_or_erase_submission(self):
+        from playwright.sync_api import Error
+        for operation in ('snapshot', 'edit', 'save', 'restart', 'run', 'poll'):
+            with self.subTest(operation=operation):
+                frame = Mock()
+                frame.evaluate.side_effect = Error('TypeError: Failed to fetch')
+                executor = NotebookExecutor(frame, self.groq, self.store, 1, lambda: None)
+                executor.execution_key = 'lab_execution:fixture'
+                self.store.set_meta('submission:1', 'submitting')
+                self.store.set_meta(executor.execution_key, {'status': 'running', 'token': 'owned'})
+                with self.assertRaisesRegex(HandlerError, 'operation not replayed'):
+                    executor.call(operation)
+                frame.evaluate.assert_called_once()
+                self.assertEqual(self.store.get_meta('submission:1'), 'submitting')
+                self.assertEqual(self.store.get_meta(executor.execution_key)['token'], 'owned')
+
     def test_unknown_write_error_is_not_retried(self):
         self.unknown = True
         with self.assertRaisesRegex(RuntimeError, 'response lost'):

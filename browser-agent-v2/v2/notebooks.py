@@ -228,7 +228,16 @@ class NotebookExecutor:
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def call(self, action, **values):
-        result = self.frame.evaluate(BRIDGE, {'action': action, 'path': self.path, **values})
+        from playwright.sync_api import Error as BrowserError
+        try:
+            result = self.frame.evaluate(BRIDGE, {'action': action, 'path': self.path, **values})
+        except BrowserError as exc:
+            # A lost reply says nothing about whether a write or execution ran.
+            # Keep the durable intent/draft and let the queue isolate this item.
+            # Do not replay the bridge, reload the editor or reset its kernel.
+            raise HandlerError(
+                f'Notebook browser operation failed during {action}; saved state retained, '
+                f'operation not replayed: {exc}') from exc
         if result.get('error'):
             if action == 'edit' and result.get('edit_started') is False:
                 raise KernelBusyBeforeEdit(result['error'])
