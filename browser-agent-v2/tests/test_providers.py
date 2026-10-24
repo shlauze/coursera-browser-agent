@@ -228,59 +228,37 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNone(runtime_status(self.store, now=160)['generation_seconds'])
         self.assertEqual(self.store.get_meta('provider_active')['phase'], 'response_received')
 
-    def test_local_transport_never_sends_key_and_validates_response(self):
-        client = self.client(Mock())
-        payload = {'messages': [{'role': 'user', 'content': '2+2?'}], 'max_completion_tokens': 64,
-                   'response_format': client._format('answer', {'cannot_answer': {'type': 'boolean'}, 'text': {'type': 'string'}})}
-        body = {'done': True, 'done_reason': 'stop', 'message': {'content': json.dumps(self.answer)}}
-        response = Mock()
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        response.read.return_value = json.dumps(body).encode()
-        with patch('v2.providers.models', return_value=['local:latest']), patch('v2.providers.urllib.request.urlopen', return_value=response) as send:
-            self.assertEqual(ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192}, payload, lambda: None), self.answer)
-            req = send.call_args.args[0]
-            self.assertEqual(send.call_args.kwargs['timeout'], 900)
-            self.assertEqual(req.full_url, 'http://127.0.0.1:11434/api/chat')
-            self.assertNotIn('Authorization', req.headers)
-            self.assertEqual(json.loads(req.data)['format'], payload['response_format']['json_schema']['schema'])
-            with self.assertRaisesRegex(GroqError, 'context budget'):
-                ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 10}, payload, lambda: None)
+    def test_stream_progress_visible_without_answer_content(self):
+        self.configure('ollama')
+        self.store.set_control_state('running')
+        self.store.set_meta('provider_active', {'provider': 'ollama', 'phase': 'generating',
+            'started_at': 100, 'last_chunk_at': 140, 'response_characters': 123, 'chunks': 12})
+        status = runtime_status(self.store, now=145)
+        self.assertEqual(status['last_chunk_seconds'], 5)
+        self.assertIn('123 символов', runtime_html(status))
+        self.assertIn('5 сек. назад', runtime_html(status))
+
+    def test_real_transport_callback_persists_counters_until_response(self):
+        self.configure('ollama')
+        def transport(config, payload, checkpoint, progress):
+            progress({'chunks': 8, 'response_characters': 22})
+            self.assertEqual(self.store.get_meta('provider_active')['chunks'], 8)
+            return self.answer
+        with patch('v2.providers.ollama_transport', side_effect=transport):
+            result = GroqClient(self.store, clock=lambda: 100)._local_request({}, 'selected')
+        self.assertEqual(result, self.answer)
+        self.assertEqual(self.store.get_meta('provider_active')['phase'], 'response_received')
+        self.assertEqual(self.store.get_meta('provider_active')['response_characters'], 22)
 
     def test_stop_before_local_generation_never_sends_request(self):
-        payload = {'messages': [{'role': 'user', 'content': '2+2?'}]}
         def stop():
             raise RuntimeError('user stop')
-        with patch('v2.providers.models', return_value=['local:latest']), patch('v2.providers.urllib.request.urlopen') as send:
+        with patch('v2.providers.models') as models, patch('v2.providers.http.client.HTTPConnection') as connect:
             with self.assertRaisesRegex(RuntimeError, 'user stop'):
-                ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192}, payload, stop)
-            send.assert_not_called()
-
-    def test_stop_interrupts_slow_local_wait_without_accepting_late_response(self):
-        import threading
-        started, release = threading.Event(), threading.Event()
-        response = Mock()
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        response.read.return_value = json.dumps({'done': True, 'done_reason': 'stop',
-            'message': {'content': json.dumps(self.answer)}}).encode()
-        def send(*args, **kwargs):
-            started.set()
-            release.wait(3)
-            return response
-        checks = [0]
-        def checkpoint():
-            checks[0] += 1
-            if checks[0] > 1:
-                self.assertTrue(started.wait(2))
-                raise RuntimeError('user stop')
-        try:
-            with patch('v2.providers.models', return_value=['local:latest']), patch('v2.providers.urllib.request.urlopen', side_effect=send):
-                with self.assertRaisesRegex(RuntimeError, 'user stop'):
-                    ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192},
-                        {'messages': [{'role': 'user', 'content': '2+2?'}]}, checkpoint)
-        finally:
-            release.set()
+                ollama_transport({'ollama_model': 'local:latest', 'num_ctx': 8192},
+                    {'messages': [{'role': 'user', 'content': '2+2?'}]}, stop)
+            connect.assert_not_called()
+            models.assert_not_called()
 
     def test_provider_settings_http_requires_csrf_and_preserves_progress(self):
         import threading

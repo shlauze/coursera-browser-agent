@@ -345,8 +345,14 @@ class GroqClient:
                   'phase': 'generating', 'started_at': self.clock()}
         self.store.set_meta('provider_active', active)
         self.store.record_event('INFO', 'PROVIDER_OLLAMA', f'Local generation: {config["ollama_model"]}; {reason}')
+        def progress(snapshot):
+            active.update(snapshot)
+            self.store.set_meta('provider_active', active)
         try:
-            result = (self.local_transport or ollama_transport)(config, payload, self.checkpoint)
+            if self.local_transport:
+                result = self.local_transport(config, payload, self.checkpoint)
+            else:
+                result = ollama_transport(config, payload, self.checkpoint, progress=progress)
             self.checkpoint()
         except Exception:
             self.store.set_meta('provider_active', {**active, 'phase': 'ended_without_response'})

@@ -57,6 +57,7 @@ def runtime_status(store, now=None):
             "provider": active, "provider_settings": provider_settings(store),
             "provider_pending": store.get_meta('provider_pending'),
             "generation_seconds": max(0, int(now - active['started_at'])) if active.get('phase') == 'generating' and active.get('started_at') is not None else None,
+            "last_chunk_seconds": max(0, int(now - active['last_chunk_at'])) if active.get('last_chunk_at') is not None else None,
             "reason": wait.get("reason", "rate_limit" if remaining else None),
             "http_status": wait.get("status"), "limit": store.get_meta("groq_rate_limit", {})}
 
@@ -71,7 +72,15 @@ def runtime_html(status):
     active = status.get('provider') or {}
     if status.get('control_state') == 'running' and active.get('phase') == 'generating':
         title = "Ollama готовит ответ"
-        parts.append(f"Запрос выполняется {status.get('generation_seconds', 0)} сек. На CPU это может занять до 15 минут. Повторный запуск не нужен.")
+        parts.append(f"Запрос выполняется {status.get('generation_seconds', 0)} сек.")
+        if active.get('chunks'):
+            parts.append(f"Ollama передаёт ответ: получено {active.get('response_characters', 0)} символов, фрагментов: {active['chunks']}. Проверка ответа ещё не завершена.")
+            parts.append(f"Последние данные поступили {status.get('last_chunk_seconds', 0)} сек. назад.")
+            if active.get('thinking_characters'):
+                parts.append(f"Промежуточное рассуждение модели: {active['thinking_characters']} символов.")
+        else:
+            parts.append("Ожидается первый фрагмент: Ollama загружает модель или обрабатывает запрос. Поступление ответа пока не подтверждено.")
+        parts.append("На CPU генерация может занять больше 15 минут. Предел запроса — 60 минут, ожидания без данных — 15 минут. Повторный запуск не нужен.")
     if active:
         parts.append(f"Провайдер: {active.get('provider', '')}; модель: {active.get('model', '')}")
     if status["remaining_seconds"] and active.get('provider') == 'ollama':
@@ -390,5 +399,5 @@ class Dashboard:
 <button type="submit">{button}</button><p class="sub">Настройки сохраняются после перезапуска. Ответы и прогресс остаются на месте. Сохранение не запускает остановленного исполнителя.</p>
 </form></section><section class="panel"><h2>Как работает автоматический режим</h2>
 <p>Лимит Groq до 30 секунд: программа ждёт. Более долгое ожидание: использует выбранную модель Ollama. После срока ожидания новый запрос снова идёт в Groq.</p>
-<p>Ollama на CPU может отвечать до 15 минут. Качество ответов зависит от модели; получение ответа ещё не означает зачёт задания.</p>
+<p>Ollama на CPU может отвечать больше 15 минут. Панель показывает поступающие фрагменты. Качество зависит от модели; получение ответа ещё не означает зачёт задания.</p>
 <p class="sub">Модели устанавливаются отдельно в Ollama. Ключ Groq хранится отдельно и не передаётся локальной модели.</p></section></main></body></html>'''
