@@ -328,58 +328,13 @@ def focused_notebook_context(context):
 
 class GroqClient:
     def __init__(self, store, checkpoint=lambda: None, *, key_loader=None, transport=_transport,
-                 sleep=time.sleep, model=None, max_wait=None, clock=time.time, local_transport=None):
+                 sleep=time.sleep, model=None, max_wait=None, clock=time.time):
         self.store, self.checkpoint = store, checkpoint
         self.key_loader, self.transport, self.sleep = key_loader, transport, sleep
         self.model = model or os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
         self.max_wait = max_wait
         self.clock = clock
         self.memory = AnswerMemory(store)
-        self.local_transport = local_transport
-
-    def _local_request(self, payload, reason):
-        from .providers import settings, ollama_transport
-        config = settings(self.store)
-        self.checkpoint()
-        active = {'provider': 'ollama', 'model': config['ollama_model'], 'reason': reason,
-                  'phase': 'generating', 'started_at': self.clock()}
-        self.store.set_meta('provider_active', active)
-        self.store.record_event('INFO', 'PROVIDER_OLLAMA', f'Local generation: {config["ollama_model"]}; {reason}')
-        def progress(snapshot):
-            active.update(snapshot)
-            self.store.set_meta('provider_active', active)
-        try:
-            if self.local_transport:
-                result = self.local_transport(config, payload, self.checkpoint)
-            else:
-                result = ollama_transport(config, payload, self.checkpoint, progress=progress)
-            self.checkpoint()
-        except Exception:
-            self.store.set_meta('provider_active', {**active, 'phase': 'ended_without_response'})
-            raise
-        self.store.set_meta('provider_active', {**active, 'phase': 'response_received'})
-        self.store.record_event('INFO', 'OLLAMA_RESPONSE', 'Local response received; task validation still required')
-        return result
-
-    def _fallback(self, payload, reason):
-        from .providers import settings
-        if settings(self.store)['mode'] != 'auto':
-            return False, None
-        wait = self.store.get_meta('groq_wait') or {}
-        remaining = max(float(self.store.get_meta('groq_retry_until', 0)),
-                        float(wait.get('retry_at', 0))) - self.clock()
-        if 0 < remaining <= 30:
-            # A short rate-limit wait is cheaper than starting a CPU generation.
-            self.store.record_event('INFO', 'PROVIDER_SHORT_WAIT',
-                'Groq cooldown is at most 30 seconds; waiting before retry instead of starting local generation')
-            return False, None
-        try:
-            return True, self._local_request(payload, reason)
-        except (GroqError, OSError, ValueError) as exc:
-            self.store.record_event('WARNING', 'OLLAMA_UNAVAILABLE',
-                f'Local generation unavailable ({type(exc).__name__}); retaining Groq cooldown and saved progress')
-            self.store.set_meta('provider_active', {'provider': 'groq', 'model': self.model, 'reason': 'local_unavailable'})
-            return False, None
 
     def _format(self, name, properties):
         if self.model not in {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}:
@@ -394,7 +349,7 @@ class GroqClient:
             key = self.key_loader()
         else:
             from .credentials import load_key
-            key = os.environ.get("GROQ_API_KEY") or load_key()
+            key = load_key() or os.environ.get("GROQ_API_KEY")
         if not key:
             raise GroqError("Groq key is missing; run configure_groq.cmd")
         return key
@@ -410,17 +365,9 @@ class GroqClient:
             remaining -= step
 
     def _request(self, payload):
-        from .providers import settings, apply_pending_settings
+        from .providers import apply_pending_settings
         self.checkpoint()
         apply_pending_settings(self.store)
-        if settings(self.store)['mode'] == 'ollama':
-            return self._local_request(payload, 'selected')
-        wait = self.store.get_meta('groq_wait') or {}
-        cooldown = max(float(self.store.get_meta('groq_retry_until', 0)), float(wait.get('retry_at', 0)))
-        if cooldown > self.clock():
-            used, result = self._fallback(payload, 'groq_cooldown')
-            if used:
-                return result
         return self._request_groq(payload)
 
     def _request_groq(self, payload):
@@ -478,13 +425,10 @@ class GroqClient:
                 self.store.set_meta("groq_retry_until", self.clock() + delay)
             self.store.set_meta("groq_wait", {"status": status, "retry_at": self.clock() + delay,
                 "reason": "rate_limit" if status == 429 else "temporary_error"})
-            used, result = self._fallback(payload, 'groq_rate_limit' if status == 429 else 'groq_temporary_error')
-            if used:
-                return result
             if (self.max_wait is not None and waited + delay > self.max_wait) or (status != 429 and attempt >= 5):
                 raise GroqError("Groq retry budget exhausted; course deferred without shortening Retry-After")
             self.store.record_event("WARNING", "GROQ_WAIT", f"Groq HTTP {status}; retry in {delay:g} seconds")
-            # Local generation may have already consumed the entire cooldown.
+            # Honor the remaining server cooldown, including across restarts.
             remaining = max(0, float((self.store.get_meta('groq_wait') or {}).get('retry_at', 0)) - self.clock())
             while remaining > 0:
                 self.checkpoint()

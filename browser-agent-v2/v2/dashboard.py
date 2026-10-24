@@ -16,7 +16,7 @@ from .control import Control, ControlError
 from .store import Store
 from . import __version__
 from .token_usage import usage_summary, usage_html
-from .providers import settings as provider_settings, models as ollama_models, save_settings, cancel_pending_settings
+from .providers import settings as provider_settings, save_settings, cancel_pending_settings
 
 
 _CSS = """
@@ -49,11 +49,13 @@ def runtime_status(store, now=None):
     action_id = store.get_meta("current_action_id")
     progress = store.get_meta(f"progress:{action_id}", {}) if action_id else {}
     active = store.get_meta('provider_active') or {}
+    if active.get('provider') != 'groq':
+        active = {}
     return {"control_state": state, "course": course.get("title", ""),
             "item": store.get_meta("current_item", ""), "action_id": action_id,
             "stage": progress.get("stage", ""), "stage_updated_at": progress.get("updated_at"),
             "retry_at": retry_at or None, "remaining_seconds": remaining,
-            "waiting": state == "running" and remaining > 0 and active.get('provider') != 'ollama',
+            "waiting": state == "running" and remaining > 0,
             "provider": active, "provider_settings": provider_settings(store),
             "provider_pending": store.get_meta('provider_pending'),
             "lab": store.get_meta(f'lab_runtime:{action_id}', {}) if action_id else {},
@@ -71,17 +73,6 @@ def runtime_html(status):
     title = "Ожидание Groq" if status["waiting"] else "Текущий этап"
     parts = [status["course"], status["item"], stages.get(status["stage"], status["stage"])]
     active = status.get('provider') or {}
-    if status.get('control_state') == 'running' and active.get('phase') == 'generating':
-        title = "Ollama готовит ответ"
-        parts.append(f"Запрос выполняется {status.get('generation_seconds', 0)} сек.")
-        if active.get('chunks'):
-            parts.append(f"Ollama передаёт ответ: получено {active.get('response_characters', 0)} символов, фрагментов: {active['chunks']}. Проверка ответа ещё не завершена.")
-            parts.append(f"Последние данные поступили {status.get('last_chunk_seconds', 0)} сек. назад.")
-            if active.get('thinking_characters'):
-                parts.append(f"Промежуточное рассуждение модели: {active['thinking_characters']} символов.")
-        else:
-            parts.append("Ожидается первый фрагмент: Ollama загружает модель или обрабатывает запрос. Поступление ответа пока не подтверждено.")
-        parts.append("На CPU генерация может занять больше 15 минут. Предел запроса — 60 минут, ожидания без данных — 15 минут. Повторный запуск не нужен.")
     if active:
         parts.append(f"Провайдер: {active.get('provider', '')}; модель: {active.get('model', '')}")
     lab = status.get('lab') or {}
@@ -91,9 +82,7 @@ def runtime_html(status):
         elapsed = max(0, int(time.time() - lab['started_at']))
         age = max(0, int(time.time() - lab['updated_at']))
         parts.append(f"Прошло {elapsed} сек.; последнее обновление {age} сек. назад. Сообщений вывода: {lab.get('output_count', 0)}. Оценка Coursera ещё не подтверждена.")
-    if status["remaining_seconds"] and active.get('provider') == 'ollama':
-        parts.append(f"Groq восстанавливает квоту ещё {status['remaining_seconds']} сек. Выбрана локальная генерация Ollama.")
-    elif status["remaining_seconds"]:
+    if status["remaining_seconds"]:
         reason = "Ограничение квоты" if status["reason"] == "rate_limit" else "Временная ошибка API"
         metric = (status.get("limit") or {}).get("metric", "") if status["reason"] == "rate_limit" else ""
         when = datetime.fromtimestamp(status["retry_at"], timezone(timedelta(hours=5))).strftime("%d.%m.%Y %H:%M:%S UTC+5")
@@ -238,8 +227,7 @@ class Dashboard:
                             return
                 except (ControlError, KeyError, ValueError) as error:
                     if path == '/action/providers':
-                        attempted = {'mode': fields.get('mode', ['groq'])[0], 'ollama_model': fields.get('model', [''])[0],
-                                     'num_ctx': fields.get('num_ctx', ['8192'])[0]}
+                        attempted = {'mode': fields.get('mode', ['groq'])[0]}
                         self._send(409, dashboard._providers_page(error=str(error), form_values=attempted).encode('utf-8'), 'text/html; charset=utf-8')
                     else:
                         self._send(409, str(error).encode("utf-8"), "text/plain; charset=utf-8")
@@ -330,7 +318,7 @@ class Dashboard:
 <title>Coursera Agent · Панель управления</title><style>{_CSS}</style></head><body>
 <header><h1>Coursera Agent</h1><p>Локальная панель управления · v2 {__version__}</p><p>Режим: тесты, задания и лабораторные. Видео и лекции пропускаются.</p></header>
 <main>{notice_html}{confirmation_html}<section class="panel"><h2>Модель и автопереключение</h2>
-<p>Режим: {escape(provider_settings(self.store)['mode'])}. <a href="/providers">Выбрать Groq / Ollama / автоматически</a></p></section>{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
+<p>Режим: {escape(provider_settings(self.store)['mode'])}. <a href="/providers">Настройки Groq</a></p></section>{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
 <span class="status {escape(state)}">{escape(labels.get(state,state))}</span>
 <div class="buttons">{''.join(controls)}</div></section>
 <section class="panel"><h2>Ожидающие действия</h2>{pending_html}</section></div>
@@ -342,70 +330,15 @@ class Dashboard:
 </main></body></html>"""
 
     def _providers_page(self, notice='', error='', form_values=None):
-        applied = provider_settings(self.store)
-        pending = self.store.get_meta('provider_pending')
-        config = form_values or pending or applied
-        labels = {'groq': 'Только Groq', 'ollama': 'Только Ollama', 'auto': 'Автоматически'}
-        state = self.store.get_control_state()
-        state_label = {'running': 'Работает', 'paused': 'На паузе', 'stop_requested': 'Останавливается', 'stopped': 'Остановлен'}.get(state, state)
-        service_error = ''
-        try:
-            installed = ollama_models()
-        except (OSError, ValueError):
-            installed = []
-            service_error = 'Ollama не отвечает. Запустите приложение Ollama и обновите список.'
-        available = sorted(set(installed + ([config['ollama_model']] if config['ollama_model'] else [])))
-        def options(pairs, selected):
-            return ''.join(f'<option value="{escape(str(value), quote=True)}"'
-                           + (' selected' if str(value) == str(selected) else '') + f'>{escape(label)}</option>'
-                           for value, label in pairs)
-        local = options([('', 'Выберите установленную модель')] +
-                        [(m, m + (' — недоступна' if m not in installed else '')) for m in available], config['ollama_model'])
-        contexts = options([(8192, '8 192 — меньше памяти'), (16384, '16 384 — больше контекста'),
-                            (32768, '32 768 — больше памяти')], config['num_ctx'])
-        descriptions = {'groq': 'Облачная модель. При лимите ждёт восстановления Groq.',
-                        'ollama': 'Локальная модель на вашем компьютере. Без запросов к Groq.',
-                        'auto': 'Groq по умолчанию. При долгом лимите — Ollama, затем возврат к Groq.'}
-        cards = ''.join(f'<label class="choice"><input type="radio" name="mode" value="{mode}"'
-                        + (' checked' if mode == config['mode'] else '')
-                        + f'><span><strong>{title}</strong><small>{descriptions[mode]}</small></span></label>'
-                        for mode, title in labels.items())
-        def describe(value):
-            text = labels.get(value['mode'], value['mode'])
-            if value['mode'] != 'groq':
-                text += ' · ' + value['ollama_model']
-            return escape(text)
-        pending_html = ('<div class="pending" role="status"><strong>Ожидает применения: ' + describe(pending)
-                        + '</strong><p>Применится перед следующим новым запросом к модели. Текущий запрос или ожидание Groq завершится с прежними настройками. Пауза и остановка сохраняются.</p>'
-                        + self._form('/action/providers/cancel', 'Отменить изменение', 'secondary') + '</div>') if pending else ''
+        messages = (f'<div class="notice">{escape(notice)}</div>' if notice else '')
+        messages += (f'<div class="pending error">{escape(error)}</div>' if error else '')
         active = self.store.get_meta('provider_active') or {}
-        last_provider = escape(str(active.get('provider', 'Пока нет запросов')) + ' · ' + str(active.get('model', '')))
-        messages = (f'<div class="notice" role="status">{escape(notice)}</div>' if notice else '')
-        messages += (f'<div class="pending error" role="alert">{escape(error)}</div>' if error else '')
-        health = service_error or (f'Ollama доступна · установлено моделей: {len(installed)}' if installed else 'Ollama доступна, но локальные модели ещё не установлены.')
-        button = 'Сохранить выбор' if state == 'stopped' else 'Применить со следующего запроса'
-        return f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Выбор модели · Coursera Agent</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"><style>{_CSS}
-.provider-form{{display:block}}.choices{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0 24px}}
-.choice{{display:flex;gap:10px;border:2px solid #dde4f0;border-radius:12px;padding:18px;cursor:pointer;background:white}}
-.choice:has(input:checked){{border-color:#1c5ed0;background:#edf4ff}}.choice:focus-within{{outline:3px solid #97bfff}}
-.choice input{{margin:4px 0;accent-color:#1c5ed0}}.choice small{{display:block;color:#56667e;line-height:1.5;margin-top:8px}}
-.provider-form select{{display:block;width:100%;max-width:540px;padding:12px;margin:8px 0 14px;border:1px solid #abb8cc;border-radius:8px;background:white;font:inherit}}
-.provider-form details{{margin:20px 0}}.provider-form summary{{cursor:pointer}}.model-label{{display:block;font-weight:600}}
-@media(max-width:750px){{.choices{{grid-template-columns:1fr}}}}
-</style></head><body><header><h1>Выбор модели</h1><p>Coursera Agent {escape(__version__)} · {escape(state_label)}</p></header>
+        model = active.get('model', 'openai/gpt-oss-120b') if active.get('provider') == 'groq' else 'openai/gpt-oss-120b'
+        return f'''<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Groq · Coursera Agent</title>
+<style>{_CSS}</style></head><body><header><h1>Groq</h1><p>Coursera Agent {escape(__version__)}</p></header>
 <main><p><a href="/">← Панель управления</a></p>{messages}
-<section class="panel"><h2>Текущие настройки</h2><p><strong>Применено:</strong> {describe(applied)}</p>
-<p class="sub">Последний провайдер запроса: {last_provider}</p>{pending_html}</section>
-<section class="panel"><h2>1. Выберите режим</h2><form class="provider-form" method="post" action="/action/providers">
-<input type="hidden" name="csrf" value="{escape(self.csrf_token, quote=True)}"><div class="choices">{cards}</div>
-<h2>2. Локальная модель</h2><p>{escape(health)}</p><label class="model-label" for="local-model">Модель Ollama</label>
-<select id="local-model" name="model">{local}</select><p class="sub">Нужна для режимов «Только Ollama» и «Автоматически». В режиме Groq не используется.</p>
-<p><a href="/providers">Обновить список и статус</a> <span class="sub">— несохранённый выбор будет сброшен.</span></p>
-<details><summary>Настройки памяти Ollama</summary><label class="model-label" for="local-context">Размер контекста</label>
-<select id="local-context" name="num_ctx">{contexts}</select><p class="sub">Больший контекст требует больше памяти. Слишком длинное задание не обрезается.</p></details>
-<button type="submit">{button}</button><p class="sub">Настройки сохраняются после перезапуска. Ответы и прогресс остаются на месте. Сохранение не запускает остановленного исполнителя.</p>
-</form></section><section class="panel"><h2>Как работает автоматический режим</h2>
-<p>Лимит Groq до 30 секунд: программа ждёт. Более долгое ожидание: использует выбранную модель Ollama. После срока ожидания новый запрос снова идёт в Groq.</p>
-<p>Ollama на CPU может отвечать больше 15 минут. Панель показывает поступающие фрагменты. Качество зависит от модели; получение ответа ещё не означает зачёт задания.</p>
-<p class="sub">Модели устанавливаются отдельно в Ollama. Ключ Groq хранится отдельно и не передаётся локальной модели.</p></section></main></body></html>'''
+<section class="panel"><h2>Единственный провайдер: Groq</h2><p>Модель: {escape(str(model))}</p>
+<p>При ограничении запросов программа сохраняет прогресс и ждёт указанный Groq срок Retry-After.</p>
+<p>Для замены ключа выполните <code>configure-groq</code> в остановленном приложении.
+Ключ хранится с шифрованием Windows; здесь он не отображается.</p></section></main></body></html>'''

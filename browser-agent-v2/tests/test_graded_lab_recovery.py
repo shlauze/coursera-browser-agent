@@ -61,7 +61,7 @@ class GradedProposalTests(unittest.TestCase):
         self.model.notebook_patch.return_value = self.bad
         with self.assertRaises(HandlerError):
             self.executor().patch(self.snapshot, {0: self.cell}, target=0)
-        self.store.set_meta('provider_settings', {'mode': 'ollama', 'ollama_model': 'different:latest'})
+        self.model.model = 'different-groq-model'
         self.model.notebook_patch.return_value = self.good
         self.executor(2).patch(self.snapshot, {0: self.cell}, target=0)
         self.assertEqual(self.model.notebook_patch.call_count, 3)
