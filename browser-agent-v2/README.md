@@ -1,4 +1,4 @@
-# Coursera Browser Agent v2 — 0.2.60
+# Coursera Browser Agent v2 — 0.2.61
 
 Локальный инструмент для Windows: отдельный профиль Chrome, панель управления,
 SQLite с прогрессом и интеграция с Groq. Сертификат считается подтверждённым
@@ -6,8 +6,8 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 
 ## Запуск EXE без установки Python
 
-Скачайте **[CourseraAgent-0.2.60.exe](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.60/CourseraAgent-0.2.60.exe)**
-или ZIP с EXE и инструкцией из [релиза 0.2.60](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.60).
+Скачайте **[CourseraAgent-0.2.61.exe](https://github.com/shlauze/coursera-browser-agent/releases/download/v0.2.61/CourseraAgent-0.2.61.exe)**
+или ZIP с EXE и инструкцией из [релиза 0.2.61](https://github.com/shlauze/coursera-browser-agent/releases/tag/v0.2.61).
 Архив `Code → Download ZIP` содержит исходники, готового EXE в нём нет.
 
 Положите EXE в доступную для записи папку. Для продолжения существующей работы
@@ -15,17 +15,17 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 Откройте PowerShell в этой папке и проверьте файл:
 
 ```powershell
-Test-Path .\CourseraAgent-0.2.60.exe
-.\CourseraAgent-0.2.60.exe --version
+Test-Path .\CourseraAgent-0.2.61.exe
+.\CourseraAgent-0.2.61.exe --version
 ```
 
-Ожидаются `True` и `0.2.60`. Если файл не найден, скачайте его или исправьте
+Ожидаются `True` и `0.2.61`. Если файл не найден, скачайте его или исправьте
 текущую папку командой `cd "ПОЛНЫЙ ПУТЬ К ПАПКЕ С EXE"`.
 
 ### Первый запуск через панель
 
 ```powershell
-.\CourseraAgent-0.2.60.exe
+.\CourseraAgent-0.2.61.exe
 ```
 
 Введите свой ключ Groq в консоли, если он ещё не настроен. Ввод скрыт.
@@ -39,7 +39,7 @@ Test-Path .\CourseraAgent-0.2.60.exe
 После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.60.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.61.exe --chrome-port 9224 run
 ```
 
 Эта команда не открывает новую панель. Не запускайте одновременно второй
@@ -52,20 +52,20 @@ Test-Path .\CourseraAgent-0.2.60.exe
 
 ```powershell
 # Настроить или заменить ключ (ввод скрыт)
-.\CourseraAgent-0.2.60.exe configure-groq
+.\CourseraAgent-0.2.61.exe configure-groq
 
 # Просмотреть сохранённое состояние
-.\CourseraAgent-0.2.60.exe status
+.\CourseraAgent-0.2.61.exe status
 
 # Пауза и продолжение работающего исполнителя
-.\CourseraAgent-0.2.60.exe pause
-.\CourseraAgent-0.2.60.exe resume
+.\CourseraAgent-0.2.61.exe pause
+.\CourseraAgent-0.2.61.exe resume
 
 # Штатная остановка на безопасной точке
-.\CourseraAgent-0.2.60.exe stop
+.\CourseraAgent-0.2.61.exe stop
 
 # Диагностика комплекта без запросов к Coursera/Groq
-.\CourseraAgent-0.2.60.exe --self-test
+.\CourseraAgent-0.2.61.exe --self-test
 ```
 
 После `stop` дождитесь `control_state: stopped` в выводе `status`.
@@ -74,7 +74,7 @@ Test-Path .\CourseraAgent-0.2.60.exe
 ### Панель с указанным портом
 
 ```powershell
-.\CourseraAgent-0.2.60.exe --chrome-port 9224 serve --panel-port 8769
+.\CourseraAgent-0.2.61.exe --chrome-port 9224 serve --panel-port 8769
 ```
 
 Откройте http://127.0.0.1:8769/ вручную. При явном `serve` браузер с панелью
@@ -119,7 +119,42 @@ cd coursera-browser-agent\browser-agent-v2
 EXE не подписан сертификатом издателя; SHA256 опубликованы в релизе.
 Полная инструкция: [настройка для другого пользователя](SETUP_OTHER_USER.md).
 
+## Выбор Groq / Ollama / автоматически
+
+В панели откройте **«Модель и автопереключение» → «Выбрать»** (страница `/providers`).
+Остановите исполнителя, дождитесь состояния «Остановлен», выберите режим и сохраните:
+
+- **Только Groq** — прежнее поведение, включая ожидание Retry-After.
+- **Только Ollama** — генерация локально, без запросов и ключа Groq.
+- **Автоматически** — Groq основной; при 429, временной сетевой ошибке или сохранённом
+  ожидании используется Ollama. После Retry-After следующий запрос снова идёт в Groq.
+  Если Ollama недоступна, сохраняется ожидание Groq. Ошибки ключа не обходятся.
+
+Ollama должна работать на том же компьютере по адресу `http://127.0.0.1:11434`.
+Выберите установленную модель из списка. Программа не скачивает модели автоматически.
+Список обновляется при перезагрузке страницы настроек. Выбор сохраняется в существующей базе.
+После сохранения вернитесь в панель и запустите исполнителя.
+
+Контекст Ollama выбирается отдельно: 8192, 16384 или 32768. Больший контекст требует
+больше памяти. Программа консервативно оценивает размер запроса по UTF-8 и отклоняет
+слишком большой запрос без обрезки кода, инструкции или feedback. В автоматическом
+режиме такой запрос останется на Groq. При недоступной локальной модели показывается
+событие `OLLAMA_UNAVAILABLE`.
+
+Прогресс, черновики и подтверждённые ответы общие для обоих провайдеров. Ответ Ollama
+проходит проверку JSON, вариантов ответа и ограничений исполнителя. Проверки преподавателя
+и подтверждение результата Coursera сохраняются. Локальные токены не включаются в расход Groq.
+Качество ответов зависит от модели: валидный JSON не гарантирует правильное решение.
+
+Остановка проверяется и во время локальной генерации. Ответ, пришедший после остановки,
+не применяется; сам сервер Ollama может закончить уже принятый запрос в фоне.
+Используется [локальный API Ollama с JSON Schema](https://docs.ollama.com/capabilities/structured-outputs).
+
 ## Последние изменения
+
+- **0.2.61:** выбор Groq/Ollama и автоматическое переключение при лимите или временной
+  ошибке Groq; сохранение Retry-After, общей памяти ответов и проверок результатов.
+
 
 - **0.2.60:** распознаётся короткое окно старта «You have 20 minutes to submit
   this attempt». Продолжение разрешено только после проверенного Start/Resume;

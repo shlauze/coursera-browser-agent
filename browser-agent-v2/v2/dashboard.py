@@ -16,6 +16,7 @@ from .control import Control, ControlError
 from .store import Store
 from . import __version__
 from .token_usage import usage_summary, usage_html
+from .providers import settings as provider_settings, models as ollama_models, save_settings
 
 
 _CSS = """
@@ -47,11 +48,13 @@ def runtime_status(store, now=None):
     course = store.get_course(store.get_meta("current_course_id")) or {}
     action_id = store.get_meta("current_action_id")
     progress = store.get_meta(f"progress:{action_id}", {}) if action_id else {}
+    active = store.get_meta('provider_active') or {}
     return {"control_state": state, "course": course.get("title", ""),
             "item": store.get_meta("current_item", ""), "action_id": action_id,
             "stage": progress.get("stage", ""), "stage_updated_at": progress.get("updated_at"),
             "retry_at": retry_at or None, "remaining_seconds": remaining,
-            "waiting": state == "running" and remaining > 0,
+            "waiting": state == "running" and remaining > 0 and active.get('provider') != 'ollama',
+            "provider": active, "provider_settings": provider_settings(store),
             "reason": wait.get("reason", "rate_limit" if remaining else None),
             "http_status": wait.get("status"), "limit": store.get_meta("groq_rate_limit", {})}
 
@@ -63,7 +66,12 @@ def runtime_html(status):
               "failed": "Неудачная попытка — требуется разбор", "result_confirmed": "Результат подтверждён"}
     title = "Ожидание Groq" if status["waiting"] else "Текущий этап"
     parts = [status["course"], status["item"], stages.get(status["stage"], status["stage"])]
-    if status["remaining_seconds"]:
+    active = status.get('provider') or {}
+    if active:
+        parts.append(f"Провайдер: {active.get('provider', '')}; модель: {active.get('model', '')}")
+    if status["remaining_seconds"] and active.get('provider') == 'ollama':
+        parts.append(f"Groq восстанавливает квоту ещё {status['remaining_seconds']} сек. Выбрана локальная генерация Ollama.")
+    elif status["remaining_seconds"]:
         reason = "Ограничение квоты" if status["reason"] == "rate_limit" else "Временная ошибка API"
         metric = (status.get("limit") or {}).get("metric", "") if status["reason"] == "rate_limit" else ""
         when = datetime.fromtimestamp(status["retry_at"], timezone(timedelta(hours=5))).strftime("%d.%m.%Y %H:%M:%S UTC+5")
@@ -134,6 +142,8 @@ class Dashboard:
                 path = urlsplit(self.path).path
                 if path == "/api/status":
                     self._json(200, {**dashboard.store.snapshot(), "version": __version__, "runtime": runtime_status(dashboard.store), "groq_usage": usage_summary(dashboard.store)})
+                elif path == '/providers':
+                    self._send(200, dashboard._providers_page().encode('utf-8'), 'text/html; charset=utf-8')
                 elif path == "/":
                     query = parse_qs(urlsplit(self.path).query)
                     notice = query.get("notice", [""])[0][:200]
@@ -166,6 +176,11 @@ class Dashboard:
                     self._send(403, b"Invalid CSRF token", "text/plain; charset=utf-8")
                     return
                 try:
+                    if path == '/action/providers':
+                        save_settings(dashboard.store, fields.get('mode', ['groq'])[0],
+                                      fields.get('model', [''])[0], fields.get('num_ctx', ['8192'])[0])
+                        self._redirect('Настройки провайдера сохранены. Запустите исполнителя для продолжения.')
+                        return
                     if path == "/action/start" and dashboard.start_callback:
                         if dashboard.control.get_state() != "stopped":
                             raise ControlError("Runner is already active")
@@ -191,7 +206,7 @@ class Dashboard:
                             dashboard.store.set_course_skipped(course_id, bits[3] == "skip")
                             self._redirect("Очередь обновлена")
                             return
-                except (ControlError, KeyError) as error:
+                except (ControlError, KeyError, ValueError) as error:
                     self._send(409, str(error).encode("utf-8"), "text/plain; charset=utf-8")
                     return
                 self._send(404, b"Not found", "text/plain; charset=utf-8")
@@ -279,7 +294,8 @@ class Dashboard:
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="8">
 <title>Coursera Agent · Панель управления</title><style>{_CSS}</style></head><body>
 <header><h1>Coursera Agent</h1><p>Локальная панель управления · v2 {__version__}</p><p>Режим: тесты, задания и лабораторные. Видео и лекции пропускаются.</p></header>
-<main>{notice_html}{confirmation_html}{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
+<main>{notice_html}{confirmation_html}<section class="panel"><h2>Модель и автопереключение</h2>
+<p>Режим: {escape(provider_settings(self.store)['mode'])}. <a href="/providers">Выбрать Groq / Ollama / автоматически</a></p></section>{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
 <span class="status {escape(state)}">{escape(labels.get(state,state))}</span>
 <div class="buttons">{''.join(controls)}</div></section>
 <section class="panel"><h2>Ожидающие действия</h2>{pending_html}</section></div>
@@ -289,3 +305,38 @@ class Dashboard:
 <th>Время UTC</th><th>Уровень</th><th>Код</th><th>Сообщение</th></tr></thead>
 <tbody>{events or '<tr><td colspan="4" class="empty">Событий пока нет.</td></tr>'}</tbody></table></section>
 </main></body></html>"""
+
+    def _providers_page(self):
+        config = provider_settings(self.store)
+        error = ''
+        try:
+            available = ollama_models()
+        except (OSError, ValueError):
+            available = []
+            error = 'Ollama недоступна. Запустите её на этом компьютере (127.0.0.1:11434).'
+        available = sorted(set(available + ([config['ollama_model']] if config['ollama_model'] else [])))
+        def options(pairs, selected):
+            return ''.join(f'<option value="{escape(str(value), quote=True)}"'
+                           + (' selected' if value == selected else '') + f'>{escape(label)}</option>'
+                           for value, label in pairs)
+        modes = options([('groq', 'Только Groq'), ('ollama', 'Только Ollama'),
+                         ('auto', 'Автоматически: Groq → Ollama → Groq')], config['mode'])
+        local = options([('', 'Выберите установленную модель')] + [(m, m) for m in available], config['ollama_model'])
+        contexts = options([(n, str(n)) for n in (8192, 16384, 32768)], config['num_ctx'])
+        disabled = '' if self.store.get_control_state() == 'stopped' else ' disabled'
+        return f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Выбор модели</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><style>{_CSS}</style></head><body>
+<main><section class="panel"><h1>Модель и автопереключение</h1><p><a href="/">Вернуться в панель</a></p>
+<p>Для изменения настроек остановите исполнителя и дождитесь состояния «Остановлен».</p>
+<p>Автоматически: при HTTP 429, временной ошибке или сохранённом ожидании Groq используются локальные модели.
+После Retry-After следующий запрос снова идёт в Groq. Если Ollama недоступна, сохраняется ожидание Groq.
+Ошибки ключа, неподходящий ответ и неизвестные подтверждения не обходятся.</p>
+<p>Прогресс и проверенные ответы общие для обоих провайдеров. Качество локальной модели может отличаться.
+Больший контекст требует больше памяти; слишком длинные запросы отклоняются без обрезки задания.</p>
+<p class="error">{escape(error)}</p><form method="post" action="/action/providers">
+<input type="hidden" name="csrf" value="{escape(self.csrf_token, quote=True)}">
+<p><label>Режим <select name="mode">{modes}</select></label></p>
+<p><label>Модель Ollama <select name="model">{local}</select></label></p>
+<p><label>Контекст Ollama <select name="num_ctx">{contexts}</select></label></p>
+<button{disabled}>Сохранить</button></form><p>Для обновления списка моделей обновите эту страницу.
+Модели загружаются в Ollama отдельно; программа их автоматически не устанавливает.</p></section></main></body></html>'''
