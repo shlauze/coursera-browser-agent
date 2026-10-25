@@ -118,7 +118,9 @@ class BrowserSession:
             raise BrowserUnavailable("Playwright is not installed; run pip install -r requirements.txt") from exc
         self._playwright = sync_playwright().start()
         try:
-            self.browser = self._playwright.chromium.connect_over_cdp(self.endpoint, timeout=20_000)
+            # Existing Chrome with many notebook targets can take over 20 seconds to attach.
+            # Keep one bounded handshake; never relaunch Chrome or replay page actions.
+            self.browser = self._playwright.chromium.connect_over_cdp(self.endpoint, timeout=60_000)
             self.context = self.browser.contexts[0]
             # Own a fresh tab; never navigate a user's existing My Learning tab.
             self.page = self.context.new_page()
