@@ -82,6 +82,31 @@ class BrowserDomTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.context.close()
 
+    def test_outline_uses_accessible_title_when_rendered_text_is_empty(self):
+        html = OUTLINE_HTML.replace('</aside>', '<div><a style="visibility:hidden" aria-label="Course Acknowledgments" href="/learn/example-course/resources/dgIb1"><span>Course Acknowledgments</span></a></div></aside>')
+        self.page.route('https://www.coursera.org/**', lambda route: route.fulfill(body=html))
+        self.page.goto('https://www.coursera.org/learn/example-course/home/module/1')
+        outline = scan_outline(self.page)
+        item = next(x for x in outline.items if '/resources/' in x.url)
+        self.assertEqual(item.title, 'Course Acknowledgments')
+        self.assertFalse(item.completed)
+        self.assertEqual(item.kind, 'Unknown')
+        self.assertTrue(any(x.title == 'Knowledge Check' for x in outline.items))
+
+    def test_visible_title_precedes_accessible_label(self):
+        html = OUTLINE_HTML.replace('>Knowledge Check</a>', ' aria-label="Different label">Knowledge Check</a>')
+        self.page.route('https://www.coursera.org/**', lambda route: route.fulfill(body=html))
+        self.page.goto('https://www.coursera.org/learn/example-course/home/module/1')
+        self.assertTrue(any(x.title == 'Knowledge Check' for x in scan_outline(self.page).items))
+
+    def test_truly_missing_title_still_blocks_ambiguous_outline(self):
+        from v2.outline import OutlineError
+        html = OUTLINE_HTML.replace('</aside>', '<div><a href="/learn/example-course/programming/blank"></a></div></aside>')
+        self.page.route('https://www.coursera.org/**', lambda route: route.fulfill(body=html))
+        self.page.goto('https://www.coursera.org/learn/example-course/home/module/1')
+        with self.assertRaises(OutlineError):
+            scan_outline(self.page)
+
     def test_live_grade_suffixes_and_peer_review_types_are_not_unknown(self):
         rows = [
             ('graded', 'Graded AssignmentGrade: 100%', 'Graded Assignment'),

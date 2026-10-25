@@ -127,7 +127,8 @@ _ITEMS_JS = r"""() => {
     if (!row || row === root) row = node.parentElement;
     const lines = (row.innerText || '').split('\n').map(norm).filter(Boolean);
     const anchorLines = (node.innerText || '').split('\n').map(norm).filter(Boolean);
-    const itemTitle = anchorLines[0] || lines[0] || '';
+    // Offscreen/virtualized links may have empty innerText but a real accessible title.
+    const itemTitle = anchorLines[0] || norm(node.getAttribute('aria-label')) || lines[0] || '';
     const detail = lines.filter(x => x !== itemTitle).join(' ');
     const kindMatch = detail.match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Programming Assignment|Practice Quiz|Practice Lab|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i)
       || anchorLines.slice(1).join(' ').match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Programming Assignment|Practice Quiz|Practice Lab|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i);
