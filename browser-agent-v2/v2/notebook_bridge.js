@@ -8,8 +8,16 @@ async request => {
   if (request.path && request.path !== path) return {error: 'Notebook identity changed'};
   const cells = nb.get_cells();
   const document = nb.toJSON();
-  if (!cells.length || cells.length > 400 || JSON.stringify(document).length > 8000000)
-    return {error: 'Notebook exceeds supported size'};
+  // Audio/plots can exceed the source budget in otherwise small notebooks.
+  // Preserve every output for backup and save verification; bound both sizes.
+  const sourceDocument = {...document, cells: document.cells.map(c => {
+    const {outputs, ...rest} = c;
+    return rest;
+  })};
+  if (!cells.length || cells.length > 400 ||
+      JSON.stringify(sourceDocument).length > 8000000 ||
+      JSON.stringify(document).length > 32000000)
+    return {error: 'Notebook exceeds supported size (8 MB source / 32 MB total)'};
   const signature = () => JSON.stringify(nb.toJSON().cells.map(c => {
     const metadata = {...c.metadata};
     for (const key of ['trusted', 'collapsed', 'scrolled', 'execution', 'ExecuteTime']) delete metadata[key];

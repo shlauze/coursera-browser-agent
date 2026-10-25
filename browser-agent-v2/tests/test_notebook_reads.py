@@ -41,6 +41,31 @@ class NotebookReadTests(unittest.TestCase):
             };
         }''')
 
+    def test_media_rich_notebook_keeps_outputs_in_snapshot_and_verified_save(self):
+        self.page.evaluate('''() => {
+            failures=0;
+            const d=Jupyter.notebook.toJSON();
+            d.cells[0].outputs=[{output_type:'display_data',data:{'text/html':'x'.repeat(9000000)},metadata:{}}];
+        }''')
+        before=self.page.evaluate('JSON.stringify(Jupyter.notebook.toJSON())')
+        result=self.page.evaluate(BRIDGE,{'action':'snapshot'})
+        self.assertEqual(result['document']['cells'][0]['outputs'][0]['data']['text/html'], 'x'*9000000)
+        self.assertEqual(self.page.evaluate(BRIDGE,{'action':'save'}), {'ok':True})
+        self.assertEqual(self.page.evaluate('saves'), 1)
+        self.assertEqual(self.page.evaluate('JSON.stringify(Jupyter.notebook.toJSON())'), before)
+
+    def test_large_source_is_rejected_even_without_outputs(self):
+        self.page.evaluate("Jupyter.notebook.toJSON().cells[0].source='x'.repeat(8000001)")
+        result=self.page.evaluate(BRIDGE,{'action':'snapshot'})
+        self.assertIn('exceeds supported size', result['error'])
+        self.assertEqual(self.page.evaluate('reads+saves'), 0)
+
+    def test_total_media_size_still_has_a_hard_bound(self):
+        self.page.evaluate("Jupyter.notebook.toJSON().cells[0].outputs=[{text:'x'.repeat(32000001)}]")
+        result=self.page.evaluate(BRIDGE,{'action':'save'})
+        self.assertIn('exceeds supported size', result['error'])
+        self.assertEqual(self.page.evaluate('reads+saves'), 0)
+
     def test_snapshot_recovers_after_two_read_timeouts(self):
         result=self.page.evaluate(BRIDGE,{'action':'snapshot'})
         self.assertEqual(result['kernel'],'idle')
