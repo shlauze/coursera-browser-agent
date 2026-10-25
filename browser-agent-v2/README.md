@@ -1,4 +1,4 @@
-# Coursera Browser Agent v2 — 0.2.75
+# Coursera Browser Agent v2 — 0.2.76
 
 Локальный инструмент для Windows: отдельный профиль Chrome, панель управления,
 SQLite с прогрессом и интеграция с Groq. Сертификат считается подтверждённым
@@ -6,9 +6,9 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 
 ## Запуск EXE без установки Python
 
-Версия 0.2.75 доступна в исходниках и локальной сборке EXE. Файл этого релиза
+Версия 0.2.76 доступна в исходниках и локальной сборке EXE. Файл этого релиза
 пока не опубликован. [Опубликованные сборки](https://github.com/shlauze/coursera-browser-agent/releases)
-могут отставать от исходников. Для сборки 0.2.75 выполните `build_exe.cmd`
+могут отставать от исходников. Для сборки 0.2.76 выполните `build_exe.cmd`
 на Windows с Python; готовый EXE затем запускается без установленного Python.
 
 Архив `Code → Download ZIP` содержит исходники, готового EXE в нём нет.
@@ -18,8 +18,8 @@ SQLite с прогрессом и интеграция с Groq. Сертифик
 Откройте PowerShell в этой папке и проверьте файл:
 
 ```powershell
-Test-Path .\CourseraAgent-0.2.75.exe
-.\CourseraAgent-0.2.75.exe --version
+Test-Path .\CourseraAgent-0.2.76.exe
+.\CourseraAgent-0.2.76.exe --version
 ```
 
 Ожидаются `True` и `0.2.73`. Если файл не найден, скачайте его или исправьте
@@ -28,7 +28,7 @@ Test-Path .\CourseraAgent-0.2.75.exe
 ### Первый запуск через панель
 
 ```powershell
-.\CourseraAgent-0.2.75.exe
+.\CourseraAgent-0.2.76.exe
 ```
 
 Введите свой ключ Groq в консоли, если он ещё не настроен. Ввод скрыт.
@@ -42,7 +42,7 @@ Test-Path .\CourseraAgent-0.2.75.exe
 После настройки ключа и входа в Coursera:
 
 ```powershell
-.\CourseraAgent-0.2.75.exe --chrome-port 9224 run
+.\CourseraAgent-0.2.76.exe --chrome-port 9224 run
 ```
 
 Эта команда не открывает новую панель. Не запускайте одновременно второй
@@ -55,20 +55,20 @@ Test-Path .\CourseraAgent-0.2.75.exe
 
 ```powershell
 # Настроить или заменить ключ (ввод скрыт)
-.\CourseraAgent-0.2.75.exe configure-groq
+.\CourseraAgent-0.2.76.exe configure-groq
 
 # Просмотреть сохранённое состояние
-.\CourseraAgent-0.2.75.exe status
+.\CourseraAgent-0.2.76.exe status
 
 # Пауза и продолжение работающего исполнителя
-.\CourseraAgent-0.2.75.exe pause
-.\CourseraAgent-0.2.75.exe resume
+.\CourseraAgent-0.2.76.exe pause
+.\CourseraAgent-0.2.76.exe resume
 
 # Штатная остановка на безопасной точке
-.\CourseraAgent-0.2.75.exe stop
+.\CourseraAgent-0.2.76.exe stop
 
 # Диагностика комплекта без запросов к Coursera/Groq
-.\CourseraAgent-0.2.75.exe --self-test
+.\CourseraAgent-0.2.76.exe --self-test
 ```
 
 После `stop` дождитесь `control_state: stopped` в выводе `status`.
@@ -77,7 +77,7 @@ Test-Path .\CourseraAgent-0.2.75.exe
 ### Панель с указанным портом
 
 ```powershell
-.\CourseraAgent-0.2.75.exe --chrome-port 9224 serve --panel-port 8769
+.\CourseraAgent-0.2.76.exe --chrome-port 9224 serve --panel-port 8769
 ```
 
 Откройте http://127.0.0.1:8769/ вручную. При явном `serve` браузер с панелью
@@ -391,6 +391,27 @@ EXE не подписан сертификатом издателя; SHA256 оп
 Course outline links with empty rendered text now use their accessible label. This prevents Course Acknowledgments from blocking the remaining Sequence Models assignments. Visible titles keep priority; missing titles still require review. Completion evidence and saved progress remain unchanged.
 
 
-### 0.2.75
+### 0.2.76
 
 Подключение к существующему Chrome ожидает до 60 секунд: при большом числе вкладок лабораторных прежние 20 секунд могли прерывать запуск. Подключение остаётся однократным; вкладки и серверы не закрываются, сохранённый прогресс и ограничения Groq сохраняются.
+
+
+### Per-key quota observations (0.2.76)
+
+The dashboard and `/api/status` (`groq_keys`) show named credentials, last observed
+RPD/TPM headers, the last TPD/other rate-limit error, and the persisted Retry-After
+deadline. Observations are scoped by credential fingerprint and model; secrets are
+never included. Groq quotas are organization-wide and may be shared across keys.
+
+Register an additional key with `configure-groq --monitor-name NAME` (hidden
+interactive input, Windows DPAPI encryption). Registration does not select the
+key or send a request. Only the selected credential is used by the worker.
+Inactive credentials remain **unknown** until an actual response is observed;
+there are no quota probes or automatic credential rotation. Header reset values
+are historical observations, not a promise that daily tokens have recovered.
+
+HTTP 429 waits cooperatively and automatically retries the same request after
+Retry-After. Global and per-key deadlines survive restart; drafts and unresolved
+submission intents are preserved. A manual stop or pause prevents continuation.
+The panel/worker must remain running for automatic retries; this does not install
+a Windows boot service or automatically restart a manually stopped worker.

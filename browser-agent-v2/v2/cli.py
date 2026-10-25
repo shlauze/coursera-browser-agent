@@ -157,6 +157,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("status", help="Print saved status as JSON")
     configure = commands.add_parser("configure-groq", help="Save a Groq key with Windows encryption")
     configure.add_argument("--import-legacy", action="store_true", help="Copy the encrypted key from the sibling browser-agent")
+    configure.add_argument("--monitor-name", help="Register an encrypted named key for passive limit tracking; do not select it")
     commands.add_parser("check-groq", help="Check Groq with one synthetic arithmetic question")
     commands.add_parser("pause", help="Pause at the next safe checkpoint")
     commands.add_parser("resume", help="Resume a paused runner")
@@ -175,6 +176,13 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command or "serve"
     if command == "configure-groq":
         from .credentials import KEY_FILE, save_key, load_key
+        if args.monitor_name:
+            if args.import_legacy:
+                raise ValueError('Use --monitor-name separately from --import-legacy')
+            from .credentials import save_monitored_key
+            save_monitored_key(args.monitor_name, getpass.getpass('Groq API key (hidden): '), store)
+            print('Key registered for passive limit tracking; active key unchanged.')
+            return 0
         if args.import_legacy:
             source = ROOT.parent / "browser-agent" / ".groq-key.dpapi"
             if KEY_FILE.exists():

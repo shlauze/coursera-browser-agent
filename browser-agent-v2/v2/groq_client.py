@@ -444,10 +444,12 @@ class GroqClient:
             raise GroqError("Groq key is missing; run configure_groq.cmd")
         return key
 
-    def _cooldown(self):
+    def _cooldown(self, identity=None):
+        from .groq_limits import retry_at
         wait = self.store.get_meta('groq_wait') or {}
         remaining = max(0, max(float(self.store.get_meta("groq_retry_until", 0)),
-                               float(wait.get('retry_at', 0))) - self.clock())
+                               float(wait.get('retry_at', 0)),
+                               retry_at(self.store, identity, self.model) if identity else 0) - self.clock())
         while remaining > 0:
             self.checkpoint()
             step = min(1, remaining)
@@ -461,20 +463,25 @@ class GroqClient:
         return self._request_groq(payload)
 
     def _request_groq(self, payload):
+        from .groq_limits import register_key, observe
         key = self._key()
+        identity = register_key(self.store, key)
+        self.store.set_meta('groq_active_key_id', identity)
         waited = 0
         attempt = 0
         while True:
             self.store.set_meta('provider_active', {'provider': 'groq', 'model': self.model, 'reason': 'selected'})
-            self._cooldown()
+            self._cooldown(identity)
             self.checkpoint()
             # Capture attribution before the request; record even invalid/truncated responses.
             course_id = self.store.get_meta("current_course_id")
             action_id = self.store.get_meta("current_action_id")
             status, headers, body = self.transport(key, payload)
+            headers = {k.lower(): v for k, v in headers.items()}
+            observe(self.store, identity, self.model, status, headers, body,
+                    now=self.clock(), delay=retry_seconds(headers, min(2 ** (attempt + 1), 30)))
             from .token_usage import record_usage
             record_usage(self.store, body, status, payload.get("model", self.model), course_id, action_id)
-            headers = {k.lower(): v for k, v in headers.items()}
             limits = {k: str(v)[:80] for k, v in headers.items()
                       if k in {"x-ratelimit-limit-requests", "x-ratelimit-remaining-requests",
                                "x-ratelimit-limit-tokens", "x-ratelimit-remaining-tokens",

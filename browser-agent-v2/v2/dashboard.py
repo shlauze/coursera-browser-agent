@@ -16,6 +16,7 @@ from .control import Control, ControlError
 from .store import Store
 from . import __version__
 from .token_usage import usage_summary, usage_html
+from .groq_limits import key_status, limits_html as key_limits_html
 from .providers import settings as provider_settings, save_settings, cancel_pending_settings
 
 
@@ -43,7 +44,9 @@ def runtime_status(store, now=None):
     now = time.time() if now is None else now
     state = store.get_control_state()
     wait = store.get_meta("groq_wait") or {}
-    retry_at = max(float(wait.get("retry_at", 0)), float(store.get_meta("groq_retry_until", 0)))
+    keys = key_status(store, now=now)
+    retry_at = max(float(wait.get("retry_at", 0)), float(store.get_meta("groq_retry_until", 0)),
+                   max((row.get('retry_at', 0) for row in keys if row['active']), default=0))
     remaining = max(0, math.ceil(retry_at - now))
     course = store.get_course(store.get_meta("current_course_id")) or {}
     action_id = store.get_meta("current_action_id")
@@ -155,7 +158,7 @@ class Dashboard:
             def do_GET(self) -> None:
                 path = urlsplit(self.path).path
                 if path == "/api/status":
-                    self._json(200, {**dashboard.store.snapshot(), "version": __version__, "runtime": runtime_status(dashboard.store), "groq_usage": usage_summary(dashboard.store)})
+                    self._json(200, {**dashboard.store.snapshot(), "version": __version__, "runtime": runtime_status(dashboard.store), "groq_usage": usage_summary(dashboard.store), "groq_keys": key_status(dashboard.store)})
                 elif path == '/providers':
                     notice = parse_qs(urlsplit(self.path).query).get('notice', [''])[0][:200]
                     self._send(200, dashboard._providers_page(notice=notice).encode('utf-8'), 'text/html; charset=utf-8')
@@ -317,13 +320,13 @@ class Dashboard:
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="8">
 <title>Coursera Agent · Панель управления</title><style>{_CSS}</style></head><body>
 <header><h1>Coursera Agent</h1><p>Локальная панель управления · v2 {__version__}</p><p>Режим: тесты, задания и лабораторные. Видео и лекции пропускаются.</p></header>
-<main>{notice_html}{confirmation_html}<section class="panel"><h2>Модель и автопереключение</h2>
+<main>{notice_html}{confirmation_html}<section class="panel"><h2>Модель Groq</h2>
 <p>Режим: {escape(provider_settings(self.store)['mode'])}. <a href="/providers">Настройки Groq</a></p></section>{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
 <span class="status {escape(state)}">{escape(labels.get(state,state))}</span>
 <div class="buttons">{''.join(controls)}</div></section>
 <section class="panel"><h2>Ожидающие действия</h2>{pending_html}</section></div>
 <section class="panel"><h2>Очередь курсов</h2>{''.join(courses) if courses else '<p class="empty">Очередь ещё не считана.</p>'}</section>
-<section class="panel"><h2>Groq: последний ответ API</h2><p class="sub">{limits_html}</p></section>
+{key_limits_html(key_status(self.store))}
 <section class="panel"><h2>Последние события</h2><table class="events"><thead><tr>
 <th>Время UTC</th><th>Уровень</th><th>Код</th><th>Сообщение</th></tr></thead>
 <tbody>{events or '<tr><td colspan="4" class="empty">Событий пока нет.</td></tr>'}</tbody></table></section>
@@ -341,4 +344,7 @@ class Dashboard:
 <section class="panel"><h2>Единственный провайдер: Groq</h2><p>Модель: {escape(str(model))}</p>
 <p>При ограничении запросов программа сохраняет прогресс и ждёт указанный Groq срок Retry-After.</p>
 <p>Для замены ключа выполните <code>configure-groq</code> в остановленном приложении.
-Ключ хранится с шифрованием Windows; здесь он не отображается.</p></section></main></body></html>'''
+Ключ хранится с шифрованием Windows; здесь он не отображается.</p>
+<p>Для регистрации дополнительного ключа используйте <code>configure-groq --monitor-name ИМЯ</code>.
+Это добавляет ключ в учёт лимитов. Активный ключ остаётся выбранным; смены при исчерпании нет.</p></section>
+{key_limits_html(key_status(self.store))}</main></body></html>'''

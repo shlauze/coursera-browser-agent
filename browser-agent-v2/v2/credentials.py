@@ -2,6 +2,7 @@
 
 import ctypes
 import os
+import json
 from ctypes import wintypes
 from pathlib import Path
 
@@ -52,3 +53,19 @@ def load_key():
     if not KEY_FILE.is_file():
         return ""
     return _protect(KEY_FILE.read_bytes(), decrypt=True).decode("utf-8")
+
+
+def save_monitored_key(name, key, store):
+    """Encrypted inventory only. The selected worker key is unchanged."""
+    from .groq_limits import register_key
+    key = key.strip()
+    if not key:
+        raise ValueError('The Groq key is empty.')
+    identity = register_key(store, key, name)
+    path = KEY_FILE.parent / '.groq-monitor-keys.dpapi'
+    keys = json.loads(_protect(path.read_bytes(), decrypt=True)) if path.exists() else {}
+    keys[identity] = key
+    temporary = path.with_suffix('.tmp')
+    temporary.write_bytes(_protect(json.dumps(keys).encode('utf-8')))
+    temporary.replace(path)
+    return identity
