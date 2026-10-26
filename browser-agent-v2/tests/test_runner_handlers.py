@@ -277,6 +277,29 @@ class RunnerSafetyTests(unittest.TestCase):
         )
         return OutlineSnapshot(self.card.title, (item,), self.item.url or "")
 
+    def test_explicit_optional_lab_is_not_opened_or_claimed_complete(self):
+        from dataclasses import replace
+        optional = replace(self.item, kind="Lab", title="Optional: Demonstrations of PCA")
+        self.runner.blocked_items.add((self.cid, optional.url))
+        page = Mock(url=optional.url)
+        with patch("v2.runner.open_course", return_value=page), \
+             patch("v2.runner.scan_outline", return_value=OutlineSnapshot(self.card.title, (optional,), page.url)), \
+             patch("v2.runner.open_item") as open_item, \
+             patch.object(self.runner, "_finish_course") as finish:
+            self.runner._process_course(page, self.card)
+        open_item.assert_not_called()
+        finish.assert_called_once_with(page, self.card, excluded_items=1)
+        self.assertEqual(self.store.pending_actions(), [])
+        self.assertEqual(self.runner.completed_items, 0)
+        self.assertFalse(optional.completed)
+
+    def test_ungraded_lab_or_optional_word_in_topic_does_not_imply_optional(self):
+        from dataclasses import replace
+        for title in ["NumPy Tutorial", "Required and optional parameters", "Honours Track Assignment"]:
+            item = replace(self.item, kind="Lab", title=title)
+            self.assertFalse(self.runner._optional_excluded(self.cid, item))
+            self.assertEqual(self.runner._next_coursework(self.cid, [item]), item)
+
     def test_pending_action_is_confirmed_from_green_outline_without_reclick(self) -> None:
         action_id = self.store.begin_action(self.cid, item_id(self.item), "assessment")
         opened = Mock(url=self.item.url)

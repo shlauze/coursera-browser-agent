@@ -393,6 +393,9 @@ class Runner:
                 if frame == page.main_frame else None)
 
     def _optional_excluded(self, cid, item):
+        # A visible Optional: label explicitly identifies non-required work.
+        if re.match(r"^\s*Optional\s*:", item.title or "", re.I):
+            return True
         records = self.store.get_meta("verified_optional:" + cid, [])
         return any(row.get("url") == item.url and row.get("title") == item.title
                    and row.get("evidence") and row.get("authorized_skip") is True for row in records)
@@ -500,7 +503,7 @@ class Runner:
             _pause_lecture_media(page)
             incomplete = [item for item in outline.items if not item.completed]
             excluded = [item for item in incomplete if not is_coursework(item.kind) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item)]
-            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item)]
+            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item) and not self._optional_excluded(course_id(card), item)]
             unfinished = self._next_coursework(course_id(card), incomplete)
             if not seen and excluded:
                 self.store.record_event("INFO", "MATERIALS_EXCLUDED",
