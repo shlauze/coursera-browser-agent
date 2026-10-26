@@ -331,7 +331,7 @@ class Runner:
             if item is None:
                 raise RunnerAttention(f"Pending action {action['id']} item disappeared from the outline")
             if item.completed:
-                self.store.resolve_action(action["id"], "confirmed", {"outline": "green mark", "url": opened.url})
+                self.store.resolve_action(action["id"], "confirmed", {"outline": "green mark", "url": item.url, "observed_page_url": opened.url})
                 self.store.record_event("INFO", "ACTION_RECONCILED", f"Previously pending item is complete: {item.title}")
             elif self._practice_excluded(item):
                 # Preserve the unresolved ledger; exclusion is not a grade or cancellation.

@@ -290,6 +290,19 @@ class RunnerSafetyTests(unittest.TestCase):
         scan_outline.assert_called_once_with(opened)
         handle_item.assert_not_called()
 
+    def test_reconcile_evidence_uses_matched_item_url_when_resume_opens_another_item(self):
+        action_id = self.store.begin_action(self.cid, item_id(self.item), "assessment", {"url": self.item.url})
+        opened = Mock(url="https://www.coursera.org/learn/course/assignment-submission/other/quiz")
+        with patch("v2.runner.open_course", return_value=opened), \
+             patch("v2.runner.scan_outline", return_value=self._outline(completed=True)), \
+             patch("v2.runner.handle") as handle_item:
+            self.runner._reconcile(Mock(), [self.card])
+        action = self.store.get_action(action_id)
+        self.assertEqual(action["outcome"], "confirmed")
+        self.assertEqual(action["evidence"]["url"], self.item.url)
+        self.assertEqual(action["evidence"]["observed_page_url"], opened.url)
+        handle_item.assert_not_called()
+
     def test_unfinished_reading_intent_is_cancelled_by_coursework_mode(self) -> None:
         action_id = self.store.begin_action(self.cid, item_id(self.item), "reading")
         with patch("v2.runner.open_course", return_value=Mock(url=self.item.url)) as open_course, \
