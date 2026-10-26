@@ -283,6 +283,31 @@ class AssessmentDomTests(unittest.TestCase):
                     act(self.page, state, action='button', label='Continue', start_attempt_verified=True)
                 self.assertIsNone(self.page.evaluate('window.clicked'))
 
+    def bounded_timed_dialog(self, extra=""):
+        self.page.set_content("""<div role="dialog"><h2>Start new attempt?</h2><p>You have <b>5 minutes</b> to submit up to <b>1 time</b> for this attempt.</p>""" + extra + """<button onclick="window.clicked=true;this.parentElement.outerHTML='<main><fieldset><legend>Which number is even?</legend><label><input type=radio name=q>2</label><label><input type=radio name=q>3</label></fieldset></main>'">Continue</button><button onclick="this.parentElement.remove()">Cancel</button></div>""")
+
+    def test_bounded_timed_start_is_recognized_and_requires_verified_entry(self):
+        self.bounded_timed_dialog()
+        state = inspect(self.page)
+        self.assertTrue(state['start_confirmation'])
+        self.assertFalse(state['retry_confirmation'])
+        with self.assertRaises(HandlerError):
+            _await_attempt(self.page, lambda: None, seconds=2)
+        self.assertIsNone(self.page.evaluate('window.clicked'))
+        result = _await_attempt(self.page, lambda: None, start_verified=True, seconds=3)
+        self.assertTrue(result['questions'])
+        self.assertTrue(self.page.evaluate('window.clicked'))
+
+    def test_bounded_timed_start_rejects_unknown_terms_and_duplicate_continue(self):
+        for extra in ['<p>I agree to new terms and payment.</p>', '<button>Continue</button>']:
+            with self.subTest(extra=extra):
+                self.bounded_timed_dialog(extra)
+                state = inspect(self.page)
+                self.assertFalse(state['start_confirmation'])
+                with self.assertRaises(HandlerError):
+                    act(self.page, state, action='button', label='Continue', start_attempt_verified=True)
+                self.assertIsNone(self.page.evaluate('window.clicked'))
+
     def test_existing_simple_timed_dialog_cancelled_before_result_read(self):
         from v2.assessments import _handle_assessment
         self.simple_timed_dialog()
