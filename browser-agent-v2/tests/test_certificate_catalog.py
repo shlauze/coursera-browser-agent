@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import Mock,patch
-from v2.runner import _certificate_in_catalog,_verified_certificate_url
+from v2.runner import _certificate_in_catalog,_verified_certificate_url,_certificate_on_page
 URL='https://www.coursera.org/account/accomplishments/verify/ABC'
 class CatalogTests(unittest.TestCase):
  def setup_pages(self):
@@ -34,3 +34,15 @@ class CatalogTests(unittest.TestCase):
   p,c,v=self.setup_pages();c.goto.side_effect=RuntimeError('offline')
   with self.assertRaises(RuntimeError):_certificate_in_catalog(p,'Course')
   c.close.assert_called_once();p.close.assert_not_called()
+ def test_button_popup_is_closed_and_foreign_tab_is_not_read(self):
+  page=Mock(url='https://www.coursera.org/learn/course/home/welcome')
+  foreign=Mock(url=URL);popup=Mock(url=URL)
+  page.context.pages=[page,foreign]
+  page.locator.return_value.evaluate_all.return_value=[]
+  button=page.get_by_role.return_value
+  button.count.return_value=1
+  button.click.side_effect=lambda **_:page.context.pages.append(popup)
+  with patch('v2.runner._certificate_matches',side_effect=lambda tab,_:tab is popup) as matched:
+   self.assertEqual(_certificate_on_page(page,'Course'),URL)
+  self.assertNotIn(foreign,[call.args[0] for call in matched.call_args_list])
+  popup.close.assert_called_once();foreign.close.assert_not_called();page.close.assert_not_called()

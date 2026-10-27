@@ -154,6 +154,44 @@ class CertificateSkipRecheckTests(unittest.TestCase):
         self.assertIn("remain incomplete and learner-skipped", error)
         self.assert_incomplete()
 
+    def test_unchanged_graded_skip_reuses_negative_certificate_evidence(self):
+        self.store.set_meta("graded_only", True)
+        self.store.set_meta("user_skipped_item_kinds", [self.item.kind])
+        _, first, _ = self.attempt([self.item])
+        self.assertEqual(first.call_count, 1)
+        _, second, error = self.attempt([self.item])
+        second.assert_not_called()
+        self.assertIn("remain incomplete and learner-skipped", error)
+        self.assert_incomplete()
+        self.assertEqual(self.store.get_meta("certificate_negative:" + self.cid)["progress_percent"],
+                         self.card.progress_percent)
+
+    def test_changed_completion_or_progress_rechecks_certificate(self):
+        self.store.set_meta("graded_only", True)
+        self.store.set_meta("user_skipped_item_kinds", [self.item.kind])
+        self.attempt([self.item])
+        # A learner may complete a different item without changing this skip.
+        other = replace(self.item, title="Other graded quiz", kind="Graded Quiz", completed=True,
+                        url=self.item.url + "-other")
+        _, changed_outline, _ = self.attempt([self.item, other])
+        changed_outline.assert_called_once()
+        self.card = replace(self.card, progress_percent=9)
+        _, changed_progress, _ = self.attempt([self.item, other])
+        changed_progress.assert_called_once()
+
+    def test_expired_or_malformed_negative_cache_never_suppresses_check(self):
+        self.store.set_meta("graded_only", True)
+        self.store.set_meta("user_skipped_item_kinds", [self.item.kind])
+        self.attempt([self.item])
+        key = "certificate_negative:" + self.cid
+        for checked_at in (0, "invalid"):
+            with self.subTest(checked_at=checked_at):
+                cached = self.store.get_meta(key)
+                cached["checked_at"] = checked_at
+                self.store.set_meta(key, cached)
+                _, check, _ = self.attempt([self.item])
+                check.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

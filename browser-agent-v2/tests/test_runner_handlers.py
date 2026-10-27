@@ -37,6 +37,43 @@ class _CertificatePage:
 
 
 class RunnerSafetyTests(unittest.TestCase):
+    def test_course_popup_is_closed_after_read_even_when_course_defers(self):
+        queue = Mock()
+        popup = Mock(url="https://www.coursera.org/learn/deep-learning-with-pytorch/lecture/a")
+        popup.is_closed.return_value = False
+        foreign = Mock()
+        with patch("v2.runner.open_course", return_value=popup), \
+             patch.object(self.runner, "_process_opened_course", side_effect=RunnerAttention("known hold")):
+            with self.assertRaisesRegex(RunnerAttention, "known hold"):
+                self.runner._process_course(queue, self.card)
+        popup.close.assert_called_once()
+        queue.close.assert_not_called()
+        foreign.close.assert_not_called()
+
+    def test_course_in_queue_tab_is_never_closed(self):
+        queue = Mock()
+        with patch("v2.runner.open_course", return_value=queue), \
+             patch.object(self.runner, "_process_opened_course"):
+            self.runner._process_course(queue, self.card)
+        queue.close.assert_not_called()
+
+    def test_graded_run_reconciles_first_pending_course_only_once(self):
+        self.store.set_meta("graded_only", True)
+        item = ItemRecord("Pending graded quiz", "Graded Quiz", False,
+                          "https://www.coursera.org/learn/deep-learning-with-pytorch/quiz/a",
+                          "Module 1", 1)
+        aid = self.store.begin_action(self.cid, item_id(item), "assessment", {"url": item.url})
+        self.store.set_meta(f"submission:{aid}", "submitting")
+        queue = Mock(url=item.url)
+        outline = OutlineSnapshot(self.card.title, (item,), item.url)
+        with patch("v2.runner.discover_in_progress", return_value=[self.card]), \
+             patch("v2.runner.open_course", return_value=queue) as opened, \
+             patch("v2.runner.scan_outline", return_value=outline):
+            self.runner.run(Mock(page=queue))
+        opened.assert_called_once()
+        self.assertEqual(self.store.get_action(aid)["status"], "pending")
+        queue.close.assert_not_called()
+
     def test_missing_input_block_survives_restart_but_new_source_unblocks(self):
         self.store.set_meta("item_attention:"+item_id(self.item), {"course_id":self.cid,"url":self.item.url,"reason":"Learner-authored essay required for the personal authorship confirmation"})
         self.assertTrue(self.runner._input_blocked(self.cid,self.item))

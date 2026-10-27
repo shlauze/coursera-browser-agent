@@ -53,6 +53,13 @@ def item_id(item: ItemRecord) -> str:
     return _key(item.module, str(item.index), item.title)
 
 
+def _outline_fingerprint(outline: OutlineSnapshot) -> str:
+    # Only structure and completion state, never answers or page contents.
+    rows = sorted((item.url or "", item.title, item.kind, bool(item.completed))
+                  for item in outline.items)
+    return hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()
+
+
 def _same_item(left: ItemRecord, right: ItemRecord) -> bool:
     if left.url and right.url:
         return left.url == right.url
@@ -190,9 +197,10 @@ def _course_certificate_url(page: Any, course_title: str) -> str | None:
 
 
 def _certificate_on_page(page: Any, course_title: str) -> str | None:
-    for tab in page.context.pages:
-        if _certificate_matches(tab, course_title):
-            return tab.url
+    # Read only the page owned by this check. Other tabs can be stale copies
+    # of an attempt or belong to the learner.
+    if _certificate_matches(page, course_title):
+        return page.url
     links = page.locator('a[href*="/account/accomplishments/verify/"]')
     urls = links.evaluate_all("elements => elements.map(a => a.href)")
     for url in dict.fromkeys(urls):
@@ -208,9 +216,14 @@ def _certificate_on_page(page: Any, course_title: str) -> str | None:
         before = set(page.context.pages)
         button.click(timeout=10_000)
         page.wait_for_timeout(1500)
-        for tab in page.context.pages:
-            if tab not in before and _certificate_matches(tab, course_title):
-                return tab.url
+        opened = [tab for tab in page.context.pages if tab not in before]
+        try:
+            for tab in opened:
+                if _certificate_matches(tab, course_title):
+                    return tab.url
+        finally:
+            for tab in opened:
+                tab.close()
         if _certificate_matches(page, course_title):
             return page.url
     return None
@@ -387,10 +400,25 @@ class Runner:
         return False
 
     def _finish_course(self, page: Any, card: CourseCard, *, excluded_items: int = 0,
-                       learner_skipped_required: int = 0) -> None:
+                       learner_skipped_required: int = 0,
+                       outline_signature: str | None = None) -> None:
         # A fresh outline still showing learner-skipped required work gives no
         # reason to repeat a full certificate search or reload the course.
-        checks = 1 if learner_skipped_required or self.store.get_meta("graded_only", False) else self.certificate_checks
+        graded_only = bool(self.store.get_meta("graded_only", False))
+        cid = course_id(card)
+        cache_key = "certificate_negative:" + cid
+        cached = self.store.get_meta(cache_key, {})
+        checked_at = cached.get("checked_at") if isinstance(cached, dict) else None
+        if (graded_only and learner_skipped_required and outline_signature
+                and isinstance(cached, dict)
+                and cached.get("outline_signature") == outline_signature
+                and cached.get("progress_percent") == card.progress_percent
+                and isinstance(checked_at, (int, float))
+                and 0 <= time.time() - checked_at < 6 * 3600):
+            self.store.record_event("INFO", "CERTIFICATE_CHECK_CACHED",
+                                    f"Unchanged learner-skipped work; certificate search omitted for {card.title}")
+            raise RunnerAttention(f"{learner_skipped_required} required coursework items remain incomplete and learner-skipped; a matching certificate was not found for {card.title}")
+        checks = 1 if learner_skipped_required or graded_only else self.certificate_checks
         for attempt in range(1, checks + 1):
             self.checkpoint()
             url = _verified_certificate_url(page, card.title)
@@ -402,6 +430,10 @@ class Runner:
             if attempt < checks:
                 page.wait_for_timeout(2500)
                 page.reload(wait_until="domcontentloaded", timeout=30_000)
+        if graded_only and learner_skipped_required and outline_signature:
+            self.store.set_meta(cache_key, {"outline_signature": outline_signature,
+                                            "progress_percent": card.progress_percent,
+                                            "checked_at": time.time()})
         if learner_skipped_required:
             raise RunnerAttention(f"{learner_skipped_required} required coursework items remain incomplete and learner-skipped; a matching certificate was not found for {card.title}")
         if self.store.get_meta("graded_only", False):
@@ -419,7 +451,8 @@ class Runner:
         def path():
             u = urlsplit(page.url)
             return u.hostname + u.path if u.hostname else u.path
-        page.on("close", lambda *_: self.store.record_event("WARNING", "COURSE_TAB_CLOSED", path()))
+        page.on("close", lambda *_: None if id(page) in getattr(self, "_closing_course_tabs", set())
+                else self.store.record_event("WARNING", "COURSE_TAB_CLOSED", path()))
         page.on("crash", lambda *_: self.store.record_event("ERROR", "COURSE_TAB_CRASHED", path()))
         page.on("framenavigated", lambda frame: self.store.record_event("INFO", "COURSE_TAB_NAVIGATED", path())
                 if frame == page.main_frame else None)
@@ -638,6 +671,27 @@ class Runner:
             self.store.record_event("INFO", "COURSE_PAGE_REUSED", "Reused current reconciliation page and outline; no extra queue navigation")
         else:
             page = open_course(queue_page, card)
+        try:
+            return self._process_opened_course(page, card, initial_outline)
+        finally:
+            # Resume can open a popup. It belongs to this course read, so do
+            # not accumulate it across the 39-course queue. The queue tab and
+            # every pre-existing learner tab remain untouched.
+            if page is not queue_page:
+                if not hasattr(self, "_closing_course_tabs"):
+                    self._closing_course_tabs = set()
+                self._closing_course_tabs.add(id(page))
+                try:
+                    if not page.is_closed():
+                        page.close()
+                except BrowserError as exc:
+                    self.store.record_event("WARNING", "COURSE_TAB_RELEASE_FAILED",
+                                            f"Owned course tab could not be released: {exc}")
+                finally:
+                    self._closing_course_tabs.discard(id(page))
+
+    def _process_opened_course(self, page: Any, card: CourseCard,
+                               initial_outline: OutlineSnapshot | None) -> None:
         self._watch_course_page(page)
         _pause_lecture_media(page)
         self.store.record_event("INFO", "COURSE_OPENED", f"Opened {card.title}")
@@ -673,6 +727,8 @@ class Runner:
                 finish_options = {"excluded_items": len(excluded)}
                 if learner_skipped_required:
                     finish_options["learner_skipped_required"] = learner_skipped_required
+                    if self.store.get_meta("graded_only", False):
+                        finish_options["outline_signature"] = _outline_fingerprint(outline)
                 self._finish_course(page, card, **finish_options)
                 return
             key = item_id(unfinished)
@@ -782,7 +838,11 @@ class Runner:
             focus = self.store.get_meta("focus_course_id")
             if focus:
                 return self._run_focused(page, cards, focus)
-            self._reconcile(page, cards[:1], visible_only=True)
+            # Every selected course reconciles its own pending actions before
+            # opening an item. A separate first-card prepass opened that same
+            # course twice and could leave the first popup behind.
+            if not self.store.get_meta("graded_only", False):
+                self._reconcile(page, [], visible_only=True)
             processed: set[str] = set()
             refreshed = False
             for _ in range(500):
