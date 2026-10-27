@@ -52,6 +52,16 @@ class RunnerSafetyTests(unittest.TestCase):
         self.store.set_meta("retry_item:"+item_id(self.item),True)
         self.assertFalse(self.runner._input_blocked(self.cid,self.item))
 
+    def test_missing_feedback_fields_hold_survives_restart_and_does_not_complete_item(self):
+        self.runner._retain_item(self.cid, self.item,
+            "Failed attempt feedback is missing answer fields; automatic retry blocked", "not_submitted")
+        self.runner.blocked_items.clear()
+        self.assertTrue(self.runner._input_blocked(self.cid, self.item))
+        self.assertIsNone(self.runner._next_coursework(self.cid, [self.item]))
+        self.assertFalse(self.item.completed)
+        self.store.set_meta("retry_item:" + item_id(self.item), True)
+        self.assertFalse(self.runner._input_blocked(self.cid, self.item))
+
     def test_transient_failure_and_explicit_retry_remain_eligible(self):
         key="item_attention:"+item_id(self.item)
         self.store.set_meta(key,{"course_id":self.cid,"url":self.item.url,"reason":"Timeout"})

@@ -1,8 +1,7 @@
 """Text peer submissions with durable duplicate protection; no invented reviews."""
 import re
-import time
 from urllib.parse import urlsplit
-from .handlers import HandlerError, HandlerResult, _click_unique
+from .handlers import HandlerError, _click_unique
 
 
 def assignment_base(url):
@@ -13,16 +12,52 @@ def assignment_base(url):
     return 'https://www.coursera.org' + m[1]
 
 
-def require_source(source, prompt):
+def _require_learner_source(source):
     if not isinstance(source, dict) or source.get('authorship') != 'learner':
         raise HandlerError('Learner-authored essay required for the personal authorship confirmation')
-    if source.get('prompt') != prompt:
-        raise HandlerError('Essay prompt does not match this assignment')
     if not isinstance(source.get('title'), str) or not source['title'].strip():
         raise HandlerError('Essay title is missing')
     if not isinstance(source.get('text'), str) or len(source['text'].split()) < 20:
         raise HandlerError('Essay text is missing or too short')
     return source
+
+
+def require_source(source, prompt):
+    source = _require_learner_source(source)
+    if source.get('prompt') != prompt:
+        raise HandlerError('Essay prompt does not match this assignment')
+    return source
+
+
+_PEER_UPLOAD_JS = r"""() => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const visible = e => {
+    if (!e || !e.getClientRects().length) return false;
+    for (let p = e; p; p = p.parentElement) {
+      const s = getComputedStyle(p);
+      if (p.matches('[hidden],[inert],[aria-hidden="true"]') || s.display === 'none'
+          || s.visibility === 'hidden' || Number(s.opacity) === 0) return false;
+    }
+    return true;
+  };
+  const scope = document.querySelector('main') || document.body;
+  const text = norm(scope.innerText);
+  const add = [...scope.querySelectorAll('button,[role="button"]')]
+    .filter(e => visible(e) && norm(e.innerText || e.getAttribute('aria-label')) === 'Add File');
+  // Observed TUleL contract: Coursera's Uppy chooser has no input[type=file]
+  // until opened. Recognize the complete information block without opening it.
+  return add.length === 1 && !add[0].disabled && add[0].getAttribute('aria-disabled') !== 'true'
+    && !!add[0].closest('.rc-UppyFileUploader') && /\bUpload File\b/.test(text)
+    && /The following file types can be graded by AI \(up to 20 MB for audio and video\):/.test(text)
+    && /If you upload another file type, your assignment will be graded by your peers instead\./.test(text);
+}"""
+
+
+def _requires_peer_upload(page, base, title):
+    # A label on an overview/review page is not a live submission form.
+    if page.url.rstrip('/') != base + '/submit' or title.count() != 1 or not title.is_visible():
+        return False
+    return bool(page.evaluate(_PEER_UPLOAD_JS))
 
 
 def guard_submission(store, base):
@@ -71,14 +106,22 @@ def handle_peer(page, checkpoint, *, store, action_id):
             raise HandlerError('My submission control is not unique')
         target.click(timeout=10000)
     title = page.get_by_role('textbox', name='Project Title', exact=True)
-    editor = page.locator('[data-slate-editor="true"][contenteditable="true"]:visible')
     title.wait_for(state='visible', timeout=30000)
+    if _requires_peer_upload(page, base, title):
+        if store.get_meta('skip_file_upload_assignments', False):
+            from .assessments import FileUploadAssignmentSkipped
+            raise FileUploadAssignmentSkipped('Observed peer Upload File form')
+        raise HandlerError('File upload or rich-text editor needs a dedicated adapter')
+    # Missing learner work cannot be repaired by waiting for a particular editor.
+    # Preserve the stable learner-input block before attempting to fill any form.
+    source = _require_learner_source(store.get_meta('peer_source:' + base))
+    editor = page.locator('[data-slate-editor="true"][contenteditable="true"]:visible')
     editor.first.wait_for(state='visible', timeout=30000)
     if title.count() != 1 or editor.count() != 1:
         raise HandlerError('Peer form is not a unique text essay form')
     prompt = editor.evaluate('(e)=>document.getElementById(e.getAttribute("aria-labelledby"))?.innerText || ""').strip()
     store.set_meta('peer_requirements:' + base, {'prompt': prompt, 'source_key': 'peer_source:' + base})
-    source = require_source(store.get_meta('peer_source:' + base), prompt)
+    source = require_source(source, prompt)
     requirements=store.get_meta('peer_rubric:' + base, {})
     if requirements.get('word_limit') and len(source['text'].split()) > requirements['word_limit']:
         raise HandlerError(f"Essay exceeds observed word limit of {requirements['word_limit']}")
@@ -87,6 +130,9 @@ def handle_peer(page, checkpoint, *, store, action_id):
     existing = editor.inner_text().replace('\ufeff', '').replace('Enter text here', '').strip()
     if existing and existing != source['text'].strip():
         raise HandlerError('Existing essay draft differs; preserve it for reconciliation')
+    existing_title = title.input_value().strip()
+    if existing_title and existing_title != source['title'].strip():
+        raise HandlerError('Existing essay draft title differs; preserve it for reconciliation')
     title.fill(source['title'])
     editor.fill(source['text'])
     if editor.inner_text().strip() != source['text'].strip():
@@ -98,18 +144,6 @@ def handle_peer(page, checkpoint, *, store, action_id):
     if title.input_value() != source['title'] or editor.inner_text().strip() != source['text'].strip():
         raise HandlerError('Saved essay draft was not verified after reload')
     store.set_meta('peer_state:' + base, {'status': 'draft_verified'})
-    box = page.locator('input#agreement-checkbox-base')
-    if box.count() != 1:
-        raise HandlerError('Unknown peer confirmation; review required')
-    checkpoint()
-    box.check()
-    submit = page.get_by_role('button', name='Submit', exact=True)
-    if submit.count() != 1 or not submit.is_enabled():
-        raise HandlerError('Peer Submit remains unavailable')
-    # Persist uncertainty before the click. A timeout never permits resending.
-    store.set_meta('peer_state:' + base, {'status': 'submitting', 'action_id': action_id})
-    store.set_meta('submission:' + str(action_id), 'submitting')
-    submit.click(timeout=10000)
-    store.record_event('INFO', 'PEER_SUBMIT_CLICKED', 'Peer essay sent once; waiting for remote confirmation')
-    # Keep durable intent pending until the exact remote receipt/grade is inspected.
-    raise HandlerError('Peer submission sent once; remote receipt and review workflow require reconciliation')
+    # Learner-source provenance does not authorize a personal authorship claim.
+    # Leave the checkbox and final submission to the learner, even if prechecked.
+    raise HandlerError('Submission requires personal authorship confirmation')

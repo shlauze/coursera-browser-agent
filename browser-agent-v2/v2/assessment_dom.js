@@ -181,6 +181,7 @@ request => {
     bindings.push(fields);
   }
   const resultScope = scope.innerText || '';
+  const pending = /Reviewing your submission|Grading in progress|Submission received/i.test(resultScope);
   let failed = /You didn['’]t pass|\bFailed\b/i.test(resultScope) && /(?:grade|score|pass)/i.test(resultScope);
   let passed = !failed && /(?:Congratulations[^\n]*passed|You passed|\bPassed\b)/i.test(resultScope)
     && /(?:grade|score|assignment|quiz)/i.test(resultScope);
@@ -200,6 +201,28 @@ request => {
       }
     }
   }
+  // A scored feedback page can render prompts and points without rendering the
+  // response controls. Record only structural evidence; page prose is not an
+  // instruction, and an overall grade cannot reconstruct the missing answers.
+  let feedbackMissingAnswers = null;
+  if (failed && gradeEvidence && !pending && !questions.length && !feedbackQuestions.length) {
+    const scoredParts = [...scope.querySelectorAll('[data-testid="part-Submission_GradedMultipleChoiceQuestion"],[data-testid="part-Submission_GradedCheckboxQuestion"]')].filter(visible);
+    const loadingSelector = '[aria-busy="true"],[role="progressbar"],[data-testid*="loading"],[data-testid*="skeleton"]';
+    const busy = !!scope.closest(loadingSelector) || [...scope.querySelectorAll(loadingSelector)].some(visible);
+    const missing = scoredParts.map(part => {
+      if (part.querySelector('input,textarea,select,[role="radio"],[role="checkbox"],[contenteditable="true"]')) return null;
+      const prompts = (part.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id));
+      const points = [...part.querySelectorAll('[data-testid="part-points"]')].filter(visible);
+      if (!prompts.length || !prompts.every(p => p && part.contains(p) && visible(p)) || points.length !== 1) return null;
+      const score = norm(points[0].innerText).match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*points?$/i);
+      const prompt = prompts.map(p => textOf(p)).join(' ');
+      if (!score || Number(score[2]) <= 0 || Number(score[1]) > Number(score[2]) || prompt.length < 5) return null;
+      return [prompt, Number(score[1]), Number(score[2])];
+    });
+    if (!busy && missing.length && missing.every(Boolean)) {
+      feedbackMissingAnswers = {path:location.pathname, grade:gradeEvidence.grade, required:gradeEvidence.required, parts:missing};
+    }
+  }
   const snapshot = JSON.stringify([location.pathname,questions]);
   const values = questions.map((q,i) => {
     const fields=bindings[i];
@@ -212,7 +235,8 @@ request => {
   const limitedTimerNotice = String.raw`You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\. You will have \d+ attempts? left after the time(?:r)? runs out\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
   const boundedTimerNotice = String.raw`You have [1-9]\d* minutes? to submit up to [1-9]\d* times? for this attempt\.`;
   const simpleTimerNotice = String.raw`You have [1-9]\d* minutes? to submit this attempt\.`;
-  const timerNotice = '(?:' + limitedTimerNotice + '|' + boundedTimerNotice + '|' + simpleTimerNotice + ')';
+  const hourTimerNotice = String.raw`You have 1 hour to submit this attempt\. You will have \d+ attempts? left after the time runs out\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
+  const timerNotice = '(?:' + limitedTimerNotice + '|' + boundedTimerNotice + '|' + simpleTimerNotice + '|' + hourTimerNotice + ')';
   const remainingAttemptsNotice = String.raw`You will have \d+ attempts? left after this one\. After that, you will have to wait ` + duration + String.raw` before you can try again\.`;
   const dialogText = norm(scope.innerText);
   const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: (?:` + timerNotice + '|' + remainingAttemptsNotice + String.raw`))? Continue\s*Cancel$`).test(dialogText);
@@ -220,8 +244,8 @@ request => {
   const fileForm = !location.pathname.endsWith('/view-feedback') && fileUploadRequired;
   const fileFeedback = location.pathname.endsWith('/view-feedback') && /No uploaded file/.test(pageText) && /How you were graded/.test(pageText)
     ? {missing_file:true, rubrics:[...pageText.matchAll(/Rubric\s+(\d+)\s+Status:\s*([\d.]+)\s*\/\s*([\d.]+)\s*points/g)].map(m=>({rubric:m[1],earned:Number(m[2]),possible:Number(m[3])}))} : null;
-  const result = {file_form:fileForm,file_upload_required:fileUploadRequired,file_feedback:fileFeedback,start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
-    pending:/Reviewing your submission|Grading in progress|Submission received/i.test(resultScope),
+  const result = {file_form:fileForm,file_upload_required:fileUploadRequired,file_feedback:fileFeedback,start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,feedback_missing_answers:feedbackMissingAnswers,attestation,failed,passed,grade_evidence:gradeEvidence,
+    pending,
     confirmation: activeDialogs.length > 0 && /^Ready to submit\? Submit Cancel$/.test(norm(scope.innerText)),
     feedback: norm(resultScope).slice(0,20000)};
   if (!request.action || request.action === 'inspect') return result;

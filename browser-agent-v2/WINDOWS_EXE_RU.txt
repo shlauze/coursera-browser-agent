@@ -1,6 +1,6 @@
-Coursera Browser Agent 0.2.88 — локальная сборка Windows x64
+Coursera Browser Agent 0.2.89 — локальная сборка Windows x64
 
-В репозитории опубликованы исходники 0.2.88. Эта публикация не выпускает
+В репозитории опубликованы исходники 0.2.89. Эта публикация не выпускает
 новый EXE. Файлы в GitHub Releases могут иметь более раннюю версию:
 https://github.com/shlauze/coursera-browser-agent/releases
 
@@ -12,7 +12,7 @@ https://github.com/shlauze/coursera-browser-agent/releases
   .\build_exe.cmd
 
 Скрипт создаёт .build-venv, устанавливает requirements-build.txt,
-собирает dist\CourseraAgent-0.2.88.exe и выполняет его --self-test.
+собирает dist\CourseraAgent-0.2.89.exe и выполняет его --self-test.
 Сборка локальная: скрипт не публикует релиз.
 
 ЗАПУСК СОБРАННОГО EXE
@@ -20,7 +20,7 @@ https://github.com/shlauze/coursera-browser-agent/releases
 Python устанавливать на целевом компьютере не требуется.
 Нужны Google Chrome, интернет, собственный аккаунт Coursera и ключ Groq.
 
-1. Поместите CourseraAgent-0.2.88.exe в отдельную доступную для записи папку.
+1. Поместите CourseraAgent-0.2.89.exe в отдельную доступную для записи папку.
 2. Запустите EXE двойным щелчком. При первом запуске введите ключ Groq
    в консоли (ввод скрыт), либо нажмите Enter для настройки позднее.
 3. Панель откроется по адресу http://127.0.0.1:8766/.
@@ -35,20 +35,20 @@ build_exe.cmd не подписывает EXE сертификатом изда�
 
 КОМАНДЫ ИЗ ПАПКИ С EXE
 
-  .\CourseraAgent-0.2.88.exe --version
-  .\CourseraAgent-0.2.88.exe --self-test
-  .\CourseraAgent-0.2.88.exe configure-groq
-  .\CourseraAgent-0.2.88.exe status
-  .\CourseraAgent-0.2.88.exe stop
+  .\CourseraAgent-0.2.89.exe --version
+  .\CourseraAgent-0.2.89.exe --self-test
+  .\CourseraAgent-0.2.89.exe configure-groq
+  .\CourseraAgent-0.2.89.exe status
+  .\CourseraAgent-0.2.89.exe stop
 
 --self-test проверяет комплект локально, без запросов к Coursera/Groq
 и без открытия браузерных вкладок.
 
 Запуск исполнителя без новой панели:
-  .\CourseraAgent-0.2.88.exe run
+  .\CourseraAgent-0.2.89.exe run
 
 Другие локальные порты:
-  .\CourseraAgent-0.2.88.exe --chrome-port 9225 serve --panel-port 8767
+  .\CourseraAgent-0.2.89.exe --chrome-port 9225 serve --panel-port 8767
 
 При явной команде serve откройте http://127.0.0.1:8767/ самостоятельно.
 Исполнитель запускается по кнопке; автоматического запуска Windows нет.

@@ -18,6 +18,7 @@ from .ui import dismiss_learning_overlay
 
 
 DOM = (Path(__file__).with_name("assessment_dom.js")).read_text(encoding="utf-8")
+MISSING_FEEDBACK_ANSWERS = "Failed attempt feedback is missing answer fields; automatic retry blocked"
 
 
 class FileUploadAssignmentSkipped(RuntimeError):
@@ -49,10 +50,12 @@ def act(page, snapshot, **request):
         raise HandlerError(result.get("error", "Assignment action was not confirmed"))
 
 
-def _wait(page, checkpoint, predicate, *, seconds=25):
+def _wait(page, checkpoint, predicate, *, seconds=25, feedback_required=False):
     deadline = time.monotonic() + seconds
     last_error = None
     previous_snapshot = None
+    missing_feedback = None
+    missing_since = None
     while time.monotonic() < deadline:
         checkpoint()
         dismiss_learning_overlay(page)
@@ -68,8 +71,15 @@ def _wait(page, checkpoint, predicate, *, seconds=25):
                 raise
             last_error = str(exc)
             previous_snapshot = None
+            missing_feedback, missing_since = None, None
             page.wait_for_timeout(500)
             continue
+        evidence = value.get("feedback_missing_answers") if feedback_required else None
+        if evidence:
+            if evidence != missing_feedback:
+                missing_feedback, missing_since = evidence, time.monotonic()
+        else:
+            missing_feedback, missing_since = None, None
         if predicate(value):
             if not value.get("questions") or value.get("snapshot") == previous_snapshot:
                 return value
@@ -78,12 +88,21 @@ def _wait(page, checkpoint, predicate, *, seconds=25):
             previous_snapshot = None
         last_error = None
         page.wait_for_timeout(500)
+    # Stable prompts and points do not prove hydration has finished. Preserve
+    # the full feedback wait budget before choosing this more specific reason.
+    if missing_feedback and missing_since is not None and time.monotonic() - missing_since >= 2:
+        raise HandlerError(MISSING_FEEDBACK_ANSWERS)
     raise HandlerError(last_error or "Assignment did not reach a recognized state before timeout")
 
 
 def _entry_names(snapshot):
     return [name for name in snapshot.get("buttons", []) if re.fullmatch(
         r"(?:Start|Resume) (?:assignment|quiz|attempt)|Retry(?: assignment)?|Try again", name, re.I)]
+
+
+def _feedback_names(snapshot):
+    return [name for name in snapshot.get("buttons", [])
+            if name in {"View feedback", "Review feedback", "View submission", "Feedback"}]
 
 
 def _confirmation_observed(page, checkpoint, *, attempts=5):
@@ -243,7 +262,10 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
 
 
 def _wait_entry(page, checkpoint):
-    ready = lambda s: s.get("retry_confirmation") or s.get("start_confirmation") or s.get("questions") or s.get("file_form") or _entry_names(s) or s.get("passed")
+    # An existing failed result can expose View feedback while Retry is disabled.
+    # Read its scored feedback before deciding whether another attempt is possible.
+    ready = lambda s: s.get("retry_confirmation") or s.get("start_confirmation") or s.get("questions") or s.get("file_form") or _entry_names(s) or s.get("passed") or (
+        s.get("failed") and (s.get("path", "").endswith("/view-feedback") or len(_feedback_names(s)) == 1))
     try:
         return _wait(page, checkpoint, ready, seconds=45)
     except HandlerError as exc:
@@ -295,13 +317,21 @@ def _read_failed_feedback(page, current, checkpoint, *, seconds=30):
     # Coursera may open the feedback overlay immediately after submission.
     # Its grade header arrives before the individual question results.
     if not current.get("path", "").endswith("/view-feedback"):
-        names = [x for x in current["buttons"] if x in {"View feedback", "Review feedback", "View submission", "Feedback"}]
-        if len(names) != 1:
-            raise HandlerError("Assignment failed; full feedback is unavailable, so no automatic retry")
-        act(page, current, action="button", label=names[0])
+        # The failed grade (and even Retry) can mount before View feedback.
+        # Re-read until the unique enabled control or the feedback route exists.
+        try:
+            current = _wait(page, checkpoint,
+                            lambda s: s.get("path", "").endswith("/view-feedback") or len(_feedback_names(s)) == 1,
+                            seconds=seconds)
+        except HandlerError as exc:
+            if str(exc) != "Assignment did not reach a recognized state before timeout":
+                raise
+            raise HandlerError("Assignment failed; full feedback is unavailable, so no automatic retry") from exc
+        if not current.get("path", "").endswith("/view-feedback"):
+            act(page, current, action="button", label=_feedback_names(current)[0])
     return _wait(page, checkpoint,
                  lambda s: (bool(s.get("feedback_questions")) or bool(s.get("file_feedback"))) and not s.get("questions"),
-                 seconds=seconds)
+                 seconds=seconds, feedback_required=True)
 
 
 def _return_to_outline(page, current, checkpoint):
