@@ -33,7 +33,7 @@ class Decision:
 def is_coursework(kind: str) -> bool:
     """The requested run mode includes tests, assignments and labs only."""
     value = " ".join((kind or "").casefold().split())
-    return any(word in value for word in ("assignment", "quiz", "assessment", "exam", "lab", "peer review", "review your peers"))
+    return value == "graded app item" or any(word in value for word in ("assignment", "quiz", "assessment", "exam", "lab", "peer review", "review your peers"))
 
 
 def is_graded_coursework(kind: str) -> bool:
@@ -42,6 +42,7 @@ def is_graded_coursework(kind: str) -> bool:
     return value in {
         "graded assignment", "graded quiz", "graded assessment", "graded exam",
         "graded lab", "graded programming assignment", "peer-graded assignment",
+        "graded app item",
     }
 
 
@@ -49,6 +50,9 @@ def decide(kind: str, title: str = "") -> Decision:
     """Select a handler from the *visible Coursera type*, never the URL alone."""
     value = " ".join((kind or "").casefold().split())
     title_value = " ".join((title or "").casefold().split())
+    if value == "graded app item":
+        return Decision(ItemAction.REVIEW_REQUIRED,
+                        "Graded third-party app requires inspection and learner authorship confirmation.")
     if value in {"ungraded plugin", "ungraded widget", "ungradedplugin", "ungradedwidget"}:
         return Decision(ItemAction.PLUGIN, "Read supported plugin/SCORM activities and verify Coursera completion.")
     if "programming" in value or ("lab" in value and re.search(r"\bgraded\b", value)):

@@ -543,6 +543,7 @@ class Runner:
             "Previous failed attempt has incomplete scored feedback; retry blocked",
             "Failed attempt feedback is missing answer fields; automatic retry blocked",
             "Failed attempt feedback could not be matched with scored questions; automatic retry blocked",
+            "Graded third-party app requires inspection and learner authorship confirmation.",
             "Assignment failed; full feedback is unavailable, so no automatic retry",
             "Assignment failed; no verified retry flow is available within the attempt budget",
             "Assignment attempt budget exhausted",

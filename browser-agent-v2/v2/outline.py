@@ -132,7 +132,7 @@ _ITEMS_JS = r"""() => {
     const detail = lines.filter(x => x !== itemTitle).join(' ');
     // Match the visible type line, preserving negative qualifiers. A substring
     // such as "graded" inside an ungraded/practice label is not graded proof.
-    const typePattern = /^((?:(?:Practice|Optional:?|Ungraded|Non[- ]graded|Not graded)\s+)*(?:Graded Programming Assignment|Peer-graded Assignment|Graded Assignment|Graded Assessment|Graded Quiz|Graded Exam|Graded Lab|Programming Assignment|Review Your Peers|Ungraded Plugin|Discussion Prompt|Role Play|Dialogue|Video|Reading|Supplement|Assignment|Assessment|Exam|Quiz|Lab))(?=\b|Grade:|Results pending)/i;
+    const typePattern = /^((?:(?:Practice|Optional:?|Ungraded|Non[- ]graded|Not graded)\s+)*(?:Graded Programming Assignment|Peer-graded Assignment|Graded App Item|Ungraded App Item|Graded Assignment|Graded Assessment|Graded Quiz|Graded Exam|Graded Lab|Programming Assignment|Review Your Peers|Ungraded Plugin|Discussion Prompt|Role Play|Dialogue|Video|Reading|Supplement|Assignment|Assessment|Exam|Quiz|Lab))(?=\b|Grade:|Results pending)/i;
     const kindMatch = [...lines.filter(x => x !== itemTitle), ...anchorLines.slice(1)]
       .map(line => line.match(typePattern)).find(Boolean);
     const pathKind = node.href.match(/\/learn\/[^/]+\/(lecture|supplement|quiz|assignment-submission|ungradedLab|ungradedLti|programming|coach|ungradedPlugin|ungradedWidget|discussionPrompt)\//i);

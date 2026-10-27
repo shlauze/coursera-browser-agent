@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 from v2.control import Control
 from v2.discovery import CourseCard
 from v2.outline import ItemRecord, OutlineSnapshot, scan_outline
-from v2.policy import is_graded_coursework
+from v2.policy import ItemAction, decide, is_graded_coursework
 from v2.runner import Runner, RunnerAttention, course_id, item_id
 from v2.store import Store
 
@@ -48,12 +48,13 @@ class GradedOnlyRunnerTests(unittest.TestCase):
     def test_type_proof_does_not_come_from_title_or_quiz_url(self):
         for kind in ['Quiz', 'Assignment', 'Lab', 'Review Your Peers', 'Unknown', 'Ungraded Quiz',
                      'Practice Peer-graded Assignment', 'Practice Graded Exam', 'Optional Graded Quiz',
-                     'Non-graded Assignment', 'Not graded Assignment']:
+                     'Non-graded Assignment', 'Not graded Assignment',
+                     'Ungraded App Item', 'Practice Graded App Item']:
             with self.subTest(kind=kind):
                 item = replace(self.item(kind), title='Graded exam')
                 self.assertIsNone(self.runner._next_coursework(self.cid, [item]))
         for kind in ['Graded Assignment', 'Graded Quiz', 'Graded Assessment', 'Graded Exam',
-                     'Graded Lab', 'Peer-graded Assignment']:
+                     'Graded Lab', 'Peer-graded Assignment', 'Graded App Item']:
             with self.subTest(kind=kind):
                 item = self.item(kind)
                 self.assertEqual(self.runner._next_coursework(self.cid, [item]), item)
@@ -68,6 +69,12 @@ class GradedOnlyRunnerTests(unittest.TestCase):
         self.assertIsNone(self.runner._next_coursework(self.cid, [self.graded]))
         optional = replace(self.graded, title='Optional: Graded exam')
         self.assertIsNone(self.runner._next_coursework(self.cid, [optional]))
+
+    def test_graded_app_item_is_visible_but_requires_review(self):
+        item = self.item('Graded App Item')
+        self.assertEqual(self.runner._next_coursework(self.cid, [item]), item)
+        self.assertEqual(decide(item.kind, item.title).action, ItemAction.REVIEW_REQUIRED)
+        self.assertIsNone(self.runner._next_coursework(self.cid, [self.item('Ungraded App Item')]))
 
     def test_ungraded_review_hold_does_not_block_other_graded_work(self):
         item = self.item('Practice Assignment')
@@ -167,11 +174,11 @@ class GradedTypeDomTests(unittest.TestCase):
         cls.playwright.stop()
 
     def test_real_outline_parser_preserves_grade_types_and_negative_qualifiers(self):
-        labels = ['Graded Quiz', 'Graded Lab', 'Graded Assessment', 'Graded Exam',
+        labels = ['Graded Quiz', 'Graded Lab', 'Graded Assessment', 'Graded Exam', 'Graded App Item',
                   'Graded AssignmentGrade: 100%', 'Peer-graded AssignmentResults pending',
                   'Practice Peer-graded Assignment', 'Practice Graded Exam', 'Practice Graded Quiz',
                   'Optional: Graded Assignment', 'Ungraded Quiz', 'Non-graded Assignment',
-                  'Not graded Assignment', 'Quiz', 'Lab']
+                  'Not graded Assignment', 'Quiz', 'Lab', 'Ungraded App Item']
         expected = [s.replace('Grade: 100%', '').replace('Results pending', '') for s in labels]
         html = '<aside style="position:absolute;left:0;width:300px;height:600px"><h2>Scope Course</h2><button aria-expanded="true">Module 1</button>'
         for index, label in enumerate(labels):
@@ -185,7 +192,23 @@ class GradedTypeDomTests(unittest.TestCase):
         outline = scan_outline(page)
         self.assertEqual([x.kind for x in outline.items], expected + ['Quiz'])
         self.assertEqual([is_graded_coursework(x.kind) for x in outline.items],
-                         [True] * 6 + [False] * 10)
+                         [True] * 7 + [False] * 11)
+
+    def test_graded_lti_route_needs_visible_graded_app_label(self):
+        html = ('<aside style="position:absolute;left:0;width:300px;height:600px">'
+                '<h2>Scope Course</h2><button aria-expanded="true">Module 1</button>'
+                '<div><a href="/learn/demo/gradedLti/yes/final-project">Final Project'
+                '<span style="display:block">Graded App Item</span></a></div>'
+                '<div><a href="/learn/demo/gradedLti/no/other-project">Other Project</a></div>'
+                '</aside>')
+        context = self.browser.new_context()
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.route('https://www.coursera.org/**', lambda route: route.fulfill(body=html))
+        page.goto('https://www.coursera.org/learn/demo/home')
+        items = scan_outline(page).items
+        self.assertEqual([item.kind for item in items], ['Graded App Item', 'Unknown'])
+        self.assertEqual([is_graded_coursework(item.kind) for item in items], [True, False])
 
 
 if __name__ == '__main__':
