@@ -554,7 +554,7 @@ class Runner:
                         ) from None
                     page.wait_for_timeout(min(1000, remaining * 1000))
                     continue
-                self.store.record_event("INFO", "OVERLAY_CLEARED", "Overlay disappeared; continuing without clicking or submitting")
+                self.store.record_event("INFO", "OVERLAY_CLEARED", "Overlay cleared; continuing without submitting coursework")
                 return
         finally:
             self.store.set_meta("confirmation_required", None)

@@ -1,12 +1,95 @@
 """Dismiss only recognized, nonessential Coursera overlays."""
 import re
 import logging
-from playwright.sync_api import Error as BrowserError
-from .recovery import read_retry
+from playwright.sync_api import Error as BrowserError, TimeoutError as BrowserTimeout
 
 
 class UnknownOverlay(RuntimeError):
     pass
+
+
+_TRANSLATION_SURVEY_JS = r"""({dismiss = false} = {}) => {
+    const norm = text => (text || '').replace(/\s+/g, ' ').trim();
+    const visible = e => {
+        const s = getComputedStyle(e), r = e.getBoundingClientRect();
+        for (let parent = e.parentElement; parent; parent = parent.parentElement) {
+            if (Number(getComputedStyle(parent).opacity) === 0) return false;
+        }
+        return s.display !== 'none' && s.visibility !== 'hidden' &&
+            Number(s.opacity) !== 0 && r.width > 0 && r.height > 0;
+    };
+    const roots = [...document.querySelectorAll('#pendo-base,._pendo-step-container')]
+        .filter(e => visible(e) || [...e.querySelectorAll('button,[role="button"]')].some(visible));
+    if (!roots.length) return {present: false, dismissed: false};
+    const blocked = {present: true, blocked: true, dismissed: false};
+    if (location.hostname !== 'www.coursera.org' || roots.length !== 1) return blocked;
+    const root = roots[0];
+    // These root and question markers were recorded in the pointer-interception
+    // failure. The rest of the question may vary; never infer a survey response.
+    if (!root.matches('#pendo-base._pendo-step-container._pendo-guide-walkthrough_[data-layout="lightboxBlank"]'))
+        return blocked;
+    const prompts = [...root.querySelectorAll('#pendo-text-1ecb6615._pendo-text-plain')].filter(visible);
+    if (prompts.length !== 1 ||
+        !/^How effective are the translations in this course(?:[\s?.,\u2026:]|$)/.test(norm(prompts[0].innerText)))
+        return blocked;
+    // A changed guide asking for consent or a file is not this optional survey.
+    if (root.querySelector('input[type="checkbox"],input[type="file"],[role="checkbox"],[role="switch"],[contenteditable="true"]') ||
+        /\b(?:I agree|I certify|I confirm|I consent|authorship|honou?r code|terms|payment|purchase)/i.test(norm(root.innerText)) ||
+        [...root.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog[open]')].some(visible))
+        return blocked;
+    const closeName = e => {
+        const labelled = e.getAttribute('aria-labelledby');
+        if (labelled) {
+            const labels = labelled.trim().split(/\s+/).map(id => document.getElementById(id));
+            return labels.every(Boolean) ? norm(labels.map(label => label.textContent).join(' ')) : '';
+        }
+        return norm(e.getAttribute('aria-label') || e.innerText || e.getAttribute('title'));
+    };
+    const closes = [...root.querySelectorAll('button,[role="button"]')].filter(e => visible(e) &&
+        /^(?:Close(?: guide| survey)?|Dismiss)$/i.test(closeName(e)) &&
+        /^(?:Close(?: guide| survey)?|Dismiss|[xX\u00d7\u2715\u2716])?$/i.test(norm(e.innerText)));
+    if (closes.length !== 1) return blocked;
+    const close = closes[0];
+    if (close.disabled || close.matches(':disabled') || close.closest('[inert]') ||
+        close.getAttribute('aria-disabled') === 'true' || close.hasAttribute('href') ||
+        (close.closest('form') && close.tagName === 'BUTTON' && close.type !== 'button')) return blocked;
+    const rect = close.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (!hit || !(hit === close || close.contains(hit))) return blocked;
+    // Recognition, hit testing and dismissal share one DOM turn. No rating,
+    // feedback, Submit, global Close or hidden application API is used.
+    if (dismiss) close.click();
+    return {present: true, recognized: true, dismissed: dismiss};
+}"""
+
+
+_NO_VISIBLE_PENDO_JS = r"""() => ![...document.querySelectorAll('#pendo-base,._pendo-step-container')]
+    .some(root => [root, ...root.querySelectorAll('button,[role="button"]')].some(e => {
+        const s = getComputedStyle(e), r = e.getBoundingClientRect();
+        for (let parent = e.parentElement; parent; parent = parent.parentElement) {
+            if (Number(getComputedStyle(parent).opacity) === 0) return false;
+        }
+        return s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity) !== 0 &&
+            r.width > 0 && r.height > 0;
+    }))"""
+
+
+def dismiss_translation_survey(page):
+    """Dismiss only the identified optional survey; unknown Pendo guides block."""
+    try:
+        result = page.evaluate(_TRANSLATION_SURVEY_JS, {"dismiss": True})
+        if result.get("blocked") is True:
+            raise UnknownOverlay("Unrecognized or obscured Pendo survey; learner review required")
+        if result.get("dismissed") is not True:
+            return False
+        page.wait_for_function(_NO_VISIBLE_PENDO_JS, timeout=2500)
+    except BrowserError as exc:
+        # A dismissal might already have happened. Never let read_retry replay it.
+        raise UnknownOverlay("Translation survey dismissal could not be verified; inspect the current page") from exc
+    logging.getLogger("browser_agent_v2.ui").info(
+        "Dismissed recognized translation-quality survey without answering it"
+    )
+    return True
 
 
 _DEADLINE_DIALOG_JS = r"""({dismiss = false} = {}) => {
@@ -63,12 +146,24 @@ def dismiss_deadline_overlay(page):
 
 
 def dismiss_learning_overlay(page):
+    dismissed = dismiss_translation_survey(page)
     if dismiss_deadline_overlay(page):
         return True
-    return _dismiss_goal_overlay(page)
+    try:
+        return _dismiss_goal_overlay(page) or dismissed
+    except BrowserError as exc:
+        # Pendo can appear after the first check and intercept the goal's Close.
+        # Only that demonstrated pre-click failure permits one fresh lookup.
+        if isinstance(exc, BrowserTimeout) and "intercepts pointer events" in str(exc):
+            if dismiss_translation_survey(page):
+                try:
+                    _dismiss_goal_overlay(page)
+                    return True
+                except BrowserError as retry_exc:
+                    raise UnknownOverlay("Goal overlay dismissal could not be verified") from retry_exc
+        raise UnknownOverlay("Goal overlay dismissal could not be verified") from exc
 
 
-@read_retry
 def _dismiss_goal_overlay(page):
     dismissed = False
     for dialog in page.locator('[role="dialog"],[role="alertdialog"],dialog[open],.cds-Modal-container').element_handles():
