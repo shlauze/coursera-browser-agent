@@ -5,17 +5,17 @@
       "key": "assignment:UAOb6",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/what-is-philosophy/attempt",
-        "snapshot_id": "2e3fb089",
-        "answer_snapshot_id": "5664f34",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/synthetic-fixture/attempt",
+        "snapshot_id": "4391d305",
+        "answer_snapshot_id": "e41c6b98",
         "controls": [
           {
             "id": "c0",
             "type": "radio",
-            "name": "autoGradableResponseId~b68f49c341ac83fb003fda5f66784b55",
-            "value": "0d31239ba67ac9b1355103350e3fef18",
-            "label": "Sample option 11.",
-            "question": "Sample question 5: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": true,
             "disabled": false,
@@ -24,10 +24,10 @@
           {
             "id": "c1",
             "type": "radio",
-            "name": "autoGradableResponseId~b68f49c341ac83fb003fda5f66784b55",
-            "value": "7e6881c583a1b1ae1ce4c077c97e7280",
-            "label": "Sample option 12.",
-            "question": "Sample question 5: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -36,10 +36,10 @@
           {
             "id": "c2",
             "type": "radio",
-            "name": "autoGradableResponseId~b68f49c341ac83fb003fda5f66784b55",
-            "value": "3c221ae1b0c52d237f7f6006fb7c62b8",
-            "label": "Sample option 13.",
-            "question": "Sample question 5: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-3",
+            "label": "Sample option 3",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -48,46 +48,46 @@
           {
             "id": "c3",
             "type": "radio",
-            "name": "autoGradableResponseId~b2da0af0e9ca050dad3ca60cd86f21d1",
-            "value": "252e18cf3856dfcfbaf50865e082d480",
-            "label": "Sample option 14.",
-            "question": "Sample question 6: choose an option.",
-            "kind": "answer",
-            "selected": false,
-            "disabled": false,
-            "in_scope": true
-          },
-          {
-            "id": "c4",
-            "type": "radio",
-            "name": "autoGradableResponseId~b2da0af0e9ca050dad3ca60cd86f21d1",
-            "value": "6fbc1853f485ba5bb6856a8a6390cd0d",
-            "label": "Sample option 15.",
-            "question": "Sample question 6: choose an option.",
+            "name": "fixture-question-2",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 2\nSample fixture question 2",
             "kind": "answer",
             "selected": true,
             "disabled": false,
             "in_scope": true
           },
           {
-            "id": "c5",
+            "id": "c4",
             "type": "radio",
-            "name": "autoGradableResponseId~0065580f600f29d6166af47812c6a691",
-            "value": "57c70ac7f53da94833435dfb5d6738b6",
-            "label": "Sample option 16.",
-            "question": "Sample question 7: choose an option.",
+            "name": "fixture-question-2",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 2\nSample fixture question 2",
             "kind": "answer",
             "selected": false,
             "disabled": false,
             "in_scope": true
           },
           {
+            "id": "c5",
+            "type": "radio",
+            "name": "fixture-question-3",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 3\nSample fixture question 3",
+            "kind": "answer",
+            "selected": true,
+            "disabled": false,
+            "in_scope": true
+          },
+          {
             "id": "c6",
             "type": "radio",
-            "name": "autoGradableResponseId~0065580f600f29d6166af47812c6a691",
-            "value": "c52fc4f40a2fa33fb3d07f95aa3de814",
-            "label": "Sample option 17.",
-            "question": "Sample question 7: choose an option.",
+            "name": "fixture-question-3",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 3\nSample fixture question 3",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -96,22 +96,22 @@
           {
             "id": "c7",
             "type": "radio",
-            "name": "autoGradableResponseId~0065580f600f29d6166af47812c6a691",
-            "value": "0b27c45df1b65b4af60dcb1a9c1d1156",
-            "label": "Sample option 18.",
-            "question": "Sample question 7: choose an option.",
+            "name": "fixture-question-3",
+            "value": "fixture-option-3",
+            "label": "Sample option 3",
+            "question": "Question 3\nSample fixture question 3",
             "kind": "answer",
-            "selected": true,
+            "selected": false,
             "disabled": false,
             "in_scope": true
           },
           {
             "id": "c8",
             "type": "radio",
-            "name": "autoGradableResponseId~a78754a7a7ae269adb166739bcf75c69",
-            "value": "abf646a0114717763b9b1dcde1e259cc",
-            "label": "Sample option 19.",
-            "question": "Sample question 8: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": true,
             "disabled": false,
@@ -120,10 +120,10 @@
           {
             "id": "c9",
             "type": "radio",
-            "name": "autoGradableResponseId~a78754a7a7ae269adb166739bcf75c69",
-            "value": "afd8509c4371338beac77829922a06e8",
-            "label": "Sample option 20.",
-            "question": "Sample question 8: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -132,22 +132,22 @@
           {
             "id": "c10",
             "type": "radio",
-            "name": "autoGradableResponseId~609c43d387f83b40224c46fd802cfe51",
-            "value": "c94a83c03d070871f38edd602f138c9d",
-            "label": "Sample option 21.",
-            "question": "Sample question 9: choose an option.",
+            "name": "fixture-question-5",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 5\nSample fixture question 5",
             "kind": "answer",
-            "selected": false,
+            "selected": true,
             "disabled": false,
             "in_scope": true
           },
           {
             "id": "c11",
             "type": "radio",
-            "name": "autoGradableResponseId~609c43d387f83b40224c46fd802cfe51",
-            "value": "d1a31c317059b6f4683ea7422e1213dd",
-            "label": "Sample option 22.",
-            "question": "Sample question 9: choose an option.",
+            "name": "fixture-question-5",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 5\nSample fixture question 5",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -156,22 +156,22 @@
           {
             "id": "c12",
             "type": "radio",
-            "name": "autoGradableResponseId~609c43d387f83b40224c46fd802cfe51",
-            "value": "1784784de7e5db28ef2f177f059e4564",
-            "label": "Sample option 23.",
-            "question": "Sample question 9: choose an option.",
+            "name": "fixture-question-5",
+            "value": "fixture-option-3",
+            "label": "Sample option 3",
+            "question": "Question 5\nSample fixture question 5",
             "kind": "answer",
-            "selected": true,
+            "selected": false,
             "disabled": false,
             "in_scope": true
           },
           {
             "id": "c13",
             "type": "radio",
-            "name": "autoGradableResponseId~609c43d387f83b40224c46fd802cfe51",
-            "value": "cf77930c9492be7b75afded906bca94f",
-            "label": "Sample option 24.",
-            "question": "Sample question 9: choose an option.",
+            "name": "fixture-question-5",
+            "value": "fixture-option-4",
+            "label": "Sample option 4",
+            "question": "Question 5\nSample fixture question 5",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -180,12 +180,12 @@
           {
             "id": "c14",
             "type": "checkbox",
-            "name": "",
-            "value": "",
+            "name": "fixture-notice",
+            "value": "fixture-notice",
             "label": "I, Example Learner, understand and agree.",
             "question": "I, Example Learner, understand and agree.",
             "kind": "notice",
-            "selected": true,
+            "selected": false,
             "disabled": false,
             "in_scope": true
           }
@@ -220,62 +220,22 @@
           {
             "tag": "button",
             "label": "Back",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Select language: English",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "a",
-            "label": "Coursera's Honor Code (opens in a new tab)",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           },
           {
             "tag": "button",
             "label": "Submit",
-            "disabled": false,
-            "workflow": "submit"
-          },
-          {
-            "tag": "button",
-            "label": "Save draft",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Like",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Dislike",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Report an issue",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           },
           {
             "tag": "button",
             "label": "Submit",
-            "disabled": false,
-            "workflow": "submit"
+            "disabled": false
           },
           {
             "tag": "button",
             "label": "Cancel",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           }
         ],
         "frames": [],
@@ -285,19 +245,13 @@
             "visible": false,
             "modal": false,
             "active": false,
-            "text_length": 0,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 0
+            "aria_hidden": null
           },
           {
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 8996,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 991
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "quiz_form",
@@ -308,8 +262,8 @@
         "authorship_statement": "By clicking Submit, you confirm this work is your own.",
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 149,
-        "scope_control_count": 16,
+        "document_control_count": 19,
+        "scope_control_count": 15,
         "dialog": "Practice Assignment Question 1 Sample question Sample options Coursera Honor Code Submit",
         "result_page": false,
         "page_text": "Practice Assignment\nQuestion 1\nSample question\nSample option A\nSample option B\nCoursera Honor Code\nBy clicking Submit, you confirm this work is your own.\nI, Example Learner, understand and agree.\nSubmit\nSave draft\nReady to submit?\nSubmit\nCancel",
@@ -317,5 +271,9 @@
         "maximum_attempts_this_run": 2
       }
     }
-  ]
+  ],
+  "fixture": {
+    "synthetic": true,
+    "purpose": "Offline UI regression only; no learner activity or answer content."
+  }
 }

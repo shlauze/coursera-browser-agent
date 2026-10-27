@@ -5,17 +5,17 @@
       "key": "assignment:oVRfd",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/practice-what-is-philosophy/attempt",
-        "snapshot_id": "fae88040",
-        "answer_snapshot_id": "18f3c073",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/synthetic-fixture/attempt",
+        "snapshot_id": "d0d0b973",
+        "answer_snapshot_id": "994d6fe2",
         "controls": [
           {
             "id": "c0",
             "type": "radio",
-            "name": "autoGradableResponseId~9b05a87784137859c2c67ca688a36739",
-            "value": "6984785f956e5f7441f3273ddac2ee35",
-            "label": "Sample option 1.",
-            "question": "Sample question 1: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": true,
             "disabled": false,
@@ -24,10 +24,10 @@
           {
             "id": "c1",
             "type": "radio",
-            "name": "autoGradableResponseId~9b05a87784137859c2c67ca688a36739",
-            "value": "22822a8cbfafff939285139d0789a07b",
-            "label": "Sample option 2.",
-            "question": "Sample question 1: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -36,10 +36,10 @@
           {
             "id": "c2",
             "type": "radio",
-            "name": "autoGradableResponseId~236e4ad7b6d19e0e9059cddec80f6a92",
-            "value": "ca3ce65dd03eb695eea378b6f401c62e",
-            "label": "Sample option 3.",
-            "question": "Sample question 2: choose an option.",
+            "name": "fixture-question-2",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 2\nSample fixture question 2",
             "kind": "answer",
             "selected": true,
             "disabled": false,
@@ -48,10 +48,10 @@
           {
             "id": "c3",
             "type": "radio",
-            "name": "autoGradableResponseId~236e4ad7b6d19e0e9059cddec80f6a92",
-            "value": "ab889912a68add88b041dbbaed864821",
-            "label": "Sample option 4.",
-            "question": "Sample question 2: choose an option.",
+            "name": "fixture-question-2",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 2\nSample fixture question 2",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -60,10 +60,10 @@
           {
             "id": "c4",
             "type": "radio",
-            "name": "autoGradableResponseId~7f6a8678fa2a5263adc300529c9feab7",
-            "value": "2c4f7be8fcf0907cd31a05f0030d1846",
-            "label": "Sample option 5.",
-            "question": "Sample question 3: choose an option.",
+            "name": "fixture-question-3",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 3\nSample fixture question 3",
             "kind": "answer",
             "selected": true,
             "disabled": false,
@@ -72,10 +72,10 @@
           {
             "id": "c5",
             "type": "radio",
-            "name": "autoGradableResponseId~7f6a8678fa2a5263adc300529c9feab7",
-            "value": "29713861f2592672a35b13d10d0f6d7c",
-            "label": "Sample option 6.",
-            "question": "Sample question 3: choose an option.",
+            "name": "fixture-question-3",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 3\nSample fixture question 3",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -84,10 +84,10 @@
           {
             "id": "c6",
             "type": "checkbox",
-            "name": "autoGradableResponseId~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "e543f8a853d46799f35b4865d19f037a",
-            "label": "Sample option 7.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": true,
             "disabled": false,
@@ -96,10 +96,10 @@
           {
             "id": "c7",
             "type": "checkbox",
-            "name": "autoGradableResponseId~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "c32605e70aa6b2c79488acb651947351",
-            "label": "Sample option 8.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -108,10 +108,10 @@
           {
             "id": "c8",
             "type": "checkbox",
-            "name": "autoGradableResponseId~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "03526846da4e6d03bb34cf99750d5b98",
-            "label": "Sample option 9.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-3",
+            "label": "Sample option 3",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": false,
             "disabled": false,
@@ -120,20 +120,20 @@
           {
             "id": "c9",
             "type": "checkbox",
-            "name": "autoGradableResponseId~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "9b68585a3dd105e0da8dca6f14b8c2c1",
-            "label": "Sample option 10.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-4",
+            "label": "Sample option 4",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
-            "selected": true,
+            "selected": false,
             "disabled": false,
             "in_scope": true
           },
           {
             "id": "c10",
             "type": "checkbox",
-            "name": "",
-            "value": "",
+            "name": "fixture-notice",
+            "value": "fixture-notice",
             "label": "I, Example Learner, understand and agree.",
             "question": "I, Example Learner, understand and agree.",
             "kind": "notice",
@@ -159,50 +159,12 @@
           {
             "tag": "button",
             "label": "Back",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Select language: English",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "a",
-            "label": "Coursera's Honor Code (opens in a new tab)",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           },
           {
             "tag": "button",
             "label": "Submit",
-            "disabled": true,
-            "workflow": "submit"
-          },
-          {
-            "tag": "button",
-            "label": "Save draft",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Like",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Dislike",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Report an issue",
-            "disabled": false,
-            "workflow": null
+            "disabled": true
           }
         ],
         "frames": [],
@@ -212,19 +174,13 @@
             "visible": false,
             "modal": false,
             "active": false,
-            "text_length": 0,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 0
+            "aria_hidden": null
           },
           {
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 6672,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 991
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "quiz_form",
@@ -235,8 +191,8 @@
         "authorship_statement": "By clicking Submit, you confirm this work is your own.",
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 145,
-        "scope_control_count": 13,
+        "document_control_count": 13,
+        "scope_control_count": 11,
         "dialog": "Practice Assignment Question 1 Sample question Sample options Coursera Honor Code Submit",
         "result_page": false,
         "page_text": "Practice Assignment\nQuestion 1\nSample question\nSample option A\nSample option B\nCoursera Honor Code\nBy clicking Submit, you confirm this work is your own.\nI, Example Learner, understand and agree.\nSubmit\nSave draft",
@@ -249,9 +205,9 @@
       "key": "assignment:oVRfd",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/practice-what-is-philosophy/attempt",
-        "snapshot_id": "be44c205",
-        "answer_snapshot_id": "be44c205",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/synthetic-fixture/attempt",
+        "snapshot_id": "6c6629d9",
+        "answer_snapshot_id": "6c6629d9",
         "controls": [],
         "buttons": [],
         "available_buttons": [],
@@ -259,14 +215,7 @@
           {
             "tag": "button",
             "label": "Back",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Select language: English",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           }
         ],
         "frames": [],
@@ -276,19 +225,13 @@
             "visible": false,
             "modal": false,
             "active": false,
-            "text_length": 0,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 0
+            "aria_hidden": null
           },
           {
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 158,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 991
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "modal",
@@ -299,8 +242,8 @@
         "authorship_statement": null,
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 137,
-        "scope_control_count": 3,
+        "document_control_count": 1,
+        "scope_control_count": 0,
         "dialog": "Back Practice: What is Philosophy? Practice Assignment • 30 min DueOct 14, 11:59 PM +05 Reviewing your submission... Hang tight! This shouldn’t take too long.",
         "result_page": false,
         "page_text": "Reviewing your submission...",
@@ -313,17 +256,17 @@
       "key": "assignment:oVRfd",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/practice-what-is-philosophy/view-feedback",
-        "snapshot_id": "b058e2bd",
-        "answer_snapshot_id": "b058e2bd",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/oVRfd/synthetic-fixture/view-feedback",
+        "snapshot_id": "beb00168",
+        "answer_snapshot_id": "beb00168",
         "controls": [
           {
             "id": "c0",
             "type": "radio",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~9b05a87784137859c2c67ca688a36739",
-            "value": "6984785f956e5f7441f3273ddac2ee35",
-            "label": "Sample option 1.",
-            "question": "Sample question 1: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": true,
             "disabled": true,
@@ -332,10 +275,10 @@
           {
             "id": "c1",
             "type": "radio",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~9b05a87784137859c2c67ca688a36739",
-            "value": "22822a8cbfafff939285139d0789a07b",
-            "label": "Sample option 2.",
-            "question": "Sample question 1: choose an option.",
+            "name": "fixture-question-1",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 1\nSample fixture question 1",
             "kind": "answer",
             "selected": false,
             "disabled": true,
@@ -344,10 +287,10 @@
           {
             "id": "c2",
             "type": "radio",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~236e4ad7b6d19e0e9059cddec80f6a92",
-            "value": "ca3ce65dd03eb695eea378b6f401c62e",
-            "label": "Sample option 3.",
-            "question": "Sample question 2: choose an option.",
+            "name": "fixture-question-2",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 2\nSample fixture question 2",
             "kind": "answer",
             "selected": true,
             "disabled": true,
@@ -356,10 +299,10 @@
           {
             "id": "c3",
             "type": "radio",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~236e4ad7b6d19e0e9059cddec80f6a92",
-            "value": "ab889912a68add88b041dbbaed864821",
-            "label": "Sample option 4.",
-            "question": "Sample question 2: choose an option.",
+            "name": "fixture-question-2",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 2\nSample fixture question 2",
             "kind": "answer",
             "selected": false,
             "disabled": true,
@@ -368,10 +311,10 @@
           {
             "id": "c4",
             "type": "radio",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~7f6a8678fa2a5263adc300529c9feab7",
-            "value": "2c4f7be8fcf0907cd31a05f0030d1846",
-            "label": "Sample option 5.",
-            "question": "Sample question 3: choose an option.",
+            "name": "fixture-question-3",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 3\nSample fixture question 3",
             "kind": "answer",
             "selected": true,
             "disabled": true,
@@ -380,10 +323,10 @@
           {
             "id": "c5",
             "type": "radio",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~7f6a8678fa2a5263adc300529c9feab7",
-            "value": "29713861f2592672a35b13d10d0f6d7c",
-            "label": "Sample option 6.",
-            "question": "Sample question 3: choose an option.",
+            "name": "fixture-question-3",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 3\nSample fixture question 3",
             "kind": "answer",
             "selected": false,
             "disabled": true,
@@ -392,10 +335,10 @@
           {
             "id": "c6",
             "type": "checkbox",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "e543f8a853d46799f35b4865d19f037a",
-            "label": "Sample option 7.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-1",
+            "label": "Sample option 1",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": true,
             "disabled": true,
@@ -404,10 +347,10 @@
           {
             "id": "c7",
             "type": "checkbox",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "c32605e70aa6b2c79488acb651947351",
-            "label": "Sample option 8.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-2",
+            "label": "Sample option 2",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": false,
             "disabled": true,
@@ -416,10 +359,10 @@
           {
             "id": "c8",
             "type": "checkbox",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "03526846da4e6d03bb34cf99750d5b98",
-            "label": "Sample option 9.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-3",
+            "label": "Sample option 3",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
             "selected": false,
             "disabled": true,
@@ -428,12 +371,12 @@
           {
             "id": "c9",
             "type": "checkbox",
-            "name": "autoGradableElementId~h3LEWVJ3Eeaa0xI0djIgNw@1!~SUBMITTER_VIEW_EVALUATION!~348c0a95e89603fa6e5c892f7cbd7272",
-            "value": "9b68585a3dd105e0da8dca6f14b8c2c1",
-            "label": "Sample option 10.",
-            "question": "Sample question 4: choose an option.",
+            "name": "fixture-question-4",
+            "value": "fixture-option-4",
+            "label": "Sample option 4",
+            "question": "Question 4\nSample fixture question 4",
             "kind": "answer",
-            "selected": true,
+            "selected": false,
             "disabled": true,
             "in_scope": true
           }
@@ -444,20 +387,7 @@
           {
             "tag": "button",
             "label": "Back",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Select language: English",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "a",
-            "label": "Next item",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           }
         ],
         "frames": [],
@@ -467,19 +397,13 @@
             "visible": false,
             "modal": false,
             "active": false,
-            "text_length": 0,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 0
+            "aria_hidden": null
           },
           {
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 7004,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 991
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "modal",
@@ -490,14 +414,18 @@
         "authorship_statement": null,
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 140,
-        "scope_control_count": 8,
-        "dialog": "Your grade: 33.33% Question 1 Sample feedback",
+        "document_control_count": 11,
+        "scope_control_count": 10,
+        "dialog": "Your grade: 40% Question 1 Sample feedback",
         "result_page": true,
-        "page_text": "Your grade: 33.33%\nTo pass: 80%\nQuestion 1\nSample feedback\nIncorrect\n0 / 1 point",
+        "page_text": "Your grade: 40%\nTo pass: 80%\nQuestion 1\nSample feedback\nIncorrect\n0 / 1 point",
         "submitted_attempts_this_run": 0,
         "maximum_attempts_this_run": 2
       }
     }
-  ]
+  ],
+  "fixture": {
+    "synthetic": true,
+    "purpose": "Offline UI regression only; no learner activity or answer content."
+  }
 }

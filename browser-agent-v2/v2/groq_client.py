@@ -26,6 +26,48 @@ class GroqError(RuntimeError):
     pass
 
 
+ANSWER_REVIEW_REASONS = frozenset({
+    "The model could not answer this question reliably",
+    "A finite numeric answer is required",
+    "Model repeated an answer with observed non-full score for this exact question; submission blocked",
+    "All choices have negative feedback; review required",
+})
+
+
+class AnswerReviewRequired(GroqError):
+    """An unchanged question needs new evidence before another model attempt."""
+
+    def __init__(self, message, *, question_key, context):
+        super().__init__(message)
+        # Persist identities/digests only; answers and source text stay in their
+        # existing private stores and never become exception or event text.
+        self.review_evidence = {"kind": "answer_context_v1",
+                                "question_key": question_key, "context": context}
+
+
+def answer_review_context(store, key):
+    """Only scored observations and reviewed sources can release a review hold."""
+    history = store.get_meta("answer_history:" + key, [])
+    scored = []
+    for row in history if isinstance(history, list) else []:
+        if (not isinstance(row, dict) or type(row.get("earned")) not in (int, float)
+                or type(row.get("possible")) not in (int, float)
+                or not 0 <= row["earned"] <= row["possible"] or row["possible"] <= 0):
+            continue
+        observation = {field: row.get(field) for field in
+                       ("selected_texts", "text", "earned", "possible", "feedback")}
+        # Re-reading the same feedback must not count as new evidence.
+        if not scored or observation != scored[-1]:
+            scored.append(observation)
+    guidance = store.get_meta("answer_guidance:" + key)
+    if not isinstance(guidance, dict) or not guidance.get("source_url") or not guidance.get("explanation"):
+        guidance = None
+    else:
+        guidance = {field: guidance[field] for field in ("source_url", "explanation")}
+    value = ["answer-review-v1", scored, guidance]
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
 class RequestTooLarge(GroqError):
     pass
 
@@ -703,7 +745,9 @@ class GroqClient:
         candidates = [{"cannot_answer": False, "selected": [o["id"]]} for o in question["options"]]
         candidates = [a for a in candidates if not self.memory.rejected(question, a)]
         if not candidates:
-            raise GroqError("All choices have negative feedback; review required")
+            key = question_key(question)
+            raise AnswerReviewRequired("All choices have negative feedback; review required",
+                                       question_key=key, context=answer_review_context(self.store, key))
         answer = secrets.choice(candidates)
         self.store.set_meta(key, {"layout": layout, "context": context, "answer": answer})
         self.store.record_event("WARNING", "RANDOM_CHOICE_AUTHORIZED", "Random answer chosen for duplicate-text question under explicit user authorization; correctness unknown",
@@ -726,6 +770,8 @@ class GroqClient:
                                     {"question_key": question_key(question)})
             return saved
         history = self.memory.history(question)
+        review_key = question_key(question)
+        review_context = answer_review_context(self.store, review_key)
         # The question and options are never truncated; only historical context.
         for level, budget in enumerate((6000, 2500, 0)):
             rows = json.loads(json.dumps(history))
@@ -748,9 +794,20 @@ class GroqClient:
                            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)}]}
             try:
                 result = self._request(payload)
-                answer = validate_answer(question, result)
+                try:
+                    answer = validate_answer(question, result)
+                except GroqError as exc:
+                    if (str(exc) == "The model could not answer this question reliably"
+                            and (not isinstance(result, dict) or result.get("cannot_answer") is not True)):
+                        raise ResponseValidationError("Model answer has an invalid cannot_answer field") from exc
+                    if str(exc) in ANSWER_REVIEW_REASONS:
+                        raise AnswerReviewRequired(str(exc), question_key=review_key,
+                                                   context=review_context) from exc
+                    raise
                 if self.memory.rejected(question, answer):
-                    raise GroqError("Model repeated an answer with observed non-full score for this exact question; submission blocked")
+                    raise AnswerReviewRequired(
+                        "Model repeated an answer with observed non-full score for this exact question; submission blocked",
+                        question_key=review_key, context=review_context)
                 # Commit before returning to the form filler, so a stop after
                 # generation cannot discard a successfully received answer.
                 self._save_answer(question, answer, context)

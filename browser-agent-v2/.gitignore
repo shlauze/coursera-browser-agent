@@ -19,3 +19,6 @@ backups/
 *.sqlite3*
 *.db
 *.log
+
+# Built executables are distributed separately from the source repository.
+*.exe

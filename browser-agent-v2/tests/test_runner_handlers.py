@@ -411,6 +411,44 @@ class RunnerSafetyTests(unittest.TestCase):
             self.assertIsNone(self.runner._next_coursework(self.cid,[optional]))
             self.assertFalse(optional.completed)
 
+    def test_user_skips_exact_programming_assignment_kind_without_completion(self):
+        from dataclasses import replace
+        self.store.set_meta('user_skipped_item_kinds', ['Programming Assignment'])
+        programming = replace(self.item, kind='Programming Assignment', title='Required lab')
+        quiz = replace(self.item, kind='Graded Assignment', title='Required quiz', url=self.item.url + 'quiz')
+        practice = replace(self.item, kind='Practice Programming Assignment', title='Practice lab', url=self.item.url + 'practice')
+
+        self.assertTrue(self.runner._user_kind_excluded(programming))
+        self.assertFalse(self.runner._user_kind_excluded(quiz))
+        self.assertFalse(self.runner._user_kind_excluded(practice))
+        self.assertEqual(self.runner._next_coursework(self.cid, [programming, quiz]), quiz)
+        self.assertIsNone(self.runner._next_coursework(self.cid, [programming]))
+        self.assertFalse(programming.completed)
+
+    def test_observed_file_upload_is_cancelled_and_excluded_without_completion(self):
+        from dataclasses import replace
+        from v2.assessments import FileUploadAssignmentSkipped
+        item = replace(self.item, kind="Graded Assignment", title="Upload report",
+                       url="https://www.coursera.org/learn/deep-learning-with-pytorch/assignment-submission/abc/upload-report")
+        snapshots = [
+            OutlineSnapshot(self.card.title, (item,), item.url),
+            OutlineSnapshot(self.card.title, (item,), item.url),
+            OutlineSnapshot(self.card.title, (item,), item.url),
+        ]
+        page = Mock(url=item.url)
+        page.goto.return_value = None
+        with patch("v2.runner.open_course", return_value=page), \
+             patch("v2.runner.scan_outline", side_effect=snapshots), \
+             patch("v2.runner.open_item", return_value=page), \
+             patch("v2.runner.handle", side_effect=FileUploadAssignmentSkipped("skip")), \
+             patch.object(self.runner, "_finish_course", side_effect=RunnerAttention("no certificate")):
+            with self.assertRaisesRegex(RunnerAttention, "no certificate"):
+                self.runner._process_course(Mock(), self.card)
+        action = self.store.get_action(1)
+        self.assertEqual((action["status"], action["outcome"]), ("resolved", "cancelled"))
+        self.assertTrue(self.runner._user_file_excluded(self.cid, item))
+        self.assertFalse(item.completed)
+
     def test_practice_title_does_not_exclude_graded_assignment(self):
         self.store.set_meta("required_assessments_first", True)
         item=ItemRecord(title="Practice Exam",kind="Graded Assignment",completed=False,url="https://www.coursera.org/learn/example/quiz/a",module="M",index=0)

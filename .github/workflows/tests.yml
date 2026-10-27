@@ -26,3 +26,23 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check -r requirements.txt
       - name: Run offline tests
         run: .\run_tests.cmd
+
+  windows-v2:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: browser-agent-v2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install v2 test dependencies
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check -r requirements-dev.txt
+          .\.venv\Scripts\python.exe -m playwright install chrome
+      - name: Run v2 offline tests
+        run: .\.venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -p "test_*.py" -v

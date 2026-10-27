@@ -49,6 +49,12 @@ request => {
   const buttonEls = [...scope.querySelectorAll('button,[role="button"],a[href],input[type="submit"]')]
     .filter(e => visible(e) && !e.disabled && e.getAttribute('aria-disabled') !== 'true');
   const buttons = buttonEls.map(e => norm(e.innerText || e.value || e.getAttribute('aria-label')));
+  const scopeText = norm(scope.innerText);
+  const fileUploadRequired = !location.pathname.endsWith('/view-feedback') && (
+    [...scope.querySelectorAll('input[type="file"]')].length > 0
+    || (/\bUpload File\b/i.test(scopeText)
+      && /\bMaximum file size\s*:/i.test(scopeText)
+      && /\bAccepted file formats\s*:/i.test(scopeText)));
   const inputs = [...scope.querySelectorAll('input[type="radio"],input[type="checkbox"],input[type="text"],input[type="number"],textarea,select,[role="radio"],[role="checkbox"]')]
     .filter(e => !e.closest('nav,aside,header') && (visible(e) || [...(e.labels || [])].some(visible))
       && !(e.matches('[role="radio"],[role="checkbox"]') && !e.matches('input') && e.querySelector('input')));
@@ -79,8 +85,13 @@ request => {
     if (!roots.includes(root)) roots.push(root);
   }
   if (roots.some(a => roots.some(b => a !== b && a.contains(b)))) return {error:'Overlapping question containers',attestation};
-  if ([...scope.querySelectorAll('[contenteditable="true"]')].some(visible)) return {error:'File upload or rich-text editor needs a dedicated adapter',attestation};
-  if (scope.querySelector('input[type="file"]') && answerInputs.length) return {error:"Mixed file and quiz form needs a dedicated adapter",attestation};
+  if (fileUploadRequired) return {
+    file_form:true,file_upload_required:true,attestation,path:location.pathname,
+    questions:[],snapshot:JSON.stringify([location.pathname,[]]),buttons,values:[],
+    feedback_questions:[],failed:false,passed:false,grade_evidence:null,pending:false,
+    confirmation:false,feedback:scopeText.slice(0,20000)
+  };
+  if ([...scope.querySelectorAll('[contenteditable="true"]')].some(visible)) return {error:'Rich-text editor needs a dedicated adapter',attestation};
   const questions = [], bindings = [], feedbackQuestions = [];
   for (let i = 0; i < roots.length; i++) {
     const root = roots[i], fields = answerInputs.filter(e => root.contains(e));
@@ -206,10 +217,10 @@ request => {
   const dialogText = norm(scope.innerText);
   const retryConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + replacementNotice + String.raw`(?: (?:` + timerNotice + '|' + remainingAttemptsNotice + String.raw`))? Continue\s*Cancel$`).test(dialogText);
   const startConfirmation = activeDialogs.length === 1 && new RegExp(String.raw`^Start new attempt\? ` + timerNotice + String.raw` Continue\s*Cancel$`).test(dialogText);
-  const fileForm = !location.pathname.endsWith('/view-feedback') && [...scope.querySelectorAll('input[type="file"]')].length > 0;
+  const fileForm = !location.pathname.endsWith('/view-feedback') && fileUploadRequired;
   const fileFeedback = location.pathname.endsWith('/view-feedback') && /No uploaded file/.test(pageText) && /How you were graded/.test(pageText)
     ? {missing_file:true, rubrics:[...pageText.matchAll(/Rubric\s+(\d+)\s+Status:\s*([\d.]+)\s*\/\s*([\d.]+)\s*points/g)].map(m=>({rubric:m[1],earned:Number(m[2]),possible:Number(m[3])}))} : null;
-  const result = {file_form:fileForm,file_feedback:fileFeedback,start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
+  const result = {file_form:fileForm,file_upload_required:fileUploadRequired,file_feedback:fileFeedback,start_confirmation:startConfirmation,retry_confirmation:retryConfirmation,path:location.pathname,questions,snapshot,buttons,values,feedback_questions:feedbackQuestions,attestation,failed,passed,grade_evidence:gradeEvidence,
     pending:/Reviewing your submission|Grading in progress|Submission received/i.test(resultScope),
     confirmation: activeDialogs.length > 0 && /^Ready to submit\? Submit Cancel$/.test(norm(scope.innerText)),
     feedback: norm(resultScope).slice(0,20000)};

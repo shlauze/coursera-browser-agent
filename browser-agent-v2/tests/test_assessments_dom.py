@@ -643,7 +643,36 @@ class AssessmentDomTests(unittest.TestCase):
 
     def test_unknown_file_upload_is_not_treated_as_quiz(self):
         self.page.evaluate("document.querySelector('main').insertAdjacentHTML('beforeend','<input type=file>')")
-        with self.assertRaisesRegex(HandlerError,'dedicated adapter'): inspect(self.page)
+        state=inspect(self.page)
+        self.assertTrue(state['file_form'])
+        self.assertTrue(state['file_upload_required'])
+        self.assertEqual(state['questions'],[])
+
+    def test_visible_upload_file_information_is_detected_without_native_input(self):
+        self.page.set_content('''<main><h2>Upload File</h2><p>Information:</p>
+          <p>Maximum file size: 2 GB</p>
+          <p>Accepted file formats: .txt, .text, .csv, .pdf, .pptx</p></main>''')
+        state=inspect(self.page)
+        self.assertTrue(state['file_form'])
+        self.assertTrue(state['file_upload_required'])
+        self.assertEqual(state['questions'],[])
+
+    def test_authorized_upload_skip_does_not_confirm_authorship_or_call_model(self):
+        from v2.assessments import FileUploadAssignmentSkipped
+        self.store.set_meta("skip_file_upload_assignments", True)
+        self.page.set_content('''<main>
+          <p>I certify that this work is my own.</p>
+          <label><input id="own" type="checkbox">My own work</label>
+          <h2>Upload File</h2><p>Information:</p>
+          <p>Maximum file size: 2 GB</p>
+          <p>Accepted file formats: .txt, .text, .csv, .pdf, .pptx</p>
+        </main>''')
+        groq=Mock()
+        with self.assertRaises(FileUploadAssignmentSkipped):
+            handle_assessment(self.page,lambda:None,groq=groq,store=self.store,action_id=42)
+        self.assertFalse(self.page.locator("#own").is_checked())
+        groq.answer.assert_not_called()
+        self.assertEqual(self.store.get_meta("submission:42"),"not_submitted")
 
     def test_text_multiple_and_select_controls_keep_independent_answers(self):
         self.page.set_content('''<main>

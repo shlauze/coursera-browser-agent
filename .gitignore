@@ -24,3 +24,18 @@ __pycache__/
 /.idea/
 .DS_Store
 Thumbs.db
+
+# Runtime data and generated artifacts must never enter source publications.
+**/data/
+**/profile/
+**/logs/
+**/backups/
+**/.build-venv/
+**/build/
+**/dist/
+*.dpapi
+*.sqlite3*
+*.db
+*.log
+*.exe
+*.spec

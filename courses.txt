@@ -1,8 +1,4 @@
-# По одной ссылке на курс в строке, в порядке прохождения.
-# Добавьте свои курсы после текущего. Строки с # — комментарии.
-https://www.coursera.org/learn/introduction-to-ai-for-cybersecurity
-https://www.coursera.org/learn/advanced-malware-and-network-anomaly-detection
-https://www.coursera.org/learn/securing-ai-and-advanced-topics
-https://www.coursera.org/learn/explainable-machine-learning-xai
-https://www.coursera.org/learn/deep-learning-with-pytorch
-https://www.coursera.org/learn/adversarial-ai-attacking-defending-and-governing-ml-systems-mqcsa
+# Add one Coursera course URL per line to configure the legacy manual queue.
+# No courses are enabled by default. Remove the leading # from an example
+# only after replacing it with a course you intend to use.
+# https://www.coursera.org/learn/your-course-slug

@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import re
 import sqlite3
@@ -33,6 +34,14 @@ _SECRET_FIELD = re.compile(
     r"(?i)\b(authorization|cookie|set-cookie|password|api[_-]?key|token|secret)\s*[:=]\s*[^\s,;]+"
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
+_LOGGER = logging.getLogger("browser_agent_v2.store")
+
+
+def _cannot_open(error: sqlite3.OperationalError) -> bool:
+    code = getattr(error, "sqlite_errorcode", None)
+    if code is not None:
+        return (code & 0xff) == sqlite3.SQLITE_CANTOPEN
+    return "unable to open database file" in str(error).lower()
 
 
 def _safe_event_message(message: str) -> str:
@@ -58,36 +67,60 @@ class Store:
         self._initialize()
 
     @contextmanager
-    def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        # Retry only opening an existing database, before any transaction/action.
-        # Never recreate a missing state file or replay a transaction body.
+    def _connection(self, *, write: bool = False, create: bool = False) -> Iterator[sqlite3.Connection]:
+        # SQLite opens WAL/schema files lazily. Prepare the connection fully
+        # before yielding, so a transient access failure cannot lose an intent.
+        # Retry only this preparation, never the caller's body or its commit.
         for attempt in range(3):
+            connection = None
+            phase = "connect"
             try:
-                connection = sqlite3.connect(self.path, timeout=10)
+                uri = self.path.as_uri() + ("?mode=rwc" if create else "?mode=rw")
+                connection = sqlite3.connect(uri, uri=True, timeout=10)
+                connection.row_factory = sqlite3.Row
+                phase = "configure"
+                connection.execute("PRAGMA busy_timeout=10000")
+                connection.execute("PRAGMA foreign_keys=ON")
+                phase = "schema_read"
+                connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+                if write:
+                    phase = "begin"
+                    connection.execute("BEGIN IMMEDIATE")
                 break
             except sqlite3.OperationalError as exc:
-                if ("unable to open database file" not in str(exc).lower()
-                        or attempt == 2 or not self.path.is_file()):
+                if connection is not None:
+                    connection.close()
+                retry = _cannot_open(exc) and attempt < 2 and self.path.is_file()
+                _LOGGER.warning(
+                    "SQLite preparation failed: phase=%s attempt=%s code=%s name=%s retry=%s",
+                    phase, attempt + 1, getattr(exc, "sqlite_errorcode", None),
+                    getattr(exc, "sqlite_errorname", None), retry,
+                )
+                if not retry:
                     raise
                 time.sleep(0.25 * (2 ** attempt))
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("PRAGMA foreign_keys=ON")
+            except BaseException:
+                if connection is not None:
+                    connection.close()
+                raise
         try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
             yield connection
             if write:
                 connection.commit()
         except BaseException:
             if write:
-                connection.rollback()
+                try:
+                    connection.rollback()
+                except sqlite3.Error:
+                    # Keep the original failure; it determines whether the
+                    # caller must reconcile an uncertain operation.
+                    _LOGGER.warning("SQLite rollback failed during cleanup", exc_info=True)
             raise
         finally:
             connection.close()
 
     def _initialize(self) -> None:
-        with self._connection() as connection:
+        with self._connection(create=True) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(
                 """
@@ -389,20 +422,38 @@ class Store:
             )
 
     def snapshot(self) -> dict[str, Any]:
-        pending = self.pending_actions()
+        # A dashboard poll used to reopen SQLite once per course. Read its
+        # bounded public projection in one transaction instead.
+        with self._connection() as connection:
+            connection.execute("BEGIN")
+            control = connection.execute("SELECT state FROM control WHERE id=1").fetchone()[0]
+            metadata = {
+                row["key"]: _decode(row["value_json"])
+                for row in connection.execute(
+                    "SELECT key,value_json FROM metadata WHERE key IN ('confirmation_required','groq_limits') "
+                    "OR key GLOB 'course_attention:*'"
+                )
+            }
+            courses = connection.execute(
+                "SELECT course_id,title,progress_percent,status,skipped,order_index,page_index,updated_at "
+                "FROM courses ORDER BY page_index,order_index,course_id"
+            ).fetchall()
+            pending = connection.execute(
+                "SELECT id,course_id,item_id,action_kind,started_at FROM actions "
+                "WHERE status IN ('pending','uncertain') ORDER BY id"
+            ).fetchall()
+            events = connection.execute(
+                "SELECT id,at,level,code,message FROM events ORDER BY id DESC LIMIT 50"
+            ).fetchall()
         return {
-            "control_state": self.get_control_state(),
-            "confirmation_required": self.get_meta("confirmation_required"),
+            "control_state": str(control),
+            "confirmation_required": metadata.get("confirmation_required"),
             "courses": [
-                {**{key: value for key, value in course.items()
-                    if key not in {"details", "url", "certificate_url"}},
-                 "attention_reason": self.get_meta("course_attention:" + course["course_id"], "")}
-                for course in self.list_courses()
+                {**dict(course), "skipped": bool(course["skipped"]),
+                 "attention_reason": metadata.get("course_attention:" + course["course_id"], "")}
+                for course in courses
             ],
-            "groq_limits": self.get_meta("groq_limits", {}),
-            "pending_actions": [
-                {key: action[key] for key in ("id", "course_id", "item_id", "action_kind", "started_at")}
-                for action in pending
-            ],
-            "events": self.recent_events(50),
+            "groq_limits": metadata.get("groq_limits", {}),
+            "pending_actions": [dict(action) for action in pending],
+            "events": [dict(event) for event in events],
         }

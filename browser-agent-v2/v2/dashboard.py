@@ -127,33 +127,41 @@ class Dashboard:
                 return
 
             def _send(self, code: int, content: bytes, content_type: str) -> None:
-                self.send_response(code)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(content)))
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("X-Frame-Options", "DENY")
-                # Chrome gives form POSTs Origin:null under no-referrer, which
-                # would reject our own forms. Keep same-origin provenance while
-                # suppressing referrers to external sites; Origin/CSRF stay strict.
-                self.send_header("Referrer-Policy", "same-origin")
-                self.send_header(
-                    "Content-Security-Policy",
-                    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
-                )
-                self.end_headers()
-                self.wfile.write(content)
+                try:
+                    self.send_response(code)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("X-Frame-Options", "DENY")
+                    # Chrome gives form POSTs Origin:null under no-referrer, which
+                    # would reject our own forms. Keep same-origin provenance while
+                    # suppressing referrers to external sites; Origin/CSRF stay strict.
+                    self.send_header("Referrer-Policy", "same-origin")
+                    self.send_header(
+                        "Content-Security-Policy",
+                        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
+                    )
+                    self.end_headers()
+                    self.wfile.write(content)
+                except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+                    # A cancelled browser/status request no longer has a recipient.
+                    # Do not retry a response or hide unrelated server failures.
+                    self.close_connection = True
 
             def _json(self, code: int, value: object) -> None:
                 self._send(code, json.dumps(value, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
 
             def _redirect(self, notice: str, destination: str = '/') -> None:
-                self.send_response(303)
-                self.send_header("Location", destination + "?notice=" + quote(notice))
-                self.send_header("Content-Length", "0")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
+                try:
+                    self.send_response(303)
+                    self.send_header("Location", destination + "?notice=" + quote(notice))
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
 
             def do_GET(self) -> None:
                 path = urlsplit(self.path).path

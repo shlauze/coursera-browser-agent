@@ -10,6 +10,7 @@ _VISUAL_REVIEWS = ContextVar("visual_reviews", default=[])
 
 _RANDOM_DUPLICATES = ContextVar("random_duplicates", default=False)
 _CONFIRMATION = ContextVar("assessment_confirmation", default=None)
+_SKIP_FILE_UPLOADS = ContextVar("skip_file_uploads", default=False)
 
 from .groq_client import GroqError, question_key, validate_answer
 from .handlers import HandlerError, HandlerResult, _click_one_of
@@ -19,8 +20,16 @@ from .ui import dismiss_learning_overlay
 DOM = (Path(__file__).with_name("assessment_dom.js")).read_text(encoding="utf-8")
 
 
+class FileUploadAssignmentSkipped(RuntimeError):
+    """The learner explicitly asked to omit assignments that require a file."""
+
+
 def inspect(page):
     result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()})
+    # Skipped upload forms must not trigger an authorship checkbox or any other
+    # mutation. The runner records the exact item as excluded.
+    if result.get("file_upload_required") and _SKIP_FILE_UPLOADS.get():
+        return result
     while result.get("attestation"):
         callback = _CONFIRMATION.get()
         if callback is None:
@@ -33,6 +42,7 @@ def inspect(page):
 
 
 def act(page, snapshot, **request):
+    dismiss_learning_overlay(page)
     inspect(page)  # A late notice must pause before any mutation.
     result = page.evaluate(DOM, {"allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get(), "snapshot": snapshot["snapshot"], "expected_path": snapshot["path"], **request})
     if not result.get("ok"):
@@ -120,6 +130,7 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
     visual_token = _VISUAL_REVIEWS.set(store.get_meta("visual_reviews:" + visual_path, []) if store else [])
     enabled = store is not None and store.get_control_state() in {"running", "paused"}
     random_token = _RANDOM_DUPLICATES.set(bool(store and store.get_meta("allow_random_duplicate_options", False)))
+    file_skip_token = _SKIP_FILE_UPLOADS.set(bool(store and store.get_meta("skip_file_upload_assignments", False)))
     token = _CONFIRMATION.set(wait_for_learner if enabled else None)
     try:
         return _handle_assessment(page, checkpoint, groq=groq, store=store,
@@ -127,6 +138,7 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
     finally:
         _CONFIRMATION.reset(token)
         _RANDOM_DUPLICATES.reset(random_token)
+        _SKIP_FILE_UPLOADS.reset(file_skip_token)
         _VISUAL_REVIEWS.reset(visual_token)
         if enabled:
             store.set_meta("confirmation_required", None)
@@ -142,6 +154,8 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
     for attempt in range(max_attempts):
         checkpoint()
         current = _wait_entry(page, checkpoint)
+        if current.get("file_upload_required") and store.get_meta("skip_file_upload_assignments", False):
+            raise FileUploadAssignmentSkipped("Learner requested that Upload File assignments be skipped")
         if current.get("start_confirmation") or current.get("retry_confirmation"):
             # Restore the landing page first to inspect the actual previous result.
             act(page, current, action="button", label="Cancel")
@@ -152,6 +166,8 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
             if current.get("failed") and attempt == 0:
                 review = _read_failed_feedback(page, current, checkpoint)
                 if review.get("file_feedback"):
+                    if store.get_meta("skip_file_upload_assignments", False):
+                        raise FileUploadAssignmentSkipped("Learner requested that Upload File assignments be skipped")
                     store.set_meta(f"file_feedback:{action_id}", review["file_feedback"])
                     store.record_event("WARNING", "FILE_FEEDBACK_REVIEWED", "Previous submission has no uploaded file; rubric scores retained")
                     from .file_assignments import require_file_source
@@ -172,6 +188,8 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
                 raise HandlerError("No unique Start/Resume control for this assignment")
             act(page, current, action="button", label=names[0])
             current = _await_attempt(page, checkpoint, failed_verified=current.get("failed", False), start_verified=True)
+        if current.get("file_upload_required") and store.get_meta("skip_file_upload_assignments", False):
+            raise FileUploadAssignmentSkipped("Learner requested that Upload File assignments be skipped")
         if current.get("file_form"):
             from .file_assignments import upload_and_submit
             return upload_and_submit(page, checkpoint, store, action_id)

@@ -5,9 +5,9 @@
       "key": "assignment:UAOb6",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/what-is-philosophy",
-        "snapshot_id": "f4c9f531",
-        "answer_snapshot_id": "f4c9f531",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/UAOb6/synthetic-fixture",
+        "snapshot_id": "f990981f",
+        "answer_snapshot_id": "f990981f",
         "controls": [],
         "buttons": [
           {
@@ -28,20 +28,12 @@
           {
             "tag": "button",
             "label": "Close",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "a",
-            "label": "Learn more about the Coursera Honor Code",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           },
           {
             "tag": "button",
             "label": "Continue",
-            "disabled": false,
-            "workflow": "other"
+            "disabled": false
           }
         ],
         "frames": [],
@@ -51,10 +43,7 @@
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 307,
-            "aria_hidden": null,
-            "width": 568,
-            "height": 384
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "modal",
@@ -65,8 +54,8 @@
         "authorship_statement": null,
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 126,
-        "scope_control_count": 3,
+        "document_control_count": 2,
+        "scope_control_count": 0,
         "dialog": "Coursera Honor Code We’re dedicated to protecting the integrity of your work on Coursera. As part of this effort, we’ve created an honor code that we ask everyone to follow. Learn more All learners should: Submit their own original work Avoid sharing answers with others Report suspected violations Continue",
         "result_page": false,
         "page_text": "Coursera Honor Code We’re dedicated to protecting the integrity of your work on Coursera. As part of this effort, we’ve created an honor code that we ask everyone to follow. Learn more All learners should: Submit their own original work Avoid sharing answers with others Report suspected violations Continue",
@@ -74,5 +63,9 @@
         "maximum_attempts_this_run": 2
       }
     }
-  ]
+  ],
+  "fixture": {
+    "synthetic": true,
+    "purpose": "Offline UI regression only; no learner activity or answer content."
+  }
 }

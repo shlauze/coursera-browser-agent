@@ -5,9 +5,9 @@
       "key": "assignment:pNJkH",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive/view-feedback",
-        "snapshot_id": "1605b446",
-        "answer_snapshot_id": "1605b446",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/synthetic-fixture/view-feedback",
+        "snapshot_id": "cbb7a41b",
+        "answer_snapshot_id": "cbb7a41b",
         "controls": [],
         "buttons": [
           {
@@ -28,20 +28,7 @@
           {
             "tag": "button",
             "label": "Back",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Select language: English",
-            "disabled": false,
-            "workflow": null
-          },
-          {
-            "tag": "button",
-            "label": "Retry",
-            "disabled": false,
-            "workflow": "entry"
+            "disabled": false
           }
         ],
         "frames": [],
@@ -51,19 +38,13 @@
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 247,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 991
+            "aria_hidden": null
           },
           {
             "visible": false,
             "modal": false,
             "active": false,
-            "text_length": 0,
-            "aria_hidden": null,
-            "width": 1920,
-            "height": 0
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "quiz_result",
@@ -75,11 +56,11 @@
         "authorship_statement": null,
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 137,
-        "scope_control_count": 4,
-        "dialog": "Your grade: 33.33% Question 1 Sample feedback",
+        "document_control_count": 1,
+        "scope_control_count": 0,
+        "dialog": "Your grade: 40% Question 1 Sample feedback",
         "result_page": true,
-        "page_text": "Your grade: 33.33%\nTo pass: 80%\nLoading...",
+        "page_text": "Your grade: 40%\nTo pass: 80%\nLoading...",
         "submitted_attempts_this_run": 0,
         "maximum_attempts_this_run": 2
       }
@@ -95,9 +76,9 @@
       "key": "assignment:pNJkH",
       "action": "inspect",
       "result": {
-        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/practice-morality-objective-relative-or-emotive",
-        "snapshot_id": "2166d1ce",
-        "answer_snapshot_id": "2166d1ce",
+        "url": "https://www.coursera.org/learn/philosophy/assignment-submission/pNJkH/synthetic-fixture",
+        "snapshot_id": "6c81dbbb",
+        "answer_snapshot_id": "6c81dbbb",
         "controls": [],
         "buttons": [
           {
@@ -118,14 +99,12 @@
           {
             "tag": "button",
             "label": "Continue",
-            "disabled": false,
-            "workflow": "other"
+            "disabled": false
           },
           {
             "tag": "button",
             "label": "Cancel",
-            "disabled": false,
-            "workflow": null
+            "disabled": false
           }
         ],
         "frames": [],
@@ -135,10 +114,7 @@
             "visible": true,
             "modal": true,
             "active": true,
-            "text_length": 177,
-            "aria_hidden": null,
-            "width": 568,
-            "height": 224
+            "aria_hidden": null
           }
         ],
         "dialog_kind": "modal",
@@ -150,8 +126,8 @@
         "authorship_statement": null,
         "personal_statements": [],
         "unsupported_inputs": [],
-        "document_control_count": 131,
-        "scope_control_count": 2,
+        "document_control_count": 2,
+        "scope_control_count": 0,
         "dialog": "Start new attempt? When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher. Continue Cancel",
         "result_page": false,
         "page_text": "Start new attempt? When you submit a new attempt it will replace your previous submission. This new attempt will only replace your previous grade if it’s higher. Continue Cancel",
@@ -159,5 +135,9 @@
         "maximum_attempts_this_run": 2
       }
     }
-  ]
+  ],
+  "fixture": {
+    "synthetic": true,
+    "purpose": "Offline UI regression only; no learner activity or answer content."
+  }
 }

@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -110,11 +111,60 @@ class DashboardTests(unittest.TestCase):
 
     def test_dashboard_escapes_course_titles_and_hides_action_payload(self) -> None:
         self.store.begin_action("xai", "quiz", "submit", {"secret": "do-not-render"})
-        html = urlopen(self.base, timeout=3).read().decode()
+        with urlopen(self.base, timeout=3) as response:
+            html = response.read().decode()
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+            self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+            self.assertEqual(response.headers["Referrer-Policy"], "same-origin")
+            self.assertIn("form-action 'self'", response.headers["Content-Security-Policy"])
         self.assertIn("&lt;Explainable AI&gt;", html)
         self.assertNotIn("<Explainable AI>", html)
         self.assertNotIn("do-not-render", html)
         self.assertIn("незавершённое", html)
+
+    def response_handler(self, failure: Exception, *, after_headers: bool = False):
+        # Exercise the real header/body writes without a timing-dependent TCP reset.
+        handler = object.__new__(self.server.RequestHandlerClass)
+        handler.request_version = "HTTP/1.1"
+        handler.requestline = "GET /api/status HTTP/1.1"
+        handler.command = "GET"
+        handler.close_connection = False
+        handler.wfile = Mock()
+        handler.wfile.write.side_effect = [None, failure] if after_headers else failure
+        return handler
+
+    def test_disconnected_response_stops_without_retrying_headers_or_body(self) -> None:
+        for error_type in (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+            for after_headers in (False, True):
+                with self.subTest(error=error_type.__name__, after_headers=after_headers):
+                    handler = self.response_handler(error_type("client disconnected"),
+                                                    after_headers=after_headers)
+                    handler._send(200, b"{}", "application/json")
+                    self.assertTrue(handler.close_connection)
+                    self.assertEqual(handler.wfile.write.call_count, 2 if after_headers else 1)
+
+    def test_disconnected_redirect_does_not_retry_completed_control_action(self) -> None:
+        for error_type in (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+            with self.subTest(error=error_type.__name__):
+                handler = self.response_handler(error_type("client disconnected"))
+                self.control.mark_running()
+                handler._redirect("Started")
+                self.assertTrue(handler.close_connection)
+                self.assertEqual(handler.wfile.write.call_count, 1)
+                self.assertEqual(self.control.get_state(), "running")
+                self.control.mark_stopped()
+
+    def test_unrelated_response_errors_remain_visible(self) -> None:
+        for error_type in (OSError, ValueError):
+            for method in ("_send", "_redirect"):
+                with self.subTest(error=error_type.__name__, method=method):
+                    handler = self.response_handler(error_type("server failure"))
+                    with self.assertRaises(error_type):
+                        if method == "_send":
+                            handler._send(200, b"{}", "application/json")
+                        else:
+                            handler._redirect("Started")
 
     def test_post_requires_csrf_and_local_origin(self) -> None:
         with self.assertRaises(HTTPError) as wrong_token:

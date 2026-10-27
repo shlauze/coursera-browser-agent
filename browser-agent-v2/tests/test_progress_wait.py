@@ -7,7 +7,7 @@ from v2.control import Control
 from v2.dashboard import runtime_status, runtime_html, Dashboard
 from v2.assessments import _handle_assessment
 from v2.handlers import HandlerError
-from v2.runner import Runner, RunnerAttention, course_id, item_id
+from v2.runner import Runner, course_id, item_id
 from v2.discovery import CourseCard
 from v2.outline import ItemRecord, OutlineSnapshot
 
@@ -40,9 +40,19 @@ class ProgressTests(unittest.TestCase):
                 self.s.record_stage(a,'submitted')
             runner=Runner(Store(self.path),Control(self.s))
             with patch('v2.runner.open_course',return_value=Mock(url=item.url)),patch('v2.runner.scan_outline',return_value=OutlineSnapshot('Course',(item,),item.url)),patch('v2.runner.open_item') as click:
-                if completed:runner._reconcile_course(Mock(),[card],cid)
-                else:
-                    with self.assertRaises(RunnerAttention):runner._reconcile_course(Mock(),[card],cid)
+                runner._reconcile_course(Mock(),[card],cid)
+                if not completed:
+                    # A pending submission isolates this item while other work
+                    # may continue. It must remain unresolved until Coursera
+                    # supplies the completion mark on the next reconciliation.
+                    pending = self.s.pending_actions()
+                    self.assertEqual([row['id'] for row in pending], [a])
+                    self.assertIsNone(pending[0]['outcome'])
+                    self.assertIn((cid, item.url), runner.blocked_items)
+                    self.assertEqual(self.s.get_meta(f'submission:{a}'), 'pending')
+                    self.assertEqual(self.s.get_meta(f'progress:{a}')['stage'], 'submitted')
+                    self.assertTrue(any(event['code'] == 'PENDING_ITEM_ISOLATED'
+                                        for event in self.s.recent_events()))
                 click.assert_not_called()
         self.assertEqual(self.s.get_meta(f'progress:{a}')['stage'],'result_confirmed')
         self.assertEqual(self.s.pending_actions(),[])

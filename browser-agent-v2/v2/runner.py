@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -21,6 +22,7 @@ from .outline import ItemRecord, OutlineError, OutlineSnapshot, open_item, scan_
 from .policy import ItemAction, decide, is_coursework
 from .store import Store, _safe_event_message
 from .groq_client import GroqClient, GroqError
+from .assessments import FileUploadAssignmentSkipped
 
 
 CERTIFICATES_URL = "https://www.coursera.org/my-learning?myLearningTab=CERTIFICATES"
@@ -362,8 +364,12 @@ class Runner:
                 page.wait_for_timeout(1500)
         return False
 
-    def _finish_course(self, page: Any, card: CourseCard, *, excluded_items: int = 0) -> None:
-        for attempt in range(1, self.certificate_checks + 1):
+    def _finish_course(self, page: Any, card: CourseCard, *, excluded_items: int = 0,
+                       learner_skipped_required: int = 0) -> None:
+        # A fresh outline still showing learner-skipped required work gives no
+        # reason to repeat a full certificate search or reload the course.
+        checks = 1 if learner_skipped_required else self.certificate_checks
+        for attempt in range(1, checks + 1):
             self.checkpoint()
             url = _verified_certificate_url(page, card.title)
             if url:
@@ -371,9 +377,11 @@ class Runner:
                 self.store.record_event("INFO", "CERTIFICATE_VERIFIED", f"Certificate verified for {card.title}", {"url": url})
                 self.completed_courses += 1
                 return
-            if attempt < self.certificate_checks:
+            if attempt < checks:
                 page.wait_for_timeout(2500)
                 page.reload(wait_until="domcontentloaded", timeout=30_000)
+        if learner_skipped_required:
+            raise RunnerAttention(f"{learner_skipped_required} required coursework items remain incomplete and learner-skipped; a matching certificate was not found for {card.title}")
         raise RunnerAttention(f"Requested assignments and labs are complete, but a matching certificate was not found for {card.title}; {excluded_items} other incomplete materials were excluded by run mode")
 
     def _watch_course_page(self, page):
@@ -410,9 +418,36 @@ class Runner:
         return bool(self.store.get_meta("required_assessments_first", False)
                     and re.search(r"\bpractice\b", item.kind, re.I))
 
+    def _user_kind_excluded(self, item: ItemRecord) -> bool:
+        """Honor persisted, exact assignment-type skips requested by the learner."""
+        skipped = self.store.get_meta("user_skipped_item_kinds", [])
+        if not isinstance(skipped, list):
+            return False
+        kind = (item.kind or "").strip().casefold()
+        return any(isinstance(value, str) and value.strip().casefold() == kind for value in skipped)
+
+    def _user_file_excluded(self, cid: str, item: ItemRecord) -> bool:
+        """Exclude only upload forms observed live and authorized by the learner."""
+        rows = self.store.get_meta("user_skipped_file_assignments", [])
+        return isinstance(rows, list) and any(
+            isinstance(row, dict) and row.get("authorized") is True
+            and row.get("course_id") == cid and row.get("url") == item.url
+            for row in rows
+        )
+
+    def _remember_file_skip(self, cid: str, item: ItemRecord) -> None:
+        rows = self.store.get_meta("user_skipped_file_assignments", [])
+        if not isinstance(rows, list):
+            rows = []
+        if not any(isinstance(row, dict) and row.get("course_id") == cid
+                   and row.get("url") == item.url for row in rows):
+            rows.append({"course_id": cid, "url": item.url, "title": item.title,
+                         "authorized": True, "evidence": "live Upload File form"})
+            self.store.set_meta("user_skipped_file_assignments", rows)
+
     def _input_blocked(self, cid, item):
         saved = self.store.get_meta("item_attention:" + item_id(item), {})
-        if saved.get("course_id") != cid or saved.get("url") != item.url:
+        if not isinstance(saved, dict) or saved.get("course_id") != cid or saved.get("url") != item.url:
             return False
         if self.store.get_meta("retry_item:" + item_id(item), False):
             return False
@@ -426,8 +461,44 @@ class Runner:
         if reason.startswith("File assignment needs an explicitly assigned local file"):
             return not bool(self.store.get_meta("file_source:" + base))
         if reason == "Question includes visual content; text-only model cannot answer it":
+            import json
+            evidence = saved.get("review_evidence") or {}
+            if isinstance(evidence, dict) and evidence.get("kind") == "visual_reviews_v1":
+                reviews = self.store.get_meta("visual_reviews:" + urlparse(base).path, [])
+                context = hashlib.sha256(json.dumps(reviews, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                return context == evidence.get("context")
             return True
-        # Transient timeouts and model failures must remain eligible for rechecking.
+        from .groq_client import ANSWER_REVIEW_REASONS, answer_review_context
+        if reason in ANSWER_REVIEW_REASONS:
+            evidence = saved.get("review_evidence") or {}
+            if (isinstance(evidence, dict) and evidence.get("kind") == "answer_context_v1"
+                    and re.fullmatch(r"[a-f0-9]{64}", str(evidence.get("question_key", "")))
+                    and re.fullmatch(r"[a-f0-9]{64}", str(evidence.get("context", "")))):
+                return answer_review_context(self.store, evidence["question_key"]) == evidence["context"]
+            # Historical rows lack an exact question identity. An explicit retry
+            # can establish one; unrelated metadata must not release the hold.
+            return True
+        if reason == "Personal authorship confirmation requires the learner":
+            return not self.store.get_meta("auto_confirm_coursera", False)
+        if reason in {
+            "Notebook prepared; personal authorship confirmation requires the learner",
+            "Submission requires personal authorship confirmation",
+            "Submission dialog requires personal authorship confirmation",
+            "File upload or rich-text editor needs a dedicated adapter",
+            "Rich-text editor needs a dedicated adapter",
+            "Unsupported question type",
+            "Ambiguous answer options",
+            "Peer review route is unsupported",
+            "Previous failed attempt selections are unknown; reconcile before retry",
+            "Previous failed attempt has incomplete scored feedback; retry blocked",
+            "Failed attempt feedback could not be matched with scored questions; automatic retry blocked",
+            "Assignment failed; full feedback is unavailable, so no automatic retry",
+            "Assignment failed; no verified retry flow is available within the attempt budget",
+            "Assignment attempt budget exhausted",
+        }:
+            return True
+        # Timeouts, transport failures and changing/hydrating forms remain
+        # eligible. A review hold is never inferred from a generic exception.
         return False
 
     def _next_coursework(self, cid: str, incomplete: list[ItemRecord]) -> ItemRecord | None:
@@ -435,33 +506,53 @@ class Runner:
                       and is_coursework(item.kind)
                       and not self._optional_excluded(cid, item)
                       and not self._deferred_item(cid, item)
+                      and not self._user_file_excluded(cid, item)
                       and not self._input_blocked(cid, item)
                       and not self._practice_excluded(item)
+                      and not self._user_kind_excluded(item)
                       and (cid, item.url) not in self.blocked_items]
         if self.store.get_meta("required_assessments_first", False):
             candidates.sort(key=lambda item: not bool(re.search(r"\bgraded\b", item.kind, re.I)))
         return next(iter(candidates), None)
 
-    def _retain_item(self, cid, item, reason, outcome=None):
+    def _retain_item(self, cid, item, reason, outcome=None, *, review_evidence=None):
         self.blocked_items.add((cid, item.url))
-        self.store.set_meta("item_attention:" + item_id(item), {"course_id": cid, "url": item.url,
-            "title": item.title, "reason": reason, "submission_state": outcome})
+        saved = {"course_id": cid, "url": item.url, "title": item.title,
+                 "reason": reason, "submission_state": outcome}
+        if review_evidence is not None:
+            saved["review_evidence"] = review_evidence
+        elif reason == "Question includes visual content; text-only model cannot answer it":
+            import json
+            base = re.sub(r"/(?:submit|give-feedback|attempt|view-feedback)/?$", "", item.url or "")
+            reviews = self.store.get_meta("visual_reviews:" + urlparse(base).path, [])
+            saved["review_evidence"] = {"kind": "visual_reviews_v1", "context":
+                hashlib.sha256(json.dumps(reviews, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
+        self.store.set_meta("item_attention:" + item_id(item), saved)
         self.store.record_event("WARNING", "ITEM_REVIEW_REQUIRED",
             f"Item retained for review; continuing other required items: {item.title}")
 
-    def _wait_for_overlay(self, page):
+    def _wait_for_overlay(self, page, *, timeout_seconds: float = 30.0):
         from .ui import UnknownOverlay, require_clear_outline
         self.store.set_meta("confirmation_required", {
-            "reason": "Ожидание закрытия окна Coursera. После его исчезновения работа продолжится автоматически.",
+            "reason": "Краткое ожидание закрытия окна Coursera. Если оно останется, курс будет отложен для проверки, а очередь продолжится.",
             "url": page.url})
         self.store.record_event("INFO", "OVERLAY_WAIT", "Waiting for overlay to disappear; manual pause/stop remain available")
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
         try:
             while True:
                 self.checkpoint()
                 try:
                     require_clear_outline(page)
                 except UnknownOverlay:
-                    page.wait_for_timeout(1000)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        # Keep the dialog untouched. Normal queue handling records
+                        # the review reason and advances to another course.
+                        raise RunnerAttention(
+                            f"Course overlay remained open after {timeout_seconds:g} seconds; "
+                            f"learner review required: {page.url}"
+                        ) from None
+                    page.wait_for_timeout(min(1000, remaining * 1000))
                     continue
                 self.store.record_event("INFO", "OVERLAY_CLEARED", "Overlay disappeared; continuing without clicking or submitting")
                 return
@@ -502,16 +593,26 @@ class Runner:
                 outline = scan_outline(page)
             _pause_lecture_media(page)
             incomplete = [item for item in outline.items if not item.completed]
-            excluded = [item for item in incomplete if not is_coursework(item.kind) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item)]
-            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item) and not self._optional_excluded(course_id(card), item)]
+            excluded = [item for item in incomplete if not is_coursework(item.kind) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item) or self._user_kind_excluded(item) or self._user_file_excluded(course_id(card), item)]
+            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item) and not self._optional_excluded(course_id(card), item) and not self._user_kind_excluded(item) and not self._user_file_excluded(course_id(card), item)]
             unfinished = self._next_coursework(course_id(card), incomplete)
             if not seen and excluded:
                 self.store.record_event("INFO", "MATERIALS_EXCLUDED",
-                                       f"Coursework-only mode: {len(excluded)} video/reading/optional materials excluded; no completion marks added")
+                                       f"Coursework-only mode: {len(excluded)} video/reading/optional or learner-skipped items excluded; no completion marks added")
             if unfinished is None:
                 if deferred:
                     raise RunnerAttention("Remaining required items await learner input: " + "; ".join(item.title for item in deferred))
-                self._finish_course(page, card, excluded_items=len(excluded))
+                learner_skipped_required = sum(
+                    is_coursework(item.kind)
+                    and not self._optional_excluded(course_id(card), item)
+                    and not re.search(r"\bpractice\b", item.kind, re.I)
+                    and (self._user_kind_excluded(item) or self._user_file_excluded(course_id(card), item))
+                    for item in incomplete
+                )
+                finish_options = {"excluded_items": len(excluded)}
+                if learner_skipped_required:
+                    finish_options["learner_skipped_required"] = learner_skipped_required
+                self._finish_course(page, card, **finish_options)
                 return
             key = item_id(unfinished)
             seen[key] = seen.get(key, 0) + 1
@@ -529,6 +630,10 @@ class Runner:
                 self._retain_item(course_id(card), unfinished, decision.reason)
                 continue
             self.store.set_meta("current_item", unfinished.title)
+            if self.store.get_meta("retry_item:" + key, False):
+                # A retry request grants one attempt, not a permanent bypass of
+                # a new review hold. Preserve all saved work and action intents.
+                self.store.set_meta("retry_item:" + key, False)
             action_id = self.store.begin_action(
                 course_id(card), key, decision.action.value,
                 {"title": unfinished.title, "module": unfinished.module, "url": unfinished.url},
@@ -546,6 +651,19 @@ class Runner:
                     raise RunnerAttention(f"Coursera has not marked {unfinished.title} complete after: {result.message}")
             except (StopRequested, SkipCurrent, KeyboardInterrupt):
                 raise
+            except FileUploadAssignmentSkipped:
+                self._remember_file_skip(course_id(card), unfinished)
+                self.store.resolve_action(action_id, "cancelled", {
+                    "reason": "learner-authorized Upload File skip",
+                    "url": unfinished.url,
+                    "completion_claimed": False,
+                })
+                self.store.record_event(
+                    "INFO", "USER_FILE_ASSIGNMENT_SKIPPED",
+                    f"Upload File assignment excluded without submission or completion mark: {unfinished.title}",
+                )
+                page.goto(unfinished.url, wait_until="domcontentloaded", timeout=45_000)
+                continue
             except Exception as exc:
                 # The click may have reached Coursera. Leave the intent pending
                 # so a later run inspects the site before any retry.
@@ -555,7 +673,8 @@ class Runner:
                 self.store.record_event("ERROR", "ITEM_UNCLEAR", f"{unfinished.title}: {exc}")
                 from playwright.sync_api import TimeoutError as PageTimeout
                 if isinstance(exc, (HandlerError, PageTimeout, GroqError)):
-                    self._retain_item(course_id(card), unfinished, str(exc), outcome)
+                    self._retain_item(course_id(card), unfinished, str(exc), outcome,
+                                      review_evidence=getattr(exc, "review_evidence", None))
                     page.goto(unfinished.url, wait_until="domcontentloaded", timeout=45_000)
                     continue
                 raise RunnerAttention(f"Result unclear for {unfinished.title}: {exc}") from exc
