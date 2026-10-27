@@ -546,6 +546,7 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertTrue(any(e['code'] == 'QUEUE_RETRY' for e in self.store.recent_events()))
 
     def test_ambiguous_pending_submission_does_not_block_other_course(self):
+        self.store.set_meta("graded_only", False)
         other=CourseCard("Other Course","Resume",20,1,1)
         other_id=course_id(other)
         self.store.upsert_course(other_id,other.title)
@@ -554,7 +555,7 @@ class RunnerSafetyTests(unittest.TestCase):
         with patch("v2.runner.discover_in_progress",return_value=[self.card,other]), \
              patch("v2.runner.open_course",return_value=Mock()), \
              patch("v2.runner.scan_outline",return_value=self._outline(completed=False)), \
-             patch.object(self.runner,"_process_course") as process:
+             patch.object(self.runner,"_process_opened_course") as process:
             self.runner.run(Mock(page=Mock()))
         self.assertEqual(process.call_count,2)
         self.assertIn((self.cid,self.item.url),self.runner.blocked_items)
