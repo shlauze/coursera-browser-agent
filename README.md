@@ -1,6 +1,6 @@
 # Coursera Browser Agent
 
-![Исходники 0.2.87](https://img.shields.io/badge/source-0.2.87-2563eb)
+![Исходники 0.2.88](https://img.shields.io/badge/source-0.2.88-2563eb)
 ![Windows x64](https://img.shields.io/badge/platform-Windows%20x64-0078d4)
 ![Groq](https://img.shields.io/badge/LLM-Groq-f55036)
 
@@ -10,7 +10,7 @@
 
 **[Быстрый старт](#быстрый-старт)** · **[Руководство](browser-agent-v2/README.md)** · **[Новая установка и обновление](browser-agent-v2/SETUP_OTHER_USER.md)** · **[Сборка EXE](browser-agent-v2/WINDOWS_EXE_RU.txt)**
 
-> В репозитории опубликованы исходники **0.2.87**. Эта публикация не включает новый EXE. Файлы в [Releases](https://github.com/shlauze/coursera-browser-agent/releases) могут иметь более раннюю версию; проверяйте номер выбранного файла. «Download ZIP» скачивает исходники.
+> В репозитории опубликованы исходники **0.2.88**. Эта публикация не включает новый EXE. Файлы в [Releases](https://github.com/shlauze/coursera-browser-agent/releases) могут иметь более раннюю версию; проверяйте номер выбранного файла. «Download ZIP» скачивает исходники.
 
 ## Возможности
 
@@ -101,4 +101,4 @@ browser-agent-v2/
 
 Тесты используют временные базы, моки и локальные браузерные страницы. Частям набора нужны установленный Chrome и дополнительные зависимости; подробности — в [руководстве](browser-agent-v2/README.md#проверка-кода).
 
-Сборка создаёт локальный `dist\CourseraAgent-0.2.87.exe` и запускает его автономную проверку. Она не публикует GitHub Release. [Инструкция для EXE](browser-agent-v2/WINDOWS_EXE_RU.txt) описывает запуск и сохранение данных.
+Сборка создаёт локальный `dist\CourseraAgent-0.2.88.exe` и запускает его автономную проверку. Она не публикует GitHub Release. [Инструкция для EXE](browser-agent-v2/WINDOWS_EXE_RU.txt) описывает запуск и сохранение данных.

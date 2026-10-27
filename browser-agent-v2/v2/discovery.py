@@ -223,11 +223,49 @@ def _read_page_cards(page: Any, number: int) -> list[CourseCard]:
     return cards
 
 
+_PASSIVE_CARDS_JS = r"""() => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const visible = e => {
+    if (!e.getClientRects().length) return false;
+    for (let p = e; p; p = p.parentElement) {
+      const s = getComputedStyle(p);
+      if (s.visibility === 'hidden' || s.display === 'none' || Number(s.opacity) === 0) return false;
+    }
+    return true;
+  };
+  const roots = [...document.querySelectorAll('.rc-PathwayCardCourseItemModule,.rc-CourseCardModule')].filter(visible);
+  const signature = roots.map(root => {
+    const link = [...root.querySelectorAll('a[href]')].find(a => {
+      const u = new URL(a.href);
+      return visible(a) && /^(www\.)?coursera\.org$/.test(u.hostname) && /^\/learn\/[^/]+\/home(?:\/|$)/.test(u.pathname);
+    });
+    const lines = (root.innerText || '').split('\n').map(norm);
+    const statuses = [...new Set(lines.filter(s => /^(Complete|Not started)$/.test(s)))];
+    return [link ? link.href : '', link ? norm(link.innerText) : '', statuses.length === 1 ? statuses[0] : ''];
+  });
+  // A rendered pathway can contain only completed/not-started courses with no
+  // launch controls. It is still a page, but never evidence of course completion.
+  const pending = [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],[data-testid*="loading"],[data-testid*="skeleton"]')].some(visible);
+  const launch = [...document.querySelectorAll('a,button,[role="button"]')].some(e => visible(e) &&
+    /^(Resume|Get started)$/i.test(norm(e.innerText || e.getAttribute('aria-label'))));
+  return {signature, ready: roots.length > 0 && !pending && !launch &&
+    signature.every(([href,title,status]) => href && title.length >= 4 && status)};
+}"""
+
+
+def _read_passive_signature(page: Any) -> list[list[str]] | None:
+    snapshot = page.evaluate(_PASSIVE_CARDS_JS)
+    return snapshot["signature"] if snapshot.get("ready") else None
+
+
 def _next_page(page: Any, old_cards: list[CourseCard], *, checkpoint=lambda: None) -> bool:
     state = page.evaluate(_PAGINATION_JS)
     if not state.get("found") or not state.get("has_next"):
         return False
     old_signature = [(c.identity, c.action) for c in old_cards]
+    # Status text can change when controls disappear during hydration. Compare
+    # course identities, not that transient status, to prove the cards changed.
+    old_rendered_identity = [row[:2] for row in page.evaluate(_PASSIVE_CARDS_JS).get("signature", [])]
     previous_number = state.get("current")
     last_error = None
     for attempt in range(3):
@@ -247,21 +285,37 @@ def _next_page(page: Any, old_cards: list[CourseCard], *, checkpoint=lambda: Non
         signature = old_signature
         stable_signature = None
         stable = 0
+        passive_since = None
         while time.monotonic() < deadline:
             checkpoint()
             page.wait_for_timeout(300)
             pagination = page.evaluate(_PAGINATION_JS)
             current = _read_page_cards(page, 0)
-            if not current or not pagination.get("found"):
+            if not pagination.get("found"):
+                stable_signature, stable, passive_since = None, 0, None
                 continue
             signature = [(c.identity, c.action) for c in current]
             advanced = previous_number is not None and pagination.get("current") == previous_number + 1
             changed = signature != old_signature
-            if changed and (advanced or pagination.get("current") is None):
+            if not current:
+                passive = _read_passive_signature(page) if advanced else None
+                if passive and [row[:2] for row in passive] != old_rendered_identity:
+                    key = ("passive", passive)
+                    if key != stable_signature:
+                        stable_signature, passive_since = key, time.monotonic()
+                    elif passive_since is not None and time.monotonic() - passive_since >= 1.2:
+                        return True
+                    stable = 0
+                    continue
+                stable_signature, stable, passive_since = None, 0, None
+            elif changed and (advanced or pagination.get("current") is None):
+                passive_since = None
                 stable = stable + 1 if signature == stable_signature else 1
                 stable_signature = signature
                 if stable >= 2:
                     return True
+            else:
+                stable_signature, stable, passive_since = None, 0, None
         # Only repeat a click if the old page and old cards are still present.
         if pagination.get("current") != previous_number or signature != old_signature:
             raise DiscoveryError("Pagination changed but its course list did not settle")
