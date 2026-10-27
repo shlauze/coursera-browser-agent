@@ -36,6 +36,15 @@ def is_coursework(kind: str) -> bool:
     return any(word in value for word in ("assignment", "quiz", "assessment", "exam", "lab", "peer review", "review your peers"))
 
 
+def is_graded_coursework(kind: str) -> bool:
+    """Require an explicit graded Coursera type; titles and URLs are not proof."""
+    value = " ".join((kind or "").casefold().split())
+    return value in {
+        "graded assignment", "graded quiz", "graded assessment", "graded exam",
+        "graded lab", "graded programming assignment", "peer-graded assignment",
+    }
+
+
 def decide(kind: str, title: str = "") -> Decision:
     """Select a handler from the *visible Coursera type*, never the URL alone."""
     value = " ".join((kind or "").casefold().split())

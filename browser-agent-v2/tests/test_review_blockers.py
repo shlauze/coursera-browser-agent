@@ -242,10 +242,33 @@ class ReviewBlockerTests(unittest.TestCase):
             "Notebook prepared; personal authorship confirmation requires the learner",
             "Submission requires personal authorship confirmation",
             "Submission dialog requires personal authorship confirmation",
+            "Rich-text authorship confirmation requires the learner",
         ):
             with self.subTest(reason=reason):
                 self.legacy(reason)
                 self.assertTrue(self.fresh_runner()._input_blocked(self.cid, self.item))
+
+    def test_rich_text_hold_requires_changed_review_for_the_same_assignment(self):
+        reason = "Rich-text question requires reviewed objective prompt or learner source"
+        self.runner._retain_item(self.cid, self.item, reason, "not_submitted")
+        self.assertTrue(self.fresh_runner()._input_blocked(self.cid, self.item))
+        self.store.set_meta("rich_text_reviews:/learn/demo/quiz/other", [{"evidence": "Other question"}])
+        self.assertTrue(self.fresh_runner()._input_blocked(self.cid, self.item))
+        self.store.set_meta("rich_text_reviews:/learn/demo/quiz/a", [{"evidence": "Reviewed objective question"}])
+        self.assertFalse(self.fresh_runner()._input_blocked(self.cid, self.item))
+        self.legacy(reason)
+        self.assertTrue(self.fresh_runner()._input_blocked(self.cid, self.item))
+
+    def test_rich_text_uncertain_input_remains_blocked_after_registry_change(self):
+        for reason in ("Rich-text answer did not persist after input and blur",
+                       "Assignment form changed after rich-text input",
+                       "Rich-text control changed after fill",
+                       "Existing rich-text draft differs; preserve it for reconciliation"):
+            with self.subTest(reason=reason):
+                self.runner._retain_item(self.cid, self.item, reason, "not_submitted")
+                self.store.set_meta("rich_text_reviews:/learn/demo/quiz/a", [{"evidence": "New review"}])
+                self.assertTrue(self.fresh_runner()._input_blocked(self.cid, self.item))
+                self.assertIsNone(self.fresh_runner()._next_coursework(self.cid, [self.item]))
 
     def test_changed_identity_does_not_apply_another_items_review_hold(self):
         self.retain()

@@ -19,7 +19,7 @@ from .control import Control
 from .discovery import CourseCard, DiscoveryError, discover_in_progress, open_course
 from .handlers import HandlerError, handle
 from .outline import ItemRecord, OutlineError, OutlineSnapshot, open_item, scan_outline
-from .policy import ItemAction, decide, is_coursework
+from .policy import ItemAction, decide, is_coursework, is_graded_coursework
 from .store import Store, _safe_event_message
 from .groq_client import GroqClient, GroqError
 from .assessments import FileUploadAssignmentSkipped
@@ -285,7 +285,7 @@ class Runner:
         # Old media/plugin intents are withdrawn by the new user-selected mode.
         # This is cancellation, never a claim of remote completion.
         for action in self.store.pending_actions():
-            if action["action_kind"] in {
+            if not self.store.get_meta("graded_only", False) and action["action_kind"] in {
                 ItemAction.VIDEO.value, ItemAction.READING.value, ItemAction.PLUGIN.value,
                 ItemAction.DIALOGUE.value, ItemAction.ROLE_PLAY.value,
             }:
@@ -313,6 +313,17 @@ class Runner:
             if (self.store.get_course(action["course_id"]) or {}).get("skipped"):
                 continue
             card = by_id.get(action["course_id"])
+            if self.store.get_meta("graded_only", False) and (
+                action["action_kind"] in {
+                    ItemAction.READING.value, ItemAction.VIDEO.value, ItemAction.UNGRADED_LAB.value,
+                    ItemAction.PLUGIN.value, ItemAction.DIALOGUE.value, ItemAction.ROLE_PLAY.value,
+                } or card is None
+            ):
+                # Historical payloads do not establish a graded type. Preserve
+                # excluded/unknown intents instead of cancelling or replaying them.
+                self.store.record_event("INFO", "GRADED_ONLY_PENDING_EXCLUDED",
+                    f"Pending action {action['id']} retained unchanged outside the verified graded scope")
+                continue
             if card is None:
                 saved = self.store.get_course(action["course_id"])
                 if saved:
@@ -331,7 +342,18 @@ class Runner:
             item = next((entry for entry in outline.items if
                          (entry.url == saved_url if saved_url else item_id(entry) == action["item_id"])), None)
             if item is None:
+                if self.store.get_meta("graded_only", False):
+                    self.store.record_event("WARNING", "GRADED_ONLY_PENDING_EXCLUDED",
+                        f"Pending action {action['id']} retained unchanged: no live item classification")
+                    continue
                 raise RunnerAttention(f"Pending action {action['id']} item disappeared from the outline")
+            if self.store.get_meta("graded_only", False) and (
+                self._graded_excluded(item) or self._optional_excluded(cid, item)
+                or self._user_kind_excluded(item) or self._user_file_excluded(cid, item)
+            ):
+                self.store.record_event("INFO", "GRADED_ONLY_PENDING_EXCLUDED",
+                    f"Pending item retained unchanged outside the selected graded scope: {item.title}")
+                continue
             if item.completed:
                 self.store.resolve_action(action["id"], "confirmed", {"outline": "green mark", "url": item.url, "observed_page_url": opened.url})
                 self.store.record_event("INFO", "ACTION_RECONCILED", f"Previously pending item is complete: {item.title}")
@@ -368,7 +390,7 @@ class Runner:
                        learner_skipped_required: int = 0) -> None:
         # A fresh outline still showing learner-skipped required work gives no
         # reason to repeat a full certificate search or reload the course.
-        checks = 1 if learner_skipped_required else self.certificate_checks
+        checks = 1 if learner_skipped_required or self.store.get_meta("graded_only", False) else self.certificate_checks
         for attempt in range(1, checks + 1):
             self.checkpoint()
             url = _verified_certificate_url(page, card.title)
@@ -382,6 +404,8 @@ class Runner:
                 page.reload(wait_until="domcontentloaded", timeout=30_000)
         if learner_skipped_required:
             raise RunnerAttention(f"{learner_skipped_required} required coursework items remain incomplete and learner-skipped; a matching certificate was not found for {card.title}")
+        if self.store.get_meta("graded_only", False):
+            raise RunnerAttention(f"No further eligible graded items were found, but a matching certificate was not found for {card.title}; {excluded_items} incomplete items were excluded by run mode")
         raise RunnerAttention(f"Requested assignments and labs are complete, but a matching certificate was not found for {card.title}; {excluded_items} other incomplete materials were excluded by run mode")
 
     def _watch_course_page(self, page):
@@ -418,13 +442,21 @@ class Runner:
         return bool(self.store.get_meta("required_assessments_first", False)
                     and re.search(r"\bpractice\b", item.kind, re.I))
 
+    def _graded_excluded(self, item: ItemRecord) -> bool:
+        return bool(self.store.get_meta("graded_only", False) and not is_graded_coursework(item.kind))
+
     def _user_kind_excluded(self, item: ItemRecord) -> bool:
         """Honor persisted, exact assignment-type skips requested by the learner."""
         skipped = self.store.get_meta("user_skipped_item_kinds", [])
         if not isinstance(skipped, list):
             return False
         kind = (item.kind or "").strip().casefold()
-        return any(isinstance(value, str) and value.strip().casefold() == kind for value in skipped)
+        return any(isinstance(value, str) and (
+            value.strip().casefold() == kind
+            or (self.store.get_meta("graded_only", False)
+                and value.strip().casefold() == "programming assignment"
+                and re.fullmatch(r"(?:(?:graded|practice)\s+)?programming assignment", kind))
+        ) for value in skipped)
 
     def _user_file_excluded(self, cid: str, item: ItemRecord) -> bool:
         """Exclude only upload forms observed live and authorized by the learner."""
@@ -460,6 +492,15 @@ class Runner:
             return not self.store.get_meta("peer_source:" + base) and peer_state.get("status") not in {"submitted", "complete"}
         if reason.startswith("File assignment needs an explicitly assigned local file"):
             return not bool(self.store.get_meta("file_source:" + base))
+        if reason in {"Rich-text question requires reviewed objective prompt or learner source",
+                      "Rich-text form does not match reviewed question set"}:
+            import json
+            evidence = saved.get("review_evidence") or {}
+            if isinstance(evidence, dict) and evidence.get("kind") == "rich_text_reviews_v1":
+                reviews = self.store.get_meta("rich_text_reviews:" + urlparse(base).path, [])
+                context = hashlib.sha256(json.dumps(reviews, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                return context == evidence.get("context")
+            return True
         if reason == "Question includes visual content; text-only model cannot answer it":
             import json
             evidence = saved.get("review_evidence") or {}
@@ -486,6 +527,15 @@ class Runner:
             "Submission dialog requires personal authorship confirmation",
             "File upload or rich-text editor needs a dedicated adapter",
             "Rich-text editor needs a dedicated adapter",
+            "Rich-text authorship confirmation requires the learner",
+            "Rich-text draft has unsupported content; preserve it for review",
+            "Existing rich-text draft differs; preserve it for reconciliation",
+            "Rich-text form has missing or unrecognized answer editors",
+            "Rich-text question has no unique own prompt",
+            "Rich-text form has overlapping or duplicate question editors",
+            "Rich-text answer did not persist after input and blur",
+            "Assignment form changed after rich-text input",
+            "Rich-text control changed after fill",
             "Unsupported question type",
             "Ambiguous answer options",
             "Peer review route is unsupported",
@@ -505,6 +555,7 @@ class Runner:
     def _next_coursework(self, cid: str, incomplete: list[ItemRecord]) -> ItemRecord | None:
         candidates = [item for item in incomplete if not item.completed
                       and is_coursework(item.kind)
+                      and not self._graded_excluded(item)
                       and not self._optional_excluded(cid, item)
                       and not self._deferred_item(cid, item)
                       and not self._user_file_excluded(cid, item)
@@ -522,6 +573,13 @@ class Runner:
                  "reason": reason, "submission_state": outcome}
         if review_evidence is not None:
             saved["review_evidence"] = review_evidence
+        elif reason in {"Rich-text question requires reviewed objective prompt or learner source",
+                        "Rich-text form does not match reviewed question set"}:
+            import json
+            base = re.sub(r"/(?:submit|give-feedback|attempt|view-feedback)/?$", "", item.url or "")
+            reviews = self.store.get_meta("rich_text_reviews:" + urlparse(base).path, [])
+            saved["review_evidence"] = {"kind": "rich_text_reviews_v1", "context":
+                hashlib.sha256(json.dumps(reviews, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
         elif reason == "Question includes visual content; text-only model cannot answer it":
             import json
             base = re.sub(r"/(?:submit|give-feedback|attempt|view-feedback)/?$", "", item.url or "")
@@ -594,12 +652,13 @@ class Runner:
                 outline = scan_outline(page)
             _pause_lecture_media(page)
             incomplete = [item for item in outline.items if not item.completed]
-            excluded = [item for item in incomplete if not is_coursework(item.kind) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item) or self._user_kind_excluded(item) or self._user_file_excluded(course_id(card), item)]
-            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._practice_excluded(item) and not self._optional_excluded(course_id(card), item) and not self._user_kind_excluded(item) and not self._user_file_excluded(course_id(card), item)]
+            excluded = [item for item in incomplete if not is_coursework(item.kind) or self._graded_excluded(item) or self._optional_excluded(course_id(card), item) or self._practice_excluded(item) or self._user_kind_excluded(item) or self._user_file_excluded(course_id(card), item)]
+            deferred = [item for item in incomplete if (self._deferred_item(course_id(card), item) or self._input_blocked(course_id(card), item) or (course_id(card), item.url) in self.blocked_items) and not self._graded_excluded(item) and not self._practice_excluded(item) and not self._optional_excluded(course_id(card), item) and not self._user_kind_excluded(item) and not self._user_file_excluded(course_id(card), item)]
             unfinished = self._next_coursework(course_id(card), incomplete)
             if not seen and excluded:
+                scope = "Graded-only" if self.store.get_meta("graded_only", False) else "Coursework-only"
                 self.store.record_event("INFO", "MATERIALS_EXCLUDED",
-                                       f"Coursework-only mode: {len(excluded)} video/reading/optional or learner-skipped items excluded; no completion marks added")
+                                       f"{scope} mode: {len(excluded)} items excluded by type, optional status or learner skip; no completion marks added")
             if unfinished is None:
                 if deferred:
                     raise RunnerAttention("Remaining required items await learner input: " + "; ".join(item.title for item in deferred))
@@ -637,7 +696,7 @@ class Runner:
                 self.store.set_meta("retry_item:" + key, False)
             action_id = self.store.begin_action(
                 course_id(card), key, decision.action.value,
-                {"title": unfinished.title, "module": unfinished.module, "url": unfinished.url},
+                {"title": unfinished.title, "module": unfinished.module, "url": unfinished.url, "kind": unfinished.kind},
             )
             self.store.record_stage(action_id, "preparing")
             self.store.record_event("INFO", "ITEM_OPENING", f"Opening {unfinished.title} ({unfinished.kind})")
@@ -709,7 +768,10 @@ class Runner:
         self.deferred.clear()
         self.completed_courses = self.completed_items = 0
         self.control.mark_running()
-        self.store.record_event("INFO", "RUN_MODE", "Tests, assignments and labs only; videos, lectures and other learning materials are excluded")
+        mode = ("Explicitly graded coursework only; ungraded, practice, optional and unclassified items are excluded"
+                if self.store.get_meta("graded_only", False)
+                else "Tests, assignments and labs only; videos, lectures and other learning materials are excluded")
+        self.store.record_event("INFO", "RUN_MODE", mode)
         try:
             self.store.set_meta("current_course_id", None)
             page = browser.page

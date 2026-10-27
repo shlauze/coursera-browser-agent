@@ -194,6 +194,56 @@ class FeedbackMissingFieldsTests(unittest.TestCase):
         self.assertEqual(state['buttons'], ['View feedback'])
         self.assertEqual(elapsed[0], 1)
 
+    def test_reviewed_feedback_waits_for_retry_to_become_enabled(self):
+        self.page.goto(LANDING_URL)
+        self.page.set_content('''<main>You didn’t pass. Grade: 0%.
+          <button disabled onclick="window.clicks++">Try again</button>
+          <button>View feedback</button></main><script>window.clicks=0</script>''')
+
+        def hydrate(elapsed):
+            if elapsed == 2:
+                self.page.get_by_role('button', name='Try again', exact=True).evaluate('e => e.disabled=false')
+
+        with self.polling_clock(hydrate) as elapsed:
+            state = _wait_entry(self.page, lambda: None, feedback_reviewed=True)
+        self.assertEqual(elapsed[0], 2)
+        self.assertIn('Try again', state['buttons'])
+        self.assertEqual(self.page.evaluate('clicks'), 0)
+
+    def test_reviewed_feedback_without_retry_keeps_full_wait_and_does_not_reload(self):
+        self.page.goto(LANDING_URL)
+        self.page.set_content('''<main>You didn’t pass. Grade: 0%.
+          <button disabled onclick="window.clicks++">Try again</button>
+          <button>View feedback</button></main><script>window.clicks=0</script>''')
+        with self.polling_clock() as elapsed, patch.object(self.page, 'reload') as reload_page:
+            with self.assertRaisesRegex(HandlerError, 'recognized state'):
+                _wait_entry(self.page, lambda: None, feedback_reviewed=True)
+        self.assertEqual(elapsed[0], 45)
+        reload_page.assert_not_called()
+        self.assertEqual(self.page.evaluate('clicks'), 0)
+
+    def test_reviewed_feedback_wait_obeys_stop(self):
+        self.page.goto(LANDING_URL)
+        self.page.set_content('<main>You didn’t pass. Grade: 0%.<button>View feedback</button></main>')
+        calls = []
+
+        def checkpoint():
+            calls.append(True)
+            if len(calls) == 2:
+                raise RuntimeError('stop requested')
+
+        with self.polling_clock():
+            with self.assertRaisesRegex(RuntimeError, 'stop requested'):
+                _wait_entry(self.page, checkpoint, feedback_reviewed=True)
+
+    def test_reviewed_feedback_accepts_fresh_pass_without_retry(self):
+        self.page.goto(LANDING_URL)
+        self.page.set_content('<main>Passed. Grade: 100%.</main>')
+        with self.polling_clock() as elapsed:
+            state = _wait_entry(self.page, lambda: None, feedback_reviewed=True)
+        self.assertTrue(state['passed'])
+        self.assertEqual(elapsed[0], 0)
+
     def test_feedback_control_can_hydrate_after_retry_without_clicking_retry(self):
         self.page.goto(LANDING_URL)
         self.page.set_content('''<main>You didn’t pass. Grade: 50%.
@@ -272,6 +322,29 @@ class FeedbackMissingFieldsTests(unittest.TestCase):
                 with self.assertRaisesRegex(HandlerError, 'Unverified retry'):
                     act(self.page, state, action='button', label='Continue', start_attempt_verified=True)
                 self.assertEqual(self.page.evaluate('continues'), 0)
+
+
+class ReviewedEntryFlowTests(unittest.TestCase):
+    def test_handler_requires_retry_ready_after_reading_failed_feedback(self):
+        from v2.assessments import _handle_assessment
+        page, store, groq = Mock(), Mock(), Mock()
+        page.url = FEEDBACK_URL
+        store.get_meta.return_value = None
+        failed = {'failed': True, 'questions': [], 'buttons': ['View feedback']}
+        passed = {'passed': True, 'questions': []}
+        feedback = {'feedback_questions': [{'earned': 0, 'possible': 1,
+                    'answer': None, 'unanswered': True}]}
+        with patch('v2.assessments._wait_entry', side_effect=[failed, passed]) as wait_entry, \
+             patch('v2.assessments._read_failed_feedback', return_value=feedback), \
+             patch('v2.assessments._return_to_outline', return_value='verified') as finish, \
+             patch('v2.assessments.act') as action:
+            self.assertEqual(_handle_assessment(page, lambda: None, groq=groq,
+                                               store=store, action_id=1), 'verified')
+        self.assertEqual(wait_entry.call_args_list[0].kwargs, {})
+        self.assertEqual(wait_entry.call_args_list[1].kwargs, {'feedback_reviewed': True})
+        action.assert_not_called()
+        groq.answer.assert_not_called()
+        finish.assert_called_once()
 
 
 if __name__ == '__main__':

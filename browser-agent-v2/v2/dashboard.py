@@ -327,7 +327,7 @@ class Dashboard:
         return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="8">
 <title>Coursera Agent · Панель управления</title><style>{_CSS}</style></head><body>
-<header><h1>Coursera Agent</h1><p>Локальная панель управления · v2 {__version__}</p><p>Режим: тесты, задания и лабораторные. Видео и лекции пропускаются.</p></header>
+<header><h1>Coursera Agent</h1><p>Локальная панель управления · v2 {__version__}</p><p>{'Режим: только graded-задания. Неоцениваемые, практические и нераспознанные типы пропускаются.' if self.store.get_meta('graded_only', False) else 'Режим: тесты, задания и лабораторные. Видео и лекции пропускаются.'}</p></header>
 <main>{notice_html}{confirmation_html}<section class="panel"><h2>Модель Groq</h2>
 <p>Режим: {escape(provider_settings(self.store)['mode'])}. <a href="/providers">Настройки Groq</a></p></section>{runtime}{usage}<div class="grid"><section class="panel"><h2>Состояние</h2>
 <span class="status {escape(state)}">{escape(labels.get(state,state))}</span>

@@ -7,6 +7,8 @@ import time
 from contextvars import ContextVar
 
 _VISUAL_REVIEWS = ContextVar("visual_reviews", default=[])
+_RICH_TEXT_REVIEWS = ContextVar("rich_text_reviews", default=[])
+_RICH_TEXT_ACTIVE = ContextVar("rich_text_active", default=False)
 
 _RANDOM_DUPLICATES = ContextVar("random_duplicates", default=False)
 _CONFIRMATION = ContextVar("assessment_confirmation", default=None)
@@ -26,17 +28,23 @@ class FileUploadAssignmentSkipped(RuntimeError):
 
 
 def inspect(page):
-    result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()})
+    result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get(), "rich_text_reviews": _RICH_TEXT_REVIEWS.get()})
     # Skipped upload forms must not trigger an authorship checkbox or any other
     # mutation. The runner records the exact item as excluded.
     if result.get("file_upload_required") and _SKIP_FILE_UPLOADS.get():
         return result
+    if result.get("rich_text_form"):
+        _RICH_TEXT_ACTIVE.set(True)
     while result.get("attestation"):
+        # The reviewed objective prompt does not authorize a personal claim,
+        # including a later confirmation dialog that replaces the editor.
+        if _RICH_TEXT_ACTIVE.get():
+            raise HandlerError("Rich-text authorship confirmation requires the learner")
         callback = _CONFIRMATION.get()
         if callback is None:
             raise HandlerError("Personal authorship confirmation requires the learner")
         callback(page)
-        result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get()})
+        result = page.evaluate(DOM, {"action": "inspect", "allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get(), "rich_text_reviews": _RICH_TEXT_REVIEWS.get()})
     if result.get("error"):
         raise HandlerError(result["error"])
     return result
@@ -44,8 +52,54 @@ def inspect(page):
 
 def act(page, snapshot, **request):
     dismiss_learning_overlay(page)
-    inspect(page)  # A late notice must pause before any mutation.
-    result = page.evaluate(DOM, {"allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get(), "snapshot": snapshot["snapshot"], "expected_path": snapshot["path"], **request})
+    current = inspect(page)  # A late notice must pause before any mutation.
+    options = {"allow_random_duplicates": _RANDOM_DUPLICATES.get(), "visual_reviews": _VISUAL_REVIEWS.get(), "rich_text_reviews": _RICH_TEXT_REVIEWS.get(), "snapshot": snapshot["snapshot"], "expected_path": snapshot["path"]}
+    question = next((q for q in snapshot.get("questions", []) if q["id"] == request.get("question_id")), None)
+    if request.get("action") == "fill" and question and question.get("rich_text"):
+        if current.get("snapshot") != snapshot["snapshot"]:
+            raise HandlerError("Assignment form changed before action")
+        prepared = page.evaluate(DOM, {**options, **request, "action": "prepare_rich_text"})
+        if not prepared.get("ok"):
+            raise HandlerError(prepared.get("error", "Rich-text input was not prepared"))
+        locator = page.locator(prepared["selector"])
+        if locator.count() != 1:
+            raise HandlerError("Rich-text control is missing or ambiguous")
+        editor = locator.element_handle()
+        if editor is None or not editor.evaluate("(e,s) => e.isConnected && document.querySelectorAll(s).length === 1 && document.querySelector(s) === e", prepared["selector"]):
+            raise HandlerError("Rich-text control changed before fill")
+        # Recheck the mounted form and existing draft immediately before input.
+        if inspect(page).get("snapshot") != snapshot["snapshot"]:
+            raise HandlerError("Assignment form changed before action")
+        checked = page.evaluate(DOM, {**options, **request, "action": "prepare_rich_text"})
+        if not checked.get("ok") or checked.get("selector") != prepared["selector"]:
+            raise HandlerError(checked.get("error", "Rich-text control changed before fill"))
+        if not editor.evaluate("(e,s) => e.isConnected && document.querySelector(s) === e", prepared["selector"]):
+            raise HandlerError("Rich-text control changed before fill")
+        if not checked.get("already_matches"):
+            editor.fill(request["answer"]["text"], timeout=10_000)
+            editor.evaluate("e => e.blur()")
+        # Slate may commit after the input event. A DOM-only edit or a blur
+        # rollback must not count as a persisted answer, and is never refilled.
+        stable = 0
+        for _ in range(5):
+            page.wait_for_timeout(100)
+            try:
+                fresh = inspect(page)
+            except HandlerError as exc:
+                if str(exc) != "Rich-text draft has unsupported content; preserve it for review":
+                    raise
+                stable = 0
+                continue
+            if fresh.get("snapshot") != snapshot["snapshot"] or fresh.get("path") != snapshot["path"]:
+                raise HandlerError("Assignment form changed after rich-text input")
+            value = next((v.get("text") for v in fresh.get("values", []) if v.get("id") == question["id"]), None)
+            if locator.count() != 1 or not editor.evaluate("e => e.isConnected"):
+                raise HandlerError("Rich-text control changed after fill")
+            stable = stable + 1 if value == request["answer"]["text"] else 0
+            if stable >= 3:
+                return
+        raise HandlerError("Rich-text answer did not persist after input and blur")
+    result = page.evaluate(DOM, {**options, **request})
     if not result.get("ok"):
         raise HandlerError(result.get("error", "Assignment action was not confirmed"))
 
@@ -67,7 +121,11 @@ def _wait(page, checkpoint, predicate, *, seconds=25, feedback_required=False):
             # React can mount inputs before their labels/formulas arrive.
             # Never use partial choices; retry only extraction failures here.
             if str(exc) not in {"Ambiguous answer options", "Question text is missing",
-                                "Cannot associate every answer field with a question", "Question image is still loading"}:
+                                "Cannot associate every answer field with a question", "Question image is still loading",
+                                "Rich-text form has missing or unrecognized answer editors",
+                                "Rich-text question has no unique own prompt",
+                                "Rich-text editor content is still loading",
+                                "Rich-text form does not match reviewed question set"}:
                 raise
             last_error = str(exc)
             previous_snapshot = None
@@ -147,6 +205,16 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
     from urllib.parse import urlsplit
     visual_path = re.sub(r"/(?:attempt|view-feedback)/?$", "", urlsplit(page.url).path)
     visual_token = _VISUAL_REVIEWS.set(store.get_meta("visual_reviews:" + visual_path, []) if store else [])
+    rich_reviews = store.get_meta("rich_text_reviews:" + visual_path, []) if store else []
+    rich_token = _RICH_TEXT_REVIEWS.set(rich_reviews)
+    # A cold entry may show an authorship-only dialog before mounting editors.
+    # Exact-path reviewed provenance already identifies this as a rich-text task.
+    rich_active_token = _RICH_TEXT_ACTIVE.set(isinstance(rich_reviews, list) and any(
+        isinstance(row, dict) and row.get("path") == visual_path
+        and row.get("objective_response") is True
+        and isinstance(row.get("question_text"), str) and row["question_text"].strip()
+        and isinstance(row.get("evidence"), str) and row["evidence"].strip()
+        for row in rich_reviews))
     enabled = store is not None and store.get_control_state() in {"running", "paused"}
     random_token = _RANDOM_DUPLICATES.set(bool(store and store.get_meta("allow_random_duplicate_options", False)))
     file_skip_token = _SKIP_FILE_UPLOADS.set(bool(store and store.get_meta("skip_file_upload_assignments", False)))
@@ -159,6 +227,8 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
         _RANDOM_DUPLICATES.reset(random_token)
         _SKIP_FILE_UPLOADS.reset(file_skip_token)
         _VISUAL_REVIEWS.reset(visual_token)
+        _RICH_TEXT_REVIEWS.reset(rich_token)
+        _RICH_TEXT_ACTIVE.reset(rich_active_token)
         if enabled:
             store.set_meta("confirmation_required", None)
 
@@ -199,7 +269,7 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
                 store.record_event("INFO", "FEEDBACK_REVIEWED", "Existing failed attempt inspected before opening a new attempt")
                 base = re.sub(r"/(?:attempt|view-feedback)(?:[/?#].*)?$", "", page.url)
                 page.goto(base, wait_until="domcontentloaded", timeout=30000)
-                current = _wait_entry(page, checkpoint)
+                current = _wait_entry(page, checkpoint, feedback_reviewed=True)
                 if current.get("passed") and not current.get("questions"):
                     return _return_to_outline(page, current, checkpoint)
             names = _entry_names(current)
@@ -261,11 +331,12 @@ def _handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts
     raise HandlerError("Assignment attempt budget exhausted")
 
 
-def _wait_entry(page, checkpoint):
+def _wait_entry(page, checkpoint, *, feedback_reviewed=False):
     # An existing failed result can expose View feedback while Retry is disabled.
     # Read its scored feedback before deciding whether another attempt is possible.
     ready = lambda s: s.get("retry_confirmation") or s.get("start_confirmation") or s.get("questions") or s.get("file_form") or _entry_names(s) or s.get("passed") or (
-        s.get("failed") and (s.get("path", "").endswith("/view-feedback") or len(_feedback_names(s)) == 1))
+        not feedback_reviewed and s.get("failed")
+        and (s.get("path", "").endswith("/view-feedback") or len(_feedback_names(s)) == 1))
     try:
         return _wait(page, checkpoint, ready, seconds=45)
     except HandlerError as exc:

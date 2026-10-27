@@ -130,8 +130,11 @@ _ITEMS_JS = r"""() => {
     // Offscreen/virtualized links may have empty innerText but a real accessible title.
     const itemTitle = anchorLines[0] || norm(node.getAttribute('aria-label')) || lines[0] || '';
     const detail = lines.filter(x => x !== itemTitle).join(' ');
-    const kindMatch = detail.match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Programming Assignment|Practice Quiz|Practice Lab|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i)
-      || anchorLines.slice(1).join(' ').match(/\b(Video|Reading|Lab|Dialogue|Role Play|Practice Programming Assignment|Practice Quiz|Practice Lab|Practice Peer-graded Assignment|Review Your Peers|Practice Assignment|Graded Assignment|Programming Assignment|Quiz|Ungraded Plugin|Discussion Prompt|Peer-graded Assignment|Supplement)(?=\b|Grade:|Results pending)/i);
+    // Match the visible type line, preserving negative qualifiers. A substring
+    // such as "graded" inside an ungraded/practice label is not graded proof.
+    const typePattern = /^((?:(?:Practice|Optional:?|Ungraded|Non[- ]graded|Not graded)\s+)*(?:Graded Programming Assignment|Peer-graded Assignment|Graded Assignment|Graded Assessment|Graded Quiz|Graded Exam|Graded Lab|Programming Assignment|Review Your Peers|Ungraded Plugin|Discussion Prompt|Role Play|Dialogue|Video|Reading|Supplement|Assignment|Assessment|Exam|Quiz|Lab))(?=\b|Grade:|Results pending)/i;
+    const kindMatch = [...lines.filter(x => x !== itemTitle), ...anchorLines.slice(1)]
+      .map(line => line.match(typePattern)).find(Boolean);
     const pathKind = node.href.match(/\/learn\/[^/]+\/(lecture|supplement|quiz|assignment-submission|ungradedLab|ungradedLti|programming|coach|ungradedPlugin|ungradedWidget|discussionPrompt)\//i);
     const kinds = {lecture:'Video',supplement:'Reading',quiz:'Quiz','assignment-submission':'Assignment',ungradedlab:'Lab',ungradedlti:'Lab',programming:'Programming Assignment',coach:'Dialogue',ungradedplugin:'Ungraded Plugin',ungradedwidget:'Ungraded Plugin',discussionprompt:'Discussion Prompt'};
     const kind = kindMatch ? kindMatch[1] : pathKind ? (kinds[pathKind[1].toLowerCase()] || 'Unknown') : 'Unknown';
