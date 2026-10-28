@@ -536,6 +536,22 @@ class RunnerSafetyTests(unittest.TestCase):
         self.assertIn("Unsupported lab",self.store.get_meta("course_attention:"+self.cid))
         self.assertEqual(discover.call_count, 2)  # Startup and final refresh, not per-course.
 
+    def test_run_summary_excludes_learner_skipped_courses(self):
+        skipped = CourseCard("Skipped Course", "Resume", 20, 1, 1)
+        skipped_id = course_id(skipped)
+        self.store.upsert_course(skipped_id, skipped.title)
+        self.store.set_course_skipped(skipped_id, True)
+
+        with patch("v2.runner.discover_in_progress", return_value=[self.card, skipped]), \
+             patch.object(self.runner, "_process_course", side_effect=RunnerAttention("Needs learner input")) as process:
+            scan_summary = self.runner.run(Mock(page=Mock()), scan_only=True)
+            summary = self.runner.run(Mock(page=Mock()))
+
+        process.assert_called_once()
+        self.assertEqual(scan_summary.remaining_courses, 1)
+        self.assertEqual(summary.remaining_courses, 1)
+        self.assertEqual(summary.deferred_courses, 1)
+
     def test_transient_queue_timeout_retries_then_continues(self):
         from playwright.sync_api import TimeoutError
         page = Mock()

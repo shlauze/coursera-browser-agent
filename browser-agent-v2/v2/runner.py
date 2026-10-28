@@ -834,7 +834,10 @@ class Runner:
             page = browser.page
             cards = self._cards(page)
             if scan_only:
-                return RunSummary(0, 0, len(cards))
+                return RunSummary(0, 0, sum(
+                    not (self.store.get_course(course_id(card)) or {}).get("skipped")
+                    for card in cards
+                ))
             focus = self.store.get_meta("focus_course_id")
             if focus:
                 return self._run_focused(page, cards, focus)
@@ -855,7 +858,11 @@ class Runner:
                         cards = self._cards(page, first_page_only=False)
                         refreshed = True
                         continue
-                    remaining = sum((self.store.get_course(course_id(c)) or {}).get("status") != "complete" for c in cards)
+                    remaining = sum(
+                        not saved.get("skipped") and saved.get("status") != "complete"
+                        for card in cards
+                        for saved in [self.store.get_course(course_id(card)) or {}]
+                    )
                     return RunSummary(self.completed_courses, self.completed_items, remaining, len(self.deferred))
                 # Courses last seen with only input-blocked work go after candidates
                 # with potentially executable work. They remain in this run's queue.
