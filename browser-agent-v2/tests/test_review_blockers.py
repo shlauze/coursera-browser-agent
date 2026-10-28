@@ -239,6 +239,7 @@ class ReviewBlockerTests(unittest.TestCase):
     def test_notebook_authorship_holds_are_not_released_by_quiz_authorization(self):
         self.store.set_meta("auto_confirm_coursera", True)
         for reason in (
+            "Personal authorship confirmation requires the learner",
             "Notebook prepared; personal authorship confirmation requires the learner",
             "Submission requires personal authorship confirmation",
             "Submission dialog requires personal authorship confirmation",

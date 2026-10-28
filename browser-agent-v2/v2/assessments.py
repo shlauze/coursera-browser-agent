@@ -182,15 +182,6 @@ def handle_assessment(page, checkpoint, *, groq, store, action_id, max_attempts=
         path = current_page.url
         if _confirmation_observed(current_page, checkpoint, attempts=1):
             return
-        if store.get_meta("auto_confirm_coursera", False):
-            from urllib.parse import urlsplit
-            result = current_page.evaluate(DOM, {"action":"confirm_authorship", "expected_path":urlsplit(path).path})
-            if result.get("ok"):
-                store.record_event("INFO", "CONFIRMATION_AUTOMATIC", "Coursera checkbox confirmed under the user's explicit authorization")
-                return
-            if _confirmation_observed(current_page, checkpoint):
-                store.record_event("INFO", "CONFIRMATION_OBSERVED", "Coursera confirmation observed after form rerender")
-                return
         notice = {"reason": "Подтверждение Coursera не распознано или не принято. Проверьте форму перед продолжением.",
                   "item": store.get_meta("current_item", "Квиз"), "url": path}
         store.set_meta("confirmation_required", notice)

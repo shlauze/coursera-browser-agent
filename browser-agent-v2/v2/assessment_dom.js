@@ -37,19 +37,7 @@ request => {
   const attestation = attestationNotice && !(authorshipBoxes.length > 0 && authorshipBoxes.every(e =>
     e.matches('input') ? e.checked : e.getAttribute('aria-checked') === 'true'));
   const richTextPresent = [...document.querySelectorAll('[data-testid="part-Submission_RichTextQuestion"]')].some(visible);
-  if (request.action === 'confirm_authorship') {
-    const reviewedPath = location.pathname.replace(/\/(?:attempt|view-feedback)\/?$/, '');
-    const reviewedRichText = Array.isArray(request.rich_text_reviews) && request.rich_text_reviews.some(r =>
-      r && typeof r === 'object' && r.path === reviewedPath && r.objective_response === true && typeof r.question_text === 'string' && r.question_text.trim()
-      && typeof r.evidence === 'string' && r.evidence.trim());
-    if (richTextPresent || reviewedRichText) return {ok:false,error:'Rich-text authorship confirmation requires the learner'};
-    if (!attestationNotice || authorshipBoxes.length !== 1) return {ok:false,error:'No unique Coursera confirmation checkbox'};
-    const box = authorshipBoxes[0];
-    if (box.disabled || box.getAttribute('aria-disabled') === 'true') return {ok:false,error:'Coursera confirmation is disabled'};
-    const checked = () => box.matches('input') ? box.checked : box.getAttribute('aria-checked') === 'true';
-    if (!checked()) box.click();
-    return {ok:checked(),error:checked()?null:'Coursera confirmation was not accepted'};
-  }
+  if (request.action === 'confirm_authorship') return {ok:false,error:'Learner confirmation is required'};
   const activeDialogs = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog[open]')].filter(e => visible(e) && norm(e.innerText));
   const scope = activeDialogs.at(-1) || document.querySelector('main') || document.body;
   const buttonEls = [...scope.querySelectorAll('button,[role="button"],a[href],input[type="submit"]')]

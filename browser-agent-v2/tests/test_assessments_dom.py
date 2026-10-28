@@ -537,22 +537,27 @@ class AssessmentDomTests(unittest.TestCase):
         self.assertFalse(inspect(self.page)['passed'])
         self.assertFalse(inspect(self.page)['failed'])
 
-    def test_explicit_authorization_confirms_only_coursera_checkbox(self):
+    def test_legacy_auto_confirmation_setting_cannot_check_coursera_checkbox(self):
         self.page.evaluate("document.querySelector('main').insertAdjacentHTML('beforeend', '<p>By clicking Submit, you confirm that this work is your own.</p><label><input id=honor type=checkbox>I, Learner, understand and agree.</label>')")
         self.store.set_control_state('running')
         self.store.set_meta('auto_confirm_coursera',True)
         groq=Mock()
-        def answer(q):
-            self.assertTrue(self.page.locator('#honor').is_checked())
-            return {'cannot_answer':False,'selected':['o0']} if q['kind']=='single' else {'cannot_answer':False,'text':'4'}
-        groq.answer.side_effect=answer
-        handle_assessment(self.page,lambda:None,groq=groq,store=self.store,action_id=1)
-        self.assertEqual(self.store.get_meta('submission:1'),'passed')
-        self.assertEqual(self.store.get_control_state(),'running')
+        from v2.runner import StopRequested
+        def checkpoint():
+            if self.store.get_control_state() == 'paused':
+                self.assertFalse(self.page.locator('#honor').is_checked())
+                raise StopRequested('learner stop')
+        with self.assertRaises(StopRequested):
+            handle_assessment(self.page,checkpoint,groq=groq,store=self.store,action_id=1)
+        groq.answer.assert_not_called()
+        self.assertFalse(self.page.locator('#honor').is_checked())
+        self.assertIn(self.store.get_meta('submission:1'), (None, 'not_submitted'))
+        self.assertTrue(any(e['code'] == 'CONFIRMATION_REQUIRED' for e in self.store.recent_events()))
 
     def test_confirmation_action_rejects_unknown_and_changed_page(self):
         r=self.page.evaluate(DOM,{'action':'confirm_authorship'})
         self.assertFalse(r['ok'])
+        self.assertIn('Learner confirmation',r['error'])
         r=self.page.evaluate(DOM,{'action':'confirm_authorship','expected_path':'/wrong'})
         self.assertIn('changed',r['error'])
         self.assertEqual(self.page.locator('input:checked').count(),0)

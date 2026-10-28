@@ -553,7 +553,7 @@ class Runner:
             # can establish one; unrelated metadata must not release the hold.
             return True
         if reason == "Personal authorship confirmation requires the learner":
-            return not self.store.get_meta("auto_confirm_coursera", False)
+            return True
         if reason in {
             "Notebook prepared; personal authorship confirmation requires the learner",
             "Submission requires personal authorship confirmation",
